@@ -1,0 +1,34 @@
+# symbol-level cuts (exp3.py); constructors/destructors kept up front
+!(?:^|::)(~?)([A-Za-z_]\w*)::\1?\2\(
+!^(?:\w+::)*(\w+)::~?\1\(
+!^llvm::initialize
+# --- clang: C++, ObjC, OpenMP/ACC, GPU, other targets, code completion
+obj:/Sema/CMakeFiles/.*/(SemaAccess|SemaAPINotes|SemaCodeComplete|CodeCompleteConsumer|SemaConcept|SemaCoroutine|SemaCUDA|SemaCXXScopeSpec|SemaDeclCXX|SemaDeclObjC|SemaExceptionSpec|SemaExprCXX|SemaExprObjC|SemaHLSL|HLSL\w+|SemaLambda|SemaModule|SemaObjC\w*|SemaOpenACC\w*|SemaOpenCL|SemaOpenMP|SemaOverload|SemaPseudoObject|SemaSwift|SemaSYCL|SemaTemplate\w*|SemaTypeTraits|SemaFunctionEffects|HeuristicResolver|SemaBoundsSafety|Sema(AMDGPU|ARM|AVR|BPF|DirectX|Hexagon|LoongArch|M68k|MIPS|MSP430|NVPTX|PPC|RISCV|SPIRV|SystemZ|X86))\.cpp
+obj:/Parse/CMakeFiles/.*/(ParseCXXInlineMethods|ParseDeclCXX|ParseExprCXX|ParseHLSL\w*|ParseObjc|ParseOpenACC|ParseOpenMP|ParseReflect|ParseTemplate|ParseTentative)\.cpp
+obj:/CodeGen/CMakeFiles/obj\.clangCodeGen\.dir/(CGBlocks|CGClass|CGCoroutine|CGCUDA\w*|CGCXX|CGCXXABI|CGDebugInfo|CGDeclCXX|CGException|CGExprCXX|CGHLSL\w*|CGObjC\w*|CGOpenCLRuntime|CGOpenMP\w*|CGStmtOpenMP|CGVTables|CGVTT|CodeGenPGO|CodeGenSYCL|CoverageMappingGen|ItaniumCXXABI|MicrosoftCXXABI|SwiftCallingConv|CGPointerAuth|SanitizerMetadata|MacroPPCallbacks|ObjectFilePCHContainerWriter|LinkInModulesPass|CGGPUBuiltin|HLSLBufferLayoutBuilder|CodeGenABITypes)\.cpp
+obj:/CodeGen/CMakeFiles/obj\.clangCodeGen\.dir/(TargetBuiltins|Targets)/(?!WebAssembly)\w+\.cpp
+obj:/Basic/CMakeFiles/.*/Targets/(?!WebAssembly|OSTargets)\w+\.cpp
+obj:/AST/CMakeFiles/.*/(ItaniumMangle|MicrosoftMangle|VTableBuilder|VTTBuilder|CXXInheritance|ExprCXX|DeclTemplate|TemplateName|ASTImporter\w*|OpenMPClause|StmtOpenMP|DeclOpenMP|OpenACCClause|ODRHash|ODRDiagsEmitter|JSONNodeDumper|TextNodeDumper|ASTDumper|DynamicRecursiveASTVisitor|ParentMapContext|ComparisonCategories|QualTypeNames|Comment\w*|ASTConcept|TemplateBase|DeclFriend|ExprConcepts|MicrosoftCXXABI|ItaniumCXXABI|ASTLambda|StmtCXX|ExprObjC|DeclObjC|StmtObjC)\.cpp
+obj:/AST/CMakeFiles/.*/ByteCode/
+obj:/Frontend/CMakeFiles/.*/(ASTConsumers|FrontendActions|Rewrite\w*)\.cpp
+# --- LLVM: debug info, PGO, IR text/bitcode, other object formats, GlobalISel, non-O0 machine passes
+obj:lib/libLLVM(GlobalISel|AsmParser|BitReader|BitWriter|ProfileData|TextAPI|DebugInfoCodeView|DebugInfoDWARF\w*|CGData|Coroutines|ipo|Linker|IRPrinter|MIRParser|Instrumentation|Vectorize|InstCombine|AggressiveInstCombine|ObjCARCOpts|HipStdPar|FrontendOpenMP|FrontendHLSL|FrontendOffloading|WindowsDriver|Symbolize|LTO|Extensions|Remarks)\.a
+obj:/LLVM(GlobalISel|AsmParser|BitReader|BitWriter|ProfileData|TextAPI|DebugInfoCodeView|DebugInfoDWARF\w*|CGData|Coroutines|ipo|Linker|IRPrinter|MIRParser|Instrumentation|Vectorize|InstCombine|AggressiveInstCombine|ObjCARCOpts|FrontendOpenMP|FrontendHLSL|FrontendOffloading|Symbolize|LTO|Extensions|Remarks|Passes)\.dir/
+obj:/LLVMAsmPrinter\.dir/(Dwarf\w*|DIE\w*|CodeViewDebug|WinException|WinCFGuard|AccelTable|AddressPool|DebugLocStream|OcamlGCPrinter|ErlangGCPrinter|PseudoProbePrinter|ARMException|AIXException)\.cpp
+obj:/LLVMCodeGen\.dir/(MIRPrinter|MIRPrintingPass|MIRSampleProfile|MIRFSDiscriminator|MachinePipeliner|ModuloSchedule|AssignmentTrackingAnalysis|LiveDebugValues/\w+|LiveDebugVariables|CodeGenPrepare|MachineOutliner|GlobalMerge|IfConversion|EarlyIfConversion|MachineLICM|MachineCSE|MachineSink|BranchFolding|TailDuplication|TailDuplicator|MachineBlockPlacement|MachineScheduler|PostRASchedulerList|MachineCombiner|MachineCopyPropagation|InterleavedAccessPass|InterleavedLoadCombinePass|ComplexDeinterleavingPass|StackColoring|MachineFunctionSplitter|BasicBlockSections\w*|SelectOptimize|ExpandVectorPredication|HardwareLoops|MachineLateInstrsCleanup|RegAllocGreedy|RegAllocPBQP|RegAllocBasic|SplitKit|InlineSpiller|RegisterCoalescer|MachineVerifier|ShrinkWrap|StackSlotColoring|PostRAMachineSink|MachineTraceMetrics|ReachingDefAnalysis|ExecutionDomainFix|BreakFalseDeps|MachineUniformityAnalysis|TypePromotion|WinEHPrepare|SjLjEHPrepare|StackProtector|SafeStack|MachineBlockFrequencyInfo|MachineBranchProbabilityInfo|EarlyIfConversion|MLRegAllocEvictAdvisor|MLRegAllocPriorityAdvisor|RegAllocEvictionAdvisor|RegAllocPriorityAdvisor|CFIInstrInserter|CFIFixup|ImplicitNullChecks|MachineCheckDebugify|MachineDebugify|MachineStripDebug|RemoveRedundantDebugValues|StaticDataSplitter|StaticDataAnnotator|KCFI|WindowScheduler)\.cpp
+obj:/LLVMCore\.dir/(AutoUpgrade|Verifier|SafepointIRVerifier|DebugProgramInstruction|PrintPasses|IRPrintingPasses|LLVMRemarkStreamer|ProfDataUtils|Statepoint)\.cpp
+obj:/LLVMObject\.dir/(?!WasmObjectFile|ObjectFile|Binary|SymbolicFile|Archive|IRSymtab|IRObjectFile|Error|ModuleSymbolTable|RecordStreamer|Object)\w+\.cpp
+obj:/LLVMMC\.dir/(MCELF\w*|ELFObjectWriter|MCMachO\w*|MachObjectWriter|MCCOFF\w*|WinCOFF\w*|MCXCOFF\w*|XCOFFObjectWriter|MCGOFF\w*|GOFFObjectWriter|MCSPIRV\w*|SPIRVObjectWriter|MCDXContainer\w*|DXContainer\w*|MCWin64EH|MCWinEH|MCWinCOFF\w*|MCCodeView|MCPseudoProbe|MCSectionELF|MCSectionMachO|MCSectionCOFF|MCSectionXCOFF|MCSectionGOFF|MCSectionDXContainer|MCSectionSPIRV|MCAsmInfoELF|MCAsmInfoDarwin|MCAsmInfoCOFF|MCAsmInfoXCOFF|MCAsmInfoGOFF)\.cpp
+obj:/LLVMMCParser\.dir/(ELF|Darwin|COFF\w*|WinCOFF|XCOFF|GOFF)AsmParser\.cpp
+obj:/LLVMAnalysis\.dir/(ScalarEvolution\w*|DependenceAnalysis|LoopAccessAnalysis|MemorySSA\w*|InlineCost|InlineAdvisor|MLInlineAdvisor|ModuleSummaryAnalysis|StackSafetyAnalysis|IRSimilarityIdentifier|IVDescriptors|LoopCacheAnalysis|Delinearization|DDG|DDGPrinter|CallPrinter|CFGPrinter|DOTGraphTraitsPass|DomPrinter|RegionPrinter|StructuralHash|CtxProfAnalysis|DXILResource|KernelInfo|MemProfContextDisambiguation|IR2Vec|VectorUtils|ReplayInlineAdvisor|InteractiveModelRunner|TrainingLogger|Lint)\.cpp
+# --- round 2
+noop:^llvm::initialize\w+Pass\(llvm::PassRegistry&\)$
+noopkeep:o0init.txt
+obj:/Sema/CMakeFiles/.*/(SemaLambda|Consumed|SemaFunctionEffects)\.cpp
+obj:/AST/CMakeFiles/.*/(ASTStructuralEquivalence|VTTBuilder)\.cpp
+obj:/Analysis/CMakeFiles/obj\.clangAnalysis\.dir/(Consumed|ThreadSafety\w*|CalledOnceCheck|UninitializedValues|ReachableCode|CFGReachabilityAnalysis|CocoaConventions|ObjCNoReturn|BodyFarm|PathDiagnostic|ProgramPoint|CallGraph|CloneDetection|ExprMutationAnalyzer|MacroExpansionContext|IssueHash|LifetimeSafety\w*)\.cpp
+obj:/LLVMWebAssemblyCodeGen\.dir/GISel/
+obj:/LLVMDemangle\.dir/
+obj:/LLVMMC\.dir/MCAsmStreamer\.cpp
+obj:/LLVMCore\.dir/AsmWriter\.cpp
+obj:/LLVMTransformUtils\.dir/(Debugify|CodeExtractor|LoopUtils|LoopSimplify|LoopRotationUtils|LoopUnroll\w*|LoopPeel|LoopVersioning|SimplifyIndVar|ScalarEvolutionExpander|SSAUpdater\w*|CloneFunction|FunctionComparator|SplitModule|SampleProfile\w*|MemoryOpRemark|BypassSlowDivision|SimplifyLibCalls|BuildLibCalls|VNCoercion|MisExpect|CodeMoverUtils|SCCPSolver|PredicateInfo)\.cpp

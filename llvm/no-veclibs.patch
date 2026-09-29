@@ -1,0 +1,31 @@
+diff --git a/llvm/lib/Analysis/TargetLibraryInfo.cpp b/llvm/lib/Analysis/TargetLibraryInfo.cpp
+index 6b8f86139..0ecff9b77 100644
+--- a/llvm/lib/Analysis/TargetLibraryInfo.cpp
++++ b/llvm/lib/Analysis/TargetLibraryInfo.cpp
+@@ -1243,6 +1243,7 @@ void TargetLibraryInfoImpl::addVectorizableFunctions(ArrayRef<VecDesc> Fns) {
+   llvm::sort(ScalarDescs, compareByVectorFnName);
+ }
+ 
++#if !defined(SC_NO_VECLIBS)
+ static const VecDesc VecFuncs_Accelerate[] = {
+ #define TLI_DEFINE_ACCELERATE_VECFUNCS
+ #include "llvm/Analysis/VecFuncs.def"
+@@ -1327,8 +1328,10 @@ const VecDesc VecFuncs_AMDLIBM[] = {
+ #undef TLI_DEFINE_AMDLIBM_VECFUNCS
+ };
+ 
++#endif
+ void TargetLibraryInfoImpl::addVectorizableFunctionsFromVecLib(
+     enum VectorLibrary VecLib, const llvm::Triple &TargetTriple) {
++#if !defined(SC_NO_VECLIBS)
+   switch (VecLib) {
+   case VectorLibrary::Accelerate: {
+     addVectorizableFunctions(VecFuncs_Accelerate);
+@@ -1395,6 +1398,7 @@ void TargetLibraryInfoImpl::addVectorizableFunctionsFromVecLib(
+   case VectorLibrary::NoLibrary:
+     break;
+   }
++#endif
+ }
+ 
+ bool TargetLibraryInfoImpl::isFunctionVectorizable(StringRef funcName) const {
