@@ -125,7 +125,7 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
     CG.CXXCtorDtorAliases = true;
 
   DiagnosticOptions &DO = Inv.getDiagnosticOpts();
-  DO.Warnings = {"all", "extra"};
+  DO.Warnings = O.Warnings;
   DO.ErrorLimit = 19;
   DO.ShowOptionNames = true;
   DO.ShowPresumedLoc = true;
@@ -165,6 +165,8 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
     else if (A == "-internal-externc-isystem") O.ExternCISystem.push_back(Next());
     else if (A == "-triple" || A == "-target-cpu" || A == "-mrelocation-model" || A == "-ferror-limit")
       Next();
+    else if (A.starts_with("-W"))
+      O.Warnings.push_back(A.drop_front(2).str());
     else if (!A.starts_with("-")) {
       O.Input = A.str();
       O.CXX = A.ends_with(".cpp") || A.ends_with(".cc") || A.ends_with(".cxx");

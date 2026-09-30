@@ -34,7 +34,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm engine trim baseline test test-small learn checkinv size clean
+.PHONY: all fetch llvm engine trim baseline test test-small test-warn learn checkinv size clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -99,6 +99,10 @@ $(B)/sc.wasm: $(B)/sc-cut.wasm
 $(B)/res/base/summary.json: $(B)/sc-full.wasm | $(CORPUS)
 	test/corpus.py $< $(B)/res/base
 
+# the same with every warning on, so the cuts keep the code of all warnings
+$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm | $(CORPUS)
+	WFLAGS=-Weverything test/corpus.py $< $(B)/res/wev-base
+
 baseline: $(B)/res/base/summary.json
 
 test: $(B)/sc.wasm $(B)/res/base/summary.json
@@ -107,9 +111,13 @@ test: $(B)/sc.wasm $(B)/res/base/summary.json
 test-small: $(B)/sc.wasm $(B)/res/base/summary.json
 	CORPUS=small test/corpus.py $(B)/sc.wasm $(B)/res/sc-small $(B)/res/base/summary.json
 
-# rebuild what the cuts keep from the corpus (after an LLVM bump or new cuts)
-learn: $(ENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj $(B)/res/base/summary.json
-	scripts/link.py --learn $(B)/sc-cut.wasm
+test-warn: $(B)/sc.wasm $(B)/res/wev-base/summary.json
+	WFLAGS=-Weverything test/corpus.py $(B)/sc.wasm $(B)/res/wev $(B)/res/wev-base/summary.json
+
+# rebuild what the cuts keep from the corpus with -Weverything (after an LLVM
+# bump or new cuts)
+learn: $(ENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj $(B)/res/wev-base/summary.json
+	WFLAGS=-Weverything SC_BASE=$(CURDIR)/$(B)/res/wev-base/summary.json scripts/link.py --learn $(B)/sc-cut.wasm
 
 # the invocation built by engine/sc_inv.cpp against clang's option parser (native)
 N := $(B)/native

@@ -7,7 +7,7 @@ namespace clang { class CompilerInvocation; }
 
 struct ScOptions {
   std::string Input, Output = "-", Sysroot, ResourceDir;
-  std::vector<std::string> ISystem, ExternCISystem;
+  std::vector<std::string> ISystem, ExternCISystem, Warnings;
   bool CXX = false;
 };
 

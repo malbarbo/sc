@@ -568,7 +568,8 @@ engine só de C, a diferença é +2,25 MB bruto, +0,89 MB gzip e +0,58 MB zstd.
 As funções usadas (`cuts/symbols.used`) são 1.732. `make test` passa nos
 11.736 arquivos.
 
-`-Wall -Wextra` já é fixo no `sc_inv` (`DO.Warnings`) e vale para C++. Os
+`-Wall -Wextra` já é fixo no `sc_inv` (`DO.Warnings`) e vale para C++ (até
+a §13, que passou os avisos para as flags). Os
 avisos são da Sema, que o corte mantém, e a saída de `c9_warn` e `c14_warn20`
 é a mesma do engine inteiro: `-Wuninitialized`, `-Wunused-*`,
 `-Wreturn-type`, `-Wparentheses`, `-Wsign-compare`, `-Wstring-plus-int`,
@@ -577,3 +578,40 @@ avisos são da Sema, que o corte mantém, e a saída de `c9_warn` e `c14_warn20`
 
 Módulos (`import std;`) não funcionam: precisariam dos BMI da libc++ e do
 `ASTWriter`, que está cortado.
+
+## 13. Todos os avisos
+
+Até aqui `-Wall -Wextra` era fixo no `sc_inv` e as outras flags `-W` eram
+ignoradas. Agora os avisos vêm só das flags `-W` (`DO.Warnings`), como no
+clang: sem flag, só os avisos ligados por padrão no clang. O corpus continua
+passando `-Wall -Wextra`, e o `checkinv` dá SAME.
+
+O `test/corpus.py` aceita `WFLAGS` (por exemplo `WFLAGS=-Weverything`). Com
+`-Weverything`, o engine cortado da §12 diferia do inteiro em 7.378 dos 11.736
+arquivos, quase todos por trap. O `learn` com `-Weverything` (contra uma base
+do engine inteiro também com `-Weverything`) devolveu objetos inteiros de
+quatro grupos de avisos:
+
+| aviso | objetos devolvidos |
+| --- | --- |
+| `-Wdocumentation` | `Comment`, `CommentLexer`, `CommentParser`, `CommentSema` |
+| `-Wthread-safety` | `ThreadSafetyCommon`, `ThreadSafetyTIL` |
+| `-Wunsafe-buffer-usage` | `UnsafeBufferUsage` |
+| `-Wlifetime-safety` | 8 objetos de `Analysis/LifetimeSafety` |
+
+e cerca de 90 funções, quase todas desses grupos e de `-Wconsumed`
+(`cuts/symbols.used` foi de 1.732 para 1.822). Os outros avisos são da Sema e
+o código deles já estava no engine.
+
+| engine | bruto | gzip | zstd |
+| --- | ---: | ---: | ---: |
+| C + C++20, só `-Wall -Wextra` (§12) | 17.993.849 | 6.702.950 | 5.144.933 |
+| **C + C++20, todos os avisos** | **18.267.827** | **6.786.231** | **5.204.882** |
+
+Todos os avisos custam +0,27 MB bruto, +0,08 MB gzip e +0,06 MB zstd. O
+corpus passa com e sem `-Weverything` (`make test` e `make test-warn`, 0
+diferenças nos 11.736 arquivos). O `make learn` agora roda com
+`-Weverything`, para que um corte novo não tire o código de nenhum aviso.
+
+Quais avisos ligar por padrão para os alunos fica para depois; o engine não
+liga nenhum além dos do clang.

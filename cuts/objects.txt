@@ -156,3 +156,25 @@ tools/lld/wasm/CMakeFiles/.*/LTO\.cpp
 # put back by link.py --learn
 !tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/ExprConcepts\.cpp\.obj$
 !tools/clang/lib/Sema/CMakeFiles/obj\.clangSema\.dir/SemaCoroutine\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/CommentLexer\.cpp\.obj$
+!tools/clang/lib/Analysis/CMakeFiles/obj\.clangAnalysis\.dir/ThreadSafetyCommon\.cpp\.obj$
+!tools/clang/lib/Analysis/CMakeFiles/obj\.clangAnalysis\.dir/UnsafeBufferUsage\.cpp\.obj$
+!tools/clang/lib/Analysis/LifetimeSafety/CMakeFiles/obj\.clangAnalysisLifetimeSafety\.dir/LifetimeSafety\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/CommentSema\.cpp\.obj$
+!tools/clang/lib/Analysis/LifetimeSafety/CMakeFiles/obj\.clangAnalysisLifetimeSafety\.dir/Origins\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/CommentParser\.cpp\.obj$
+!tools/clang/lib/Analysis/LifetimeSafety/CMakeFiles/obj\.clangAnalysisLifetimeSafety\.dir/FactsGenerator\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/Comment\.cpp\.obj$
+!tools/clang/lib/Analysis/LifetimeSafety/CMakeFiles/obj\.clangAnalysisLifetimeSafety\.dir/LoanPropagation\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/Analysis/LifetimeSafety/CMakeFiles/obj\.clangAnalysisLifetimeSafety\.dir/LiveOrigins\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/Analysis/LifetimeSafety/CMakeFiles/obj\.clangAnalysisLifetimeSafety\.dir/MovedLoans\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/Analysis/LifetimeSafety/CMakeFiles/obj\.clangAnalysisLifetimeSafety\.dir/Checker\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/Analysis/CMakeFiles/obj\.clangAnalysis\.dir/ThreadSafetyTIL\.cpp\.obj$

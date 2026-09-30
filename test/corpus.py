@@ -7,7 +7,8 @@ Programs (test/samples, c-testsuite, gcc torture execute/) are compiled with
 clang's C tests) are only compiled: diagnostics and the object's md5.
 Writes <outdir>/<name>.txt and <outdir>/summary.json {name: normalized md5}.
 With a base summary, lists the files whose result differs and fails if any.
-CORPUS=small runs only the programs; JOBS sets the parallelism (48).
+CORPUS=small runs only the programs; JOBS sets the parallelism (48);
+WFLAGS adds warning flags (e.g. -Weverything).
 C++ (gnu++20, no exceptions) goes the same way: the programs in test/cxx,
 linked with libc++, and clang's C++ tests.
 """
@@ -28,6 +29,7 @@ CXXFLAGS = FLAGS[:FLAGS.index('/res/include') - 1] + [
     '-internal-isystem', '/sysroot/include/wasm32-wasip1/c++/v1', '-internal-isystem', '/sysroot/include/c++/v1'] + \
     FLAGS[FLAGS.index('/res/include') - 1:] + ['-std=gnu++20', '-mconstructor-aliases', '-fdeprecated-macro', '-fno-implicit-modules', '-fskip-odr-check-in-gmf']
 CXXEXT = ('.cpp', '.cc', '.cxx')
+W_EXTRA = os.environ.get('WFLAGS', '').split()  # e.g. WFLAGS=-Weverything
 if sys.argv[1:3] == ['--flags', 'c++']:
     sys.exit(print(' '.join(CXXFLAGS[1:])))
 if sys.argv[1] == '--flags':  # the cc1 flags, for test/checkinv
@@ -66,7 +68,7 @@ def one1(p, d, f, n, runit):
     cxx = f.endswith(CXXEXT)
     obj = f'{out}/{n}.o'
     r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{d}::/c', '--dir', f'{SR}::/sysroot',
-                        '--dir', f'{RES}::/res', cw] + (CXXFLAGS if cxx else FLAGS) + ['-o', '-', f'/c/{f}'],
+                        '--dir', f'{RES}::/res', cw] + (CXXFLAGS if cxx else FLAGS) + W_EXTRA + ['-o', '-', f'/c/{f}'],
                        capture_output=True, timeout=300)
     open(obj, 'wb').write(r.stdout)
     err = r.stderr.decode(errors='replace')
