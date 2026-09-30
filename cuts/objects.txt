@@ -133,3 +133,26 @@ tools/lld/wasm/CMakeFiles/.*/LTO\.cpp
 !tools/clang/lib/Sema/CMakeFiles/obj\.clangSema\.dir/SemaLambda\.cpp\.obj$
 !tools/clang/lib/Sema/CMakeFiles/obj\.clangSema\.dir/SemaTemplateDeduction\.cpp\.obj$
 !tools/clang/lib/Sema/CMakeFiles/obj\.clangSema\.dir/SemaTemplateInstantiate\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/ASTDumper\.cpp\.obj$
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/CXXInheritance\.cpp\.obj$
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/DeclFriend\.cpp\.obj$
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/StmtCXX\.cpp\.obj$
+!tools/clang/lib/CodeGen/CMakeFiles/obj\.clangCodeGen\.dir/CGExprCXX\.cpp\.obj$
+!tools/clang/lib/Sema/CMakeFiles/obj\.clangSema\.dir/SemaTemplateDeductionGuide\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/ASTConcept\.cpp\.obj$
+!tools/clang/lib/CodeGen/CMakeFiles/obj\.clangCodeGen\.dir/CGCXX\.cpp\.obj$
+!tools/clang/lib/CodeGen/CMakeFiles/obj\.clangCodeGen\.dir/CGVTT\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/VTTBuilder\.cpp\.obj$
+!tools/clang/lib/CodeGen/CMakeFiles/obj\.clangCodeGen\.dir/CGHLSLBuiltins\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/ASTReader\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/ModuleManager\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/ASTReaderDecl\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/ExprConcepts\.cpp\.obj$
+!tools/clang/lib/Sema/CMakeFiles/obj\.clangSema\.dir/SemaCoroutine\.cpp\.obj$

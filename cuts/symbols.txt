@@ -32,3 +32,5 @@ obj:/LLVMDemangle\.dir/
 obj:/LLVMMC\.dir/MCAsmStreamer\.cpp
 obj:/LLVMCore\.dir/AsmWriter\.cpp
 obj:/LLVMTransformUtils\.dir/(Debugify|CodeExtractor|LoopUtils|LoopSimplify|LoopRotationUtils|LoopUnroll\w*|LoopPeel|LoopVersioning|SimplifyIndVar|ScalarEvolutionExpander|SSAUpdater\w*|CloneFunction|FunctionComparator|SplitModule|SampleProfile\w*|MemoryOpRemark|BypassSlowDivision|SimplifyLibCalls|BuildLibCalls|VNCoercion|MisExpect|CodeMoverUtils|SCCPSolver|PredicateInfo)\.cpp
+# --- C++20: -fmodules makes clang create the module reader for every file; keep what it calls
+obj:/Serialization/CMakeFiles/.*/(ASTReader\w*|ModuleManager|ModuleFile|GlobalModuleIndex|InMemoryModuleCache|ModuleCache)\.cpp

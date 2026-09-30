@@ -29,7 +29,9 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
 
   LangOptions &LO = Inv.getLangOpts();
   std::vector<std::string> Includes;
-  LangOptions::setLangDefaults(LO, Language::C, T, Includes);
+  Language L = O.CXX ? Language::CXX : Language::C;
+  LangOptions::setLangDefaults(LO, L, T, Includes,
+                              O.CXX ? LangStandard::lang_gnucxx20 : LangStandard::lang_unspecified);
   LO.GNUCVersion = 40201;
   LO.setDefaultFPContractMode(LangOptions::FPM_On);
   LO.setValueVisibilityMode(HiddenVisibility);
@@ -64,6 +66,19 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   LO.Char8 = false;
   LO.NativeInt16Type = true;
   LO.HLSLRootSigVer = llvm::dxbc::RootSignatureVersion::V1_1;
+  if (O.CXX) {
+    // gnu++20, -fno-exceptions (wasi-sdk's libc++ is built without them)
+    LO.CXXOperatorNames = true;
+    LO.RTTI = LO.RTTIData = true;
+    LO.SizedDeallocation = LO.CPlusPlus14;
+    LO.AlignedAllocation = LO.CPlusPlus17;
+    LO.Char8 = LO.CPlusPlus20;
+    LO.Coroutines = LO.CPlusPlus20;
+    LO.CPlusPlusModules = LO.Modules = LO.ModulesLocalVisibility = LO.CPlusPlus20;
+    LO.ImplicitModules = false;
+    LO.Deprecated = true;
+    LO.SkipODRCheckInGMF = true;
+  }
 
   CodeGenOptions &CG = Inv.getCodeGenOpts();
   CG.DisableFree = true;
@@ -106,6 +121,8 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   CG.EmitVersionIdentMetadata = true;
   CG.EmitIEEENaNCompliantInsts = true;
   CG.CodeModel = TO.CodeModel;
+  if (O.CXX)
+    CG.CXXCtorDtorAliases = true;
 
   DiagnosticOptions &DO = Inv.getDiagnosticOpts();
   DO.Warnings = {"all", "extra"};
@@ -131,9 +148,9 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   FrontendOptions &FO = Inv.getFrontendOpts();
   FO.DisableFree = true;
   FO.ProgramAction = frontend::EmitObj;
-  FO.DashX = InputKind(Language::C);
+  FO.DashX = InputKind(L);
   FO.OutputFile = O.Output;
-  FO.Inputs.push_back(FrontendInputFile(O.Input, InputKind(Language::C)));
+  FO.Inputs.push_back(FrontendInputFile(O.Input, InputKind(L)));
 }
 
 // Accepts the subset of cc1 flags the engine passes; everything else is fixed.
@@ -148,7 +165,10 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
     else if (A == "-internal-externc-isystem") O.ExternCISystem.push_back(Next());
     else if (A == "-triple" || A == "-target-cpu" || A == "-mrelocation-model" || A == "-ferror-limit")
       Next();
-    else if (!A.starts_with("-")) O.Input = A.str();
+    else if (!A.starts_with("-")) {
+      O.Input = A.str();
+      O.CXX = A.ends_with(".cpp") || A.ends_with(".cc") || A.ends_with(".cxx");
+    }
   }
   return !O.Input.empty();
 }

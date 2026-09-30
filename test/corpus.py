@@ -8,8 +8,8 @@ clang's C tests) are only compiled: diagnostics and the object's md5.
 Writes <outdir>/<name>.txt and <outdir>/summary.json {name: normalized md5}.
 With a base summary, lists the files whose result differs and fails if any.
 CORPUS=small runs only the programs; JOBS sets the parallelism (48).
-CXX=1 adds C++ (gnu++17, no exceptions): the programs in test/cxx, linked
-with libc++, and clang's C++ tests.
+C++ (gnu++20, no exceptions) goes the same way: the programs in test/cxx,
+linked with libc++, and clang's C++ tests.
 """
 from corpuslib import norm_hash, diff
 import hashlib, re, json, os, subprocess, sys, glob
@@ -26,7 +26,7 @@ FLAGS = ['-cc1', '-triple', 'wasm32-unknown-wasip1', '-emit-obj', '-Wall', '-Wex
 # C++ as the driver sets it for wasm32-wasip1, with libc++ first in the search path
 CXXFLAGS = FLAGS[:FLAGS.index('/res/include') - 1] + [
     '-internal-isystem', '/sysroot/include/wasm32-wasip1/c++/v1', '-internal-isystem', '/sysroot/include/c++/v1'] + \
-    FLAGS[FLAGS.index('/res/include') - 1:] + ['-mconstructor-aliases', '-fdeprecated-macro', '-fskip-odr-check-in-gmf']
+    FLAGS[FLAGS.index('/res/include') - 1:] + ['-std=gnu++20', '-mconstructor-aliases', '-fdeprecated-macro', '-fno-implicit-modules', '-fskip-odr-check-in-gmf']
 CXXEXT = ('.cpp', '.cc', '.cxx')
 if sys.argv[1:3] == ['--flags', 'c++']:
     sys.exit(print(' '.join(CXXFLAGS[1:])))
@@ -44,11 +44,10 @@ if os.environ.get('CORPUS', 'full') == 'full':
     progs += [(p, False) for p in sorted(glob.glob(f'{B}/gcc-ts/gcc/testsuite/gcc.c-torture/compile/*.c'))]
     for sub in ['Sema', 'Parser', 'CodeGen', 'Lexer', 'Preprocessor', 'Misc', 'Frontend', 'AST', 'C/*', 'C/*/*']:
         progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.c'))]
-if os.environ.get('CXX'):
-    progs += [(p, True) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp'))]
-    if os.environ.get('CORPUS', 'full') == 'full':
-        for sub in ['SemaCXX', 'SemaTemplate', 'CodeGenCXX', 'CXX/**', 'Parser', 'Lexer', 'AST', 'Misc']:
-            progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.cpp', recursive=True))]
+progs += [(p, True) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp'))]
+if os.environ.get('CORPUS', 'full') == 'full':
+    for sub in ['SemaCXX', 'SemaTemplate', 'CodeGenCXX', 'CXX/**', 'Parser', 'Lexer', 'AST', 'Misc']:
+        progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.cpp', recursive=True))]
 
 def one(pr):
     p, runit = pr

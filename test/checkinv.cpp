@@ -39,6 +39,21 @@ int main(int argc, const char **argv) {
   // compare as sequences of (flag [value]) tokens: print tokens missing on either side
   for (auto &x : SA) if (!SB.count(x)) { llvm::outs() << "parser only: " << x << "\n"; ++diffs; }
   for (auto &x : SB) if (!SA.count(x)) { llvm::outs() << "sc only:     " << x << "\n"; ++diffs; }
+  // language options field by field: some are never written on the command line
+  const LangOptions &LA = Parsed.getLangOpts(), &LB = Mine.getLangOpts();
+#define LANGOPT(Name, Bits, Default, Compatibility, Description)                  \
+  if (LA.Name != LB.Name) {                                                       \
+    llvm::outs() << "langopt " #Name ": parser " << (unsigned)LA.Name << ", sc "   \
+                 << (unsigned)LB.Name << "\n";                                     \
+    ++diffs;                                                                      \
+  }
+#define ENUM_LANGOPT(Name, Type, Bits, Default, Compatibility, Description)       \
+  if (LA.get##Name() != LB.get##Name()) {                                         \
+    llvm::outs() << "langopt " #Name ": parser " << (unsigned)LA.get##Name()      \
+                 << ", sc " << (unsigned)LB.get##Name() << "\n";                   \
+    ++diffs;                                                                      \
+  }
+#include "clang/Basic/LangOptions.def"
   // predefined macros (not covered by the command line round trip)
   auto predefs = [&](CompilerInvocation &I) {
     auto CI = std::make_unique<CompilerInstance>(std::make_shared<CompilerInvocation>(I));

@@ -1,13 +1,14 @@
 # sc
 
-sc is the C engine for students, in the family of
+sc is the C and C++ engine for students, in the family of
 [sgleam](https://github.com/malbarbo/sgleam) and spython. The engine is clang
-and wasm-ld built for `wasm32-wasip1` as one module, cut down to what plain C
-at `-O0` needs: 15.7 MB, 5.8 MB gzip, 4.6 MB zstd.
+and wasm-ld built for `wasm32-wasip1` as one module, cut down to what C (gnu17)
+and C++ (gnu++20, no exceptions) at `-O0` need: 18.0 MB, 6.7 MB gzip, 5.1 MB
+zstd. Warnings are always `-Wall -Wextra`.
 
 ```sh
-sc.wasm -cc1 <cc1 flags> -o out.o file.c    # compile one file
-sc.wasm ld out.o crt1-command.o -lc ...     # link with wasm-ld
+sc.wasm -cc1 <cc1 flags> -o out.o file.c    # compile one file (.cpp, .cc, .cxx: C++)
+sc.wasm ld out.o crt1-command.o -lc ...     # link with wasm-ld (C++: -lc++ -lc++abi)
 ```
 
 `ANALISE.md` (Portuguese) records how the build was chosen and measured.
@@ -28,9 +29,10 @@ sc.wasm ld out.o crt1-command.o -lc ...     # link with wasm-ld
   cuts. `scripts/trim.py` builds the trimmed intrinsics table and
   `TargetLibraryInfo`. `attrib.py`, `cat2.py` and `o0passes.py` are for
   measuring (see `ANALISE.md` §10).
-- `test/corpus.py` runs the C corpus through an engine. `test/checkinv.cpp`
-  checks `sc_inv.cpp` against clang's option parser. `test/samples/` has small
-  student-style programs.
+- `test/corpus.py` runs the corpus through an engine (`--flags` and
+  `--flags c++` print the cc1 flags). `test/checkinv.cpp` checks `sc_inv.cpp`
+  against clang's option parser. `test/samples/` (C) and
+  `test/cxx/` (C++) have small student-style programs.
 - `bench/` times the engine in V8 (`cc.mjs`) and compares O0/O1/O2 code.
 - `build/` holds everything generated and is not tracked.
 
@@ -42,7 +44,7 @@ Needs cmake, ninja, a native clang and lld, `wasm-opt` (binaryen),
 ```sh
 make             # build/sc.wasm; the first run builds LLVM twice (~1 h)
 make test        # the corpus on build/sc.wasm against the uncut engine
-make test-small  # only the ~230 programs that are linked and run
+make test-small  # only the ~240 programs that are linked and run
 make checkinv    # the invocation of sc_inv.cpp against clang's parser
 make size        # raw, gzip and zstd sizes
 make learn       # rebuild what the cuts keep, from the corpus
@@ -71,10 +73,11 @@ the original function, and runs the corpus once. Then it checks the cut engine
 against the uncut one and puts back anything that traps. Run it after changing
 a cut rule or bumping LLVM, then `make test`.
 
-A C feature the corpus does not cover can reach a stub. The engine then traps
-with `unreachable`.
+A C or C++ feature the corpus does not cover can reach a stub. The engine then
+traps with `unreachable`.
 
-The corpus has 7,462 files: c-testsuite, gcc's torture tests (`execute/` is
-linked and run, `compile/` only compiled) and clang's own C tests. The
+The corpus has 11,736 files: c-testsuite, gcc's torture tests (`execute/` is
+linked and run, `compile/` only compiled), clang's own C and C++ tests
+(compiled only) and the programs in `test/samples` and `test/cxx`. The
 compile-only files compare the diagnostics and the md5 of the object. The
 reference is `build/sc-full.wasm`, the same engine without cuts.

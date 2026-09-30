@@ -531,3 +531,49 @@ libc++ com exceções e o EH do wasm, e voltariam `CGException` e
 Reprodução: `build/exp-cxx` (fontes do engine em `src/`, cortes aprendidos
 em `cuts/`), com `CXX=1` no `test/corpus.py` e `SC_CUTS`, `SC_ENGINE`,
 `SC_LINKDIR` e `SC_BASE` no `scripts/link.py`.
+
+## 12. C++20 no engine
+
+O C++ ficou no engine principal (`engine/`, `cuts/`, `test/corpus.py` sem
+`CXX=1`), e o padrão passou de gnu++17 para gnu++20. As flags são as que o
+driver passa com `-std=c++20` para wasm32-wasip1, mais `-fno-exceptions`:
+`-std=gnu++20 -fno-implicit-modules -fskip-odr-check-in-gmf`.
+
+O `checkinv` ganhou uma comparação campo a campo das `LangOptions`. Ela pegou
+três opções que a volta pela linha de comando não mostra: com C++20, o parser
+liga `Modules` (padrão = `CPlusPlusModules`) e `ModulesLocalVisibility`
+(implicada por `-fcxx-modules`), e `-fno-implicit-modules` desliga
+`ImplicitModules`. O `checkinv` dá SAME para C e para C++.
+
+O corpus ganhou 5 programas em `test/cxx`: conceitos, `requires` e
+`consteval` (c10); ranges, views, `span`, `<=>` e inicializadores designados
+(c11); `std::format`, corrotinas, `char8_t`, `using enum` e `constinit`
+(c12); erros típicos de C++20 (c13); e avisos (c14). Os testes do clang
+continuam os mesmos, agora compilados em gnu++20. São 11.736 arquivos.
+
+Com `Modules` ligado, o clang cria o leitor de módulos (`ASTReader`) para
+todo arquivo C++, e todos caíam em stub. O `learn` devolveu `ASTReader`,
+`ASTReaderDecl` e `ModuleManager` inteiros (+0,67 MB bruto). Uma regra de
+função em `cuts/symbols.txt` para esses objetos deixa só o que é chamado. O
+`learn` também devolveu `ExprConcepts` e `SemaCoroutine`.
+
+| engine | bruto | gzip | zstd |
+| --- | ---: | ---: | ---: |
+| C + C++17 (§11) | 17.800.572 | 6.624.798 | 5.087.490 |
+| C + C++20, `ASTReader` inteiro | 18.471.846 | 6.844.449 | 5.252.055 |
+| **C + C++20** | **17.993.849** | **6.702.950** | **5.144.933** |
+
+O C++20 custa 0,19 MB bruto e 0,06 MB zstd a mais que o C++17. Contra o
+engine só de C, a diferença é +2,25 MB bruto, +0,89 MB gzip e +0,58 MB zstd.
+As funções usadas (`cuts/symbols.used`) são 1.732. `make test` passa nos
+11.736 arquivos.
+
+`-Wall -Wextra` já é fixo no `sc_inv` (`DO.Warnings`) e vale para C++. Os
+avisos são da Sema, que o corte mantém, e a saída de `c9_warn` e `c14_warn20`
+é a mesma do engine inteiro: `-Wuninitialized`, `-Wunused-*`,
+`-Wreturn-type`, `-Wparentheses`, `-Wsign-compare`, `-Wstring-plus-int`,
+`-Wambiguous-reversed-operator`. Não entram em `-Wall -Wextra`:
+`-Wimplicit-fallthrough`, `-Wconversion` (`int k = 3.7`) e `-Wshadow`.
+
+Módulos (`import std;`) não funcionam: precisariam dos BMI da libc++ e do
+`ASTWriter`, que está cortado.

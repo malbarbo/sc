@@ -1,4 +1,4 @@
-# sc: clang + wasm-ld for C, as one wasm32-wasip1 module.
+# sc: clang + wasm-ld for C and C++, as one wasm32-wasip1 module.
 # `make` builds build/sc.wasm; the first run fetches and builds LLVM twice
 # (native tools, then the wasm cross build) and takes about an hour.
 
@@ -121,6 +121,7 @@ $(B)/checkinv: test/checkinv.cpp engine/sc_inv.cpp engine/sc_inv.h | $(N)/bin/wa
 
 checkinv: $(B)/checkinv
 	$< $$(test/corpus.py --flags) -o - /c/x.c
+	$< $$(test/corpus.py --flags c++) -o - /c/x.cpp
 
 size: $(B)/sc.wasm
 	@printf '%s: %s raw, %s gzip, %s zstd\n' $< $$(stat -c %s $<) \

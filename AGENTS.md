@@ -1,7 +1,7 @@
 # sc
 
-The C engine: clang and wasm-ld built for wasm32-wasip1 as one module, cut to
-what plain C at -O0 needs. `README.md` has the layout, the build and how the
+The C and C++ engine: clang and wasm-ld built for wasm32-wasip1 as one module,
+cut to what C and C++20 (no exceptions) at -O0 need. `README.md` has the layout, the build and how the
 cuts work. `ANALISE.md` (Portuguese) records the measurements behind each
 decision. Add to it when a size or a decision changes.
 
