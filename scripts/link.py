@@ -23,6 +23,9 @@ Two kinds of cut:
       !<re>         never wrap demangled names matching this
       noop:<re>     wrap with an empty body instead (void functions only)
       noopkeep:<f>  demangled names (one per line) that noop: must not touch
+
+For experiments, SC_CUTS, SC_ENGINE (dir of the engine objects), SC_LINKDIR
+and SC_BASE (the corpus baseline) override the defaults.
 """
 import json, os, re, shlex, subprocess, sys
 
@@ -32,11 +35,11 @@ import corpuslib
 
 B = os.environ.get('SC_BUILD', f'{R}/build')
 WB, W = f'{B}/wasm', f'{B}/wasi-sdk-29.0-x86_64-linux'
-CUTS = f'{R}/cuts'
+CUTS = os.environ.get('SC_CUTS', f'{R}/cuts')
 args = sys.argv[1:]
 mode = args.pop(0)[2:] if args and args[0] in ('--full', '--learn') else 'cut'
 out = os.path.realpath(args[0])
-d = f'{B}/link-{mode}'
+d = os.environ.get('SC_LINKDIR', f'{B}/link-{mode}')
 os.makedirs(f'{d}/lib', exist_ok=True)
 env = dict(os.environ)
 env['PATH'] = f'{B}/tools:' + ':'.join(x for x in env['PATH'].split(':') if '.local/bin' not in x)
@@ -61,7 +64,7 @@ def ninja_cmd(target):
 
 
 # --- the link line: clang's, with the engine objects in place of the driver
-ENGINE = [f'{B}/engine/{f}.o' for f in ('sc_main', 'sc_inv', 'sc_backend', 'sc_cuts')]
+ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine')}/{f}.o" for f in ('sc_main', 'sc_inv', 'sc_backend', 'sc_cuts')]
 toks = shlex.split(ninja_cmd('bin/clang-23').split(': && ', 1)[1].removesuffix(' && :'))
 flags = [t for t in toks if not t.endswith(('.a', '.obj')) and t not in ('-o', 'bin/clang-23', '-Os')]
 archives = [t for t in shlex.split(ninja_cmd('bin/lld')) if t.startswith('lib/liblld') and t.endswith('.a')]
@@ -155,7 +158,7 @@ def link_with_stubs(base, extra, out_, name):
     return o, len(stubs)
 
 
-baseline = f'{B}/res/base/summary.json'
+baseline = os.environ.get('SC_BASE', f'{B}/res/base/summary.json')
 
 
 def corpus(wasm, res):

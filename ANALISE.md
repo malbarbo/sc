@@ -479,3 +479,55 @@ Ver §9: os arquivos da rodada 2 viraram `engine/`, `cuts/`, `scripts/link.py`
 e `test/`. Pelo build organizado, `make` dá `build/sc.wasm` com 15.746.919
 bytes (659 a mais que o da rodada 2, pela ordem dos arquivos no link), e
 `make test` passa nos 7.462 arquivos.
+
+## 11. Quanto custa trazer o C++ de volta (no engine cortado)
+
+A §5 mediu o C++ contra o clang inteiro. Aqui a pergunta é outra: partindo do
+`sc.wasm` de 15,75 MB, quanto cresce um engine que também compila C++,
+cortado pelo mesmo método (cortes de `cuts/` reaprendidos com um corpus que
+inclui C++).
+
+Configuração do C++: gnu++17 (o padrão do clang), `-fno-exceptions` (a
+libc++ do wasi-sdk 29 vem sem exceções: com o padrão do driver,
+`-fcxx-exceptions`, o link falha em `__cxa_throw`), libc++ e libc++abi do
+sysroot. O `sc_inv` escolhe a linguagem pela extensão (`.cpp`, `.cc`,
+`.cxx`); o `checkinv` dá SAME para C e para C++.
+
+Corpus: os 7.462 arquivos de C mais 4.270 de C++, sendo 9 programas de aluno
+em `test/cxx` (iostream, STL, classes, templates, lambdas, optional/variant,
+iomanip, erros e avisos típicos), linkados e executados, e os testes C++ do
+clang (`SemaCXX`, `SemaTemplate`, `CodeGenCXX`, `CXX/**`, `Parser`,
+`Lexer`, `AST`, `Misc`), só compilados. O `learn` devolveu 11 objetos
+(`CGExprCXX`, `CXXInheritance`, `DeclFriend`, `StmtCXX`,
+`SemaTemplateDeductionGuide`, `ASTConcept`, `CGCXX`, `CGVTT`, `VTTBuilder`,
+`ASTDumper`, `CGHLSLBuiltins`), e as funções usadas passaram de 369 para
+1.520.
+
+| engine | bruto | gzip | zstd |
+| --- | ---: | ---: | ---: |
+| `sc.wasm` (só C) | 15.746.919 | 5.811.230 | 4.564.766 |
+| só C, com o ramo C++ no `sc_inv` | 15.747.508 | 5.810.163 | 4.564.972 |
+| **C + C++** | **17.800.572** | **6.624.798** | **5.087.490** |
+| diferença | **+2,05 MB (+13 %)** | **+0,81 MB (+14 %)** | **+0,52 MB (+11 %)** |
+
+O engine C + C++ passa nos 11.731 arquivos, sem diferença do engine inteiro.
+
+De onde vêm os bytes (código antes do `wasm-opt`, +2,42 MB): Sema 1,75 MB
+(`SemaTemplate*` 1,06 MB, `SemaDeclCXX` 260 KB, `SemaConcept` 150 KB,
+`SemaOverload` 91 KB, `SemaExprCXX` 89 KB), AST 345 KB, CodeGen 167 KB e
+Parse 140 KB. Quase tudo é template.
+
+Uns 200 KB vêm só dos testes do clang: `ASTDumper` e `TextNodeDumper`
+(170 KB, por `#pragma clang __debug dump`) e `CGHLSLBuiltins` (33 KB). Dá para
+cortá-los pondo esses testes no `IGNORE`, o que deixa o custo perto de 1,85
+MB.
+
+Limites da medida: a cobertura é de gnu++17. Um aluno que use
+`-std=c++20` (conceitos, ranges, `<=>`, corrotinas) pode cair em stubs, e o
+corpus teria de ganhar testes em C++20. Exceções ficaram de fora: exigiriam a
+libc++ com exceções e o EH do wasm, e voltariam `CGException` e
+`ItaniumCXXABI` inteiros.
+
+Reprodução: `build/exp-cxx` (fontes do engine em `src/`, cortes aprendidos
+em `cuts/`), com `CXX=1` no `test/corpus.py` e `SC_CUTS`, `SC_ENGINE`,
+`SC_LINKDIR` e `SC_BASE` no `scripts/link.py`.

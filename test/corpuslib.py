@@ -19,6 +19,7 @@ def norm_hash(txt):
     norm = re.sub(r'^note: using the `WASMTIME_BACKTRACE_DETAILS=1`.*\n', '', txt, flags=re.M)
     norm = re.sub(r'error while executing at wasm backtrace:.*?(?=\n\S|\Z)', 'TRAP', norm, flags=re.S)
     norm = re.sub(r'0x[0-9a-f]+', '0x?', norm)
+    norm = re.sub(r'-[0-9a-f]{6}\.pcm\b', '-?.pcm', norm)  # random temporary names
     return hashlib.md5('\n'.join(sorted(norm.splitlines())).encode()).hexdigest()
 
 

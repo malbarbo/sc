@@ -8,6 +8,8 @@ clang's C tests) are only compiled: diagnostics and the object's md5.
 Writes <outdir>/<name>.txt and <outdir>/summary.json {name: normalized md5}.
 With a base summary, lists the files whose result differs and fails if any.
 CORPUS=small runs only the programs; JOBS sets the parallelism (48).
+CXX=1 adds C++ (gnu++17, no exceptions): the programs in test/cxx, linked
+with libc++, and clang's C++ tests.
 """
 from corpuslib import norm_hash, diff
 import hashlib, re, json, os, subprocess, sys, glob
@@ -21,6 +23,13 @@ FLAGS = ['-cc1', '-triple', 'wasm32-unknown-wasip1', '-emit-obj', '-Wall', '-Wex
          '-target-cpu', 'generic', '-fvisibility=hidden', '-ferror-limit', '19', '-fgnuc-version=4.2.1',
          '-isysroot', '/sysroot', '-internal-isystem', '/res/include',
          '-internal-externc-isystem', '/sysroot/include/wasm32-wasip1', '-internal-externc-isystem', '/sysroot/include']
+# C++ as the driver sets it for wasm32-wasip1, with libc++ first in the search path
+CXXFLAGS = FLAGS[:FLAGS.index('/res/include') - 1] + [
+    '-internal-isystem', '/sysroot/include/wasm32-wasip1/c++/v1', '-internal-isystem', '/sysroot/include/c++/v1'] + \
+    FLAGS[FLAGS.index('/res/include') - 1:] + ['-mconstructor-aliases', '-fdeprecated-macro', '-fskip-odr-check-in-gmf']
+CXXEXT = ('.cpp', '.cc', '.cxx')
+if sys.argv[1:3] == ['--flags', 'c++']:
+    sys.exit(print(' '.join(CXXFLAGS[1:])))
 if sys.argv[1] == '--flags':  # the cc1 flags, for test/checkinv
     sys.exit(print(' '.join(FLAGS[1:])))
 eng, out = os.path.realpath(sys.argv[1]), sys.argv[2]
@@ -35,12 +44,19 @@ if os.environ.get('CORPUS', 'full') == 'full':
     progs += [(p, False) for p in sorted(glob.glob(f'{B}/gcc-ts/gcc/testsuite/gcc.c-torture/compile/*.c'))]
     for sub in ['Sema', 'Parser', 'CodeGen', 'Lexer', 'Preprocessor', 'Misc', 'Frontend', 'AST', 'C/*', 'C/*/*']:
         progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.c'))]
+if os.environ.get('CXX'):
+    progs += [(p, True) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp'))]
+    if os.environ.get('CORPUS', 'full') == 'full':
+        for sub in ['SemaCXX', 'SemaTemplate', 'CodeGenCXX', 'CXX/**', 'Parser', 'Lexer', 'AST', 'Misc']:
+            progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.cpp', recursive=True))]
 
 def one(pr):
     p, runit = pr
     d, f = os.path.dirname(p), os.path.basename(p)
     rel = os.path.relpath(p, B)
-    n = f[:-2] if d == f'{R}/test/samples' else ('ct-' + f[:-2] if 'c-testsuite' in d else rel[:-2].replace('/', '_'))
+    stem, rel = os.path.splitext(f)[0], os.path.splitext(rel)[0]
+    n = stem if d == f'{R}/test/samples' else 'cxx-' + stem if d == f'{R}/test/cxx' else (
+        'ct-' + stem if 'c-testsuite' in d else rel.replace('/', '_'))
     if len(n) > 200: n = n[-200:]
     try:
         return n, one1(p, d, f, n, runit)
@@ -48,9 +64,10 @@ def one(pr):
         open(f'{out}/{n}.txt', 'w').write('TIMEOUT\n'); return n, 'TIMEOUT'
 
 def one1(p, d, f, n, runit):
+    cxx = f.endswith(CXXEXT)
     obj = f'{out}/{n}.o'
     r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{d}::/c', '--dir', f'{SR}::/sysroot',
-                        '--dir', f'{RES}::/res', cw] + FLAGS + ['-o', '-', f'/c/{f}'],
+                        '--dir', f'{RES}::/res', cw] + (CXXFLAGS if cxx else FLAGS) + ['-o', '-', f'/c/{f}'],
                        capture_output=True, timeout=300)
     open(obj, 'wb').write(r.stdout)
     err = r.stderr.decode(errors='replace')
@@ -59,7 +76,7 @@ def one1(p, d, f, n, runit):
         txt += 'obj ' + hashlib.md5(r.stdout).hexdigest() + '\n'
     if r.returncode == 0 and r.stdout and runit:
         l = subprocess.run([f'{W}/bin/wasm-ld', obj, f'{SR}/lib/wasm32-wasip1/crt1-command.o', f'-L{SR}/lib/wasm32-wasip1',
-                            '-lc-printscan-long-double', '-lc', '-lm', f'{RES}/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a',
+                            '-lc-printscan-long-double'] + (['-lc++', '-lc++abi'] if cxx else []) + ['-lc', '-lm', f'{RES}/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a',
                             '-o', f'{out}/{n}.wasm'], capture_output=True, text=True)
         txt += l.stderr
         if l.returncode == 0:
@@ -75,7 +92,7 @@ def one1(p, d, f, n, runit):
     open(f'{out}/{n}.txt', 'w').write(txt)
     return norm_hash(txt)
 
-SKIP = ('warn-date-time', 'SOURCE_DATE_EPOCH', 'pr133574')  # depend on the clock
+SKIP = ('warn-date-time', 'SOURCE_DATE_EPOCH', 'pr133574', 'builtin_redef')  # depend on the clock
 progs = [p for p in progs if not p[0].endswith(tuple(x + '.c' for x in SKIP))]
 with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
     res = dict(ex.map(one, progs))
