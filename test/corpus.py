@@ -101,7 +101,10 @@ os.remove(cw)
 json.dump(res, open(f'{out}/summary.json', 'w'), indent=0, sort_keys=True)
 print(hashlib.md5(json.dumps(res, sort_keys=True).encode()).hexdigest())
 if len(sys.argv) > 3:
-    bad = diff(json.load(open(sys.argv[3])), res)
+    base = json.load(open(sys.argv[3]))
+    if os.environ.get('CORPUS', 'full') != 'full':  # only the files that ran
+        base = {k: v for k, v in base.items() if k in res}
+    bad = diff(base, res)
     for k in bad:
         print('DIFF', k)
     print(f'{len(res)} files, {len(bad)} differ from the base')
