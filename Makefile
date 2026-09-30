@@ -96,11 +96,11 @@ $(B)/sc.wasm: $(B)/sc-cut.wasm
 	wasm-opt -Oz --strip-debug --strip-producers $< -o $@
 
 # --- tests: the corpus against the uncut engine
-$(B)/res/base/summary.json: $(B)/sc-full.wasm | $(CORPUS)
+$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS)
 	test/corpus.py $< $(B)/res/base
 
 # the same with every warning on, so the cuts keep the code of all warnings
-$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm | $(CORPUS)
+$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS)
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/wev-base
 
 baseline: $(B)/res/base/summary.json

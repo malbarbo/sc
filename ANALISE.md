@@ -615,3 +615,35 @@ diferenças nos 11.736 arquivos). O `make learn` agora roda com
 
 Quais avisos ligar por padrão para os alunos fica para depois; o engine não
 liga nenhum além dos do clang.
+
+## 14. O corpus linka com o próprio engine
+
+O corpus linkava os programas com o wasm-ld nativo do wasi-sdk, então o `ld`
+do engine cortado nunca rodava no teste. Rodando, `sc.wasm ld` dava trap ao
+linkar qualquer programa C++: o wasm-ld chama o demangler, e o
+`LLVMDemangle` está cortado (`cuts/symbols.txt`). Os programas C linkavam.
+
+O `test/corpus.py` agora linka com `sc.wasm ld`. Com o engine inteiro, o
+resultado é o mesmo do wasm-ld nativo nos 239 programas, e o `learn` devolveu
+4 funções do demangler (`cuts/symbols.used` foi de 1.821 para 1.825).
+
+O corpus também passou a gravar o objeto em arquivo (`-o /o/x.o`) em vez de
+`-o -`, e isso achou um segundo bug, desta vez no `llvm/wasi-host.patch`: no
+WASI, `Process::SafelyCloseFileDescriptor` ignorava o retorno de `close` e
+devolvia o `errno`. Quando o arquivo tinha um `#include`, o `errno` ainda
+guardava o `EINVAL` de um `readlink`, e o `cc1` falhava com "IO failure on
+output stream: Invalid argument", deixando um `.o.tmp`. Com `-o -` o erro não
+aparecia. O patch agora só devolve o `errno` quando `close` falha.
+
+| engine | bruto | gzip | zstd |
+| --- | ---: | ---: | ---: |
+| C + C++20, todos os avisos (§13) | 18.267.827 | 6.786.231 | 5.204.882 |
+| **+ demangler para o `ld`** | **18.270.532** | **6.787.704** | **5.205.722** |
+
+`make test` e `make test-warn` dão 0 diferenças nos 11.736 arquivos, e o
+`checkinv` dá SAME.
+
+O `learn` não terminou em 2 horas: a descoberta não vê as funções do
+`TextNodeDumper` que o `#pragma clang __debug dump` chama, e o laço as devolve
+uma por iteração, rodando o corpus inteiro a cada vez. Elas já estavam no
+`symbols.used` antigo, e ele foi unido ao novo.

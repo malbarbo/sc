@@ -593,7 +593,7 @@ index 3ed56ef01..4275c44e7 100644
      return false;
  
 diff --git a/llvm/lib/Support/Unix/Process.inc b/llvm/lib/Support/Unix/Process.inc
-index 1c0a29787..e23625f98 100644
+index 1c0a29787..7430b5c45 100644
 --- a/llvm/lib/Support/Unix/Process.inc
 +++ b/llvm/lib/Support/Unix/Process.inc
 @@ -19,9 +19,11 @@
@@ -647,7 +647,7 @@ index 1c0a29787..e23625f98 100644
  
  #if defined(HAVE_MACH_MACH_H) && !defined(__GNU__)
    // Disable crash reporting on Mac OS X 10.0-10.4
-@@ -245,13 +254,21 @@ std::error_code Process::FixupStandardFileDescriptors() {
+@@ -245,13 +254,22 @@ std::error_code Process::FixupStandardFileDescriptors() {
  
      if (NullFD == StandardFD)
        FDC.keepOpen();
@@ -663,13 +663,14 @@ index 1c0a29787..e23625f98 100644
  
  std::error_code Process::SafelyCloseFileDescriptor(int FD) {
 +#if defined(__wasi__)
-+  ::close(FD);
-+  return errnoAsErrorCode();
++  if (::close(FD) < 0)
++    return errnoAsErrorCode();
++  return std::error_code();
 +#else
    // Create a signal set filled with *all* signals.
    sigset_t FullSet, SavedSet;
    if (sigfillset(&FullSet) < 0 || sigfillset(&SavedSet) < 0)
-@@ -284,6 +301,7 @@ std::error_code Process::SafelyCloseFileDescriptor(int FD) {
+@@ -284,6 +302,7 @@ std::error_code Process::SafelyCloseFileDescriptor(int FD) {
    if (ErrnoFromClose)
      return std::error_code(ErrnoFromClose, std::generic_category());
    return std::error_code(EC, std::generic_category());
@@ -677,7 +678,7 @@ index 1c0a29787..e23625f98 100644
  }
  
  bool Process::StandardInIsUserInput() {
-@@ -320,7 +338,7 @@ static unsigned getColumns(int FileID) {
+@@ -320,7 +339,7 @@ static unsigned getColumns(int FileID) {
    // instead if it isn't available.
    unsigned Columns = 0;
  

@@ -3,7 +3,7 @@
 
 usage: corpus.py <engine.wasm> <outdir> [<base summary.json>]
 Programs (test/samples, c-testsuite, gcc torture execute/) are compiled with
--cc1, linked with wasi-sdk's wasm-ld and run. The rest (gcc torture compile/,
+-cc1, linked with the engine's own ld and run. The rest (gcc torture compile/,
 clang's C tests) are only compiled: diagnostics and the object's md5.
 Writes <outdir>/<name>.txt and <outdir>/summary.json {name: normalized md5}.
 With a base summary, lists the files whose result differs and fails if any.
@@ -67,18 +67,20 @@ def one(pr):
 def one1(p, d, f, n, runit):
     cxx = f.endswith(CXXEXT)
     obj = f'{out}/{n}.o'
-    r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{d}::/c', '--dir', f'{SR}::/sysroot',
-                        '--dir', f'{RES}::/res', cw] + (CXXFLAGS if cxx else FLAGS) + W_EXTRA + ['-o', '-', f'/c/{f}'],
+    r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{d}::/c', '--dir', f'{out}::/o', '--dir', f'{SR}::/sysroot',
+                        '--dir', f'{RES}::/res', cw] + (CXXFLAGS if cxx else FLAGS) + W_EXTRA + ['-o', f'/o/{n}.o', f'/c/{f}'],
                        capture_output=True, timeout=300)
-    open(obj, 'wb').write(r.stdout)
+    o = open(obj, 'rb').read() if os.path.exists(obj) else b''
     err = r.stderr.decode(errors='replace')
     txt = err.split('wasm trap')[0] + ('<TRAP>\n' + err.split('wasm trap', 1)[1] if 'wasm trap' in err else '') + f'cc1 exit={r.returncode}\n'
-    if r.stdout and not runit:
-        txt += 'obj ' + hashlib.md5(r.stdout).hexdigest() + '\n'
-    if r.returncode == 0 and r.stdout and runit:
-        l = subprocess.run([f'{W}/bin/wasm-ld', obj, f'{SR}/lib/wasm32-wasip1/crt1-command.o', f'-L{SR}/lib/wasm32-wasip1',
-                            '-lc-printscan-long-double'] + (['-lc++', '-lc++abi'] if cxx else []) + ['-lc', '-lm', f'{RES}/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a',
-                            '-o', f'{out}/{n}.wasm'], capture_output=True, text=True)
+    if o and not runit:
+        txt += 'obj ' + hashlib.md5(o).hexdigest() + '\n'
+    if r.returncode == 0 and o and runit:
+        l = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{out}::/o', '--dir', f'{SR}::/sysroot',
+                            '--dir', f'{RES}::/res', cw, 'ld', f'/o/{n}.o', '/sysroot/lib/wasm32-wasip1/crt1-command.o',
+                            '-L/sysroot/lib/wasm32-wasip1', '-lc-printscan-long-double'] + (['-lc++', '-lc++abi'] if cxx else []) +
+                           ['-lc', '-lm', '/res/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a', '-o', f'/o/{n}.wasm'],
+                           capture_output=True, text=True, timeout=300)
         txt += l.stderr
         if l.returncode == 0:
             try:
@@ -87,7 +89,8 @@ def one1(p, d, f, n, runit):
                 x = subprocess.CompletedProcess(e.cmd, 'timeout', e.stdout or b'', e.stderr or b'')
             txt += x.stdout.decode(errors='replace') + x.stderr.decode(errors='replace') + f'run exit={x.returncode}\n'
             os.remove(f'{out}/{n}.wasm')
-    os.remove(obj)
+    for t in [obj] * os.path.exists(obj) + glob.glob(f'{out}/{glob.escape(n)}-{"[0-9a-f]" * 8}.o.tmp'):
+        os.remove(t)  # the object and the temporary a failed write leaves
     txt = re.sub(r'main module `[^`]*/', 'main module `', txt)
     txt = txt.replace(os.path.realpath(out) + '/', 'OUT/').replace(out + '/', 'OUT/')
     open(f'{out}/{n}.txt', 'w').write(txt)

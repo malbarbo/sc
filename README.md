@@ -82,6 +82,8 @@ traps with `unreachable`.
 
 The corpus has 11,736 files: c-testsuite, gcc's torture tests (`execute/` is
 linked and run, `compile/` only compiled), clang's own C and C++ tests
-(compiled only) and the programs in `test/samples` and `test/cxx`. The
+(compiled only) and the programs in `test/samples` and `test/cxx`. The engine
+itself writes each object to a file and links the programs with `sc.wasm ld`,
+so the cuts keep what the linker needs. The
 compile-only files compare the diagnostics and the md5 of the object. The
 reference is `build/sc-full.wasm`, the same engine without cuts.
