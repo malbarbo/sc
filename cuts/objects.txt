@@ -178,3 +178,12 @@ tools/lld/wasm/CMakeFiles/.*/LTO\.cpp
 !tools/clang/lib/Analysis/LifetimeSafety/CMakeFiles/obj\.clangAnalysisLifetimeSafety\.dir/Checker\.cpp\.obj$
 # put back by link.py --learn
 !tools/clang/lib/Analysis/CMakeFiles/obj\.clangAnalysis\.dir/ThreadSafetyTIL\.cpp\.obj$
+# the coroutine lowering in sc_backend.cpp (CoroEarly, CoroSplit, CoroCleanup, GlobalDCE)
+!lib/Transforms/Coroutines/CMakeFiles/LLVMCoroutines\.dir/CoroCleanup\.cpp\.obj$
+!lib/Transforms/Coroutines/CMakeFiles/LLVMCoroutines\.dir/CoroEarly\.cpp\.obj$
+!lib/Transforms/Coroutines/CMakeFiles/LLVMCoroutines\.dir/CoroFrame\.cpp\.obj$
+!lib/Transforms/Coroutines/CMakeFiles/LLVMCoroutines\.dir/MaterializationUtils\.cpp\.obj$
+!lib/Transforms/Coroutines/CMakeFiles/LLVMCoroutines\.dir/SpillUtils\.cpp\.obj$
+!lib/Transforms/Coroutines/CMakeFiles/LLVMCoroutines\.dir/SuspendCrossingInfo\.cpp\.obj$
+!lib/Transforms/IPO/CMakeFiles/LLVMipo\.dir/GlobalDCE\.cpp\.obj$
+!lib/Transforms/Scalar/CMakeFiles/LLVMScalarOpts\.dir/SimplifyCFGPass\.cpp\.obj$

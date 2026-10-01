@@ -702,3 +702,31 @@ passes de corrotinas (CoroEarly, CoroSplit, CoroCleanup) que o pipeline O0 do
 LLVM roda, e as intrínsecas `llvm.coro.*` chegam ao backend. O corpus não
 pegou porque o engine inteiro, que é a base, usa o mesmo backend.
 
+## 16. Corrotinas no backend
+
+O pipeline O0 do LLVM (`buildO0DefaultPipeline`) termina com o
+`buildCoroWrapper`: CoroEarly, CoroSplit (um passe CGSCC), CoroCleanup e
+GlobalDCE, rodados só se o módulo declara intrínsecas `llvm.coro.*`
+(`CoroConditionalWrapper`). O `sc_backend.cpp` agora roda esses passes no
+novo PassManager, entre o AlwaysInliner e o codegen, que continuam no legado.
+Os gerenciadores de análise são montados à mão, só com o que esses passes
+pedem (TTI, TargetLibraryInfo, ORE, AssumptionCache, DominatorTree,
+LazyCallGraph e os proxies), sem o `PassBuilder`, que traria todos os passes.
+
+Contra a base antiga, só 23 arquivos mudam e todos têm corrotinas (o
+`cxx-c12_format`, o `pic-` dele e 21 testes do clang, como `coreturn` e
+`co_await-ast`): antes paravam com "Do not know how to promote this
+operator!", agora compilam, e o `c12_format` roda certo. Os outros 13.650
+ficam idênticos, então separar o AlwaysInliner num PassManager próprio não
+muda nenhum objeto.
+
+O `make learn` devolveu 8 objetos (CoroEarly, CoroCleanup, CoroFrame,
+SuspendCrossingInfo, MaterializationUtils, SpillUtils, SimplifyCFGPass,
+GlobalDCE) e 40 funções. Depois, 0 diferenças com e sem `-Weverything`.
+
+| engine | bruto | gzip | zstd |
+| --- | ---: | ---: | ---: |
+| §15 | 18.270.869 | 6.787.594 | 5.205.596 |
+| **+ corrotinas** | **18.471.730** | **6.867.480** | **5.268.583** |
+
+São +201 KB bruto e +63 KB zstd, por uma parte do C++20 que antes quebrava.

@@ -9,17 +9,28 @@
 #include "clang/CodeGen/BackendUtil.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/CGSCCPassManager.h"
+#include "llvm/Analysis/LazyCallGraph.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/RuntimeLibcallInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/PassRegistry.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassInstrumentation.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Transforms/Coroutines/CoroCleanup.h"
+#include "llvm/Transforms/Coroutines/CoroConditionalWrapper.h"
+#include "llvm/Transforms/Coroutines/CoroEarly.h"
+#include "llvm/Transforms/Coroutines/CoroSplit.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
+#include "llvm/Transforms/IPO/GlobalDCE.h"
 
 using namespace clang;
 using namespace llvm;
@@ -46,6 +57,41 @@ static void initTargetOptions(const CompilerInstance &CI, llvm::TargetOptions &O
   Options.MCOptions.MCIncrementalLinkerCompatible = CG.IncrementalLinkerCompatible;
   Options.MCOptions.AsmVerbose = CG.AsmVerbose;
   Options.MCOptions.PreserveAsmComments = CG.PreserveAsmComments;
+}
+
+// The end of the O0 pipeline (PassBuilder's buildCoroWrapper): lowers the
+// llvm.coro.* intrinsics of a C++20 coroutine, which the backend cannot select.
+// The analysis managers hold only what these passes ask for.
+static void runCoroPasses(llvm::Module &M, TargetMachine &TM, const TargetLibraryInfoImpl &TLII) {
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
+  FAM.registerPass([] { return PassInstrumentationAnalysis(); });
+  FAM.registerPass([&] { return TM.getTargetIRAnalysis(); });
+  FAM.registerPass([&] { return TargetLibraryAnalysis(TLII); });
+  FAM.registerPass([] { return OptimizationRemarkEmitterAnalysis(); });
+  FAM.registerPass([] { return AssumptionAnalysis(); });
+  FAM.registerPass([] { return DominatorTreeAnalysis(); });
+  FAM.registerPass([&] { return CGSCCAnalysisManagerFunctionProxy(CGAM); });
+  FAM.registerPass([&] { return ModuleAnalysisManagerFunctionProxy(MAM); });
+  CGAM.registerPass([] { return PassInstrumentationAnalysis(); });
+  CGAM.registerPass([] { return FunctionAnalysisManagerCGSCCProxy(); });
+  CGAM.registerPass([&] { return ModuleAnalysisManagerCGSCCProxy(MAM); });
+  MAM.registerPass([] { return PassInstrumentationAnalysis(); });
+  MAM.registerPass([] { return LazyCallGraphAnalysis(); });
+  MAM.registerPass([&] { return FunctionAnalysisManagerModuleProxy(FAM); });
+  MAM.registerPass([&] { return CGSCCAnalysisManagerModuleProxy(CGAM); });
+
+  ModulePassManager CoroPM;
+  CoroPM.addPass(CoroEarlyPass());
+  CGSCCPassManager CGPM;
+  CGPM.addPass(CoroSplitPass());
+  CoroPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGPM)));
+  CoroPM.addPass(CoroCleanupPass());
+  CoroPM.addPass(GlobalDCEPass());
+  ModulePassManager MPM;
+  MPM.addPass(CoroConditionalWrapper(std::move(CoroPM)));
+  MPM.run(M, MAM);
 }
 
 void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
@@ -79,14 +125,24 @@ void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
   // the immutable passes below (TargetLibraryInfo, TTI, RuntimeLibraryInfo)
   initializeTarget(*PassRegistry::getPassRegistry());
   initializeAlwaysInlinerLegacyPassPass(*PassRegistry::getPassRegistry());
-  legacy::PassManager PM;
-  PM.add(createTargetTransformInfoWrapperPass(TM->getTargetIRAnalysis()));
   TargetLibraryInfoImpl TLII(TT);
-  PM.add(new TargetLibraryInfoWrapperPass(TLII));
-  PM.add(new RuntimeLibraryInfoWrapper(TT, Options.ExceptionModel, Options.FloatABIType,
-                                       Options.EABIVersion, Options.MCOptions.ABIName,
-                                       Options.VecLib));
-  PM.add(createAlwaysInlinerLegacyPass(/*InsertLifetime=*/false));
+  auto addImmutable = [&](legacy::PassManager &PM) {
+    PM.add(createTargetTransformInfoWrapperPass(TM->getTargetIRAnalysis()));
+    PM.add(new TargetLibraryInfoWrapperPass(TLII));
+    PM.add(new RuntimeLibraryInfoWrapper(TT, Options.ExceptionModel, Options.FloatABIType,
+                                         Options.EABIVersion, Options.MCOptions.ABIName,
+                                         Options.VecLib));
+  };
+  // the coroutine passes run after the inliner and before codegen
+  {
+    legacy::PassManager IPM;
+    addImmutable(IPM);
+    IPM.add(createAlwaysInlinerLegacyPass(/*InsertLifetime=*/false));
+    IPM.run(*M);
+  }
+  runCoroPasses(*M, *TM, TLII);
+  legacy::PassManager PM;
+  addImmutable(PM);
   if (TM->addPassesToEmitFile(PM, *OS, nullptr, CodeGenFileType::ObjectFile,
                               /*DisableVerify=*/!CGOpts.VerifyModule)) {
     Diags.Report(diag::err_fe_unable_to_interface_with_target);

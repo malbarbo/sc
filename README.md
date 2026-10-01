@@ -3,7 +3,7 @@
 sc is the C and C++ engine for students, in the family of
 [sgleam](https://github.com/malbarbo/sgleam) and spython. The engine is clang
 and wasm-ld built for `wasm32-wasip1` as one module, cut down to what C (gnu17)
-and C++ (gnu++20, no exceptions) at `-O0` need: 18.3 MB, 6.8 MB gzip, 5.2 MB
+and C++ (gnu++20, no exceptions) at `-O0` need: 18.5 MB, 6.9 MB gzip, 5.3 MB
 zstd. Warnings come from the `-W` flags, as in clang (`-Wall`, `-Wshadow`,
 `-Weverything`...); none is on beyond clang's defaults.
 
@@ -18,8 +18,9 @@ sc.wasm ld out.o crt1-command.o -lc ...     # link with wasm-ld (C++: -lc++ -lc+
 
 - `engine/` is the code of the engine. `sc_main.cpp` dispatches `-cc1` and
   `ld`. `sc_inv.cpp` builds clang's invocation in code rather than through the
-  cc1 option parser. `sc_backend.cpp` replaces clang's `BackendUtil` with an
-  O0 codegen pipeline, so the optimization passes stay out. `sc_cuts.cpp`
+  cc1 option parser. `sc_backend.cpp` replaces clang's `BackendUtil` with the
+  O0 pipeline (the always-inliner, the coroutine lowering and codegen), so
+  the optimization passes stay out. `sc_cuts.cpp`
   replaces a few LLVM functions sc does not need.
 - `llvm/` has the patches over the LLVM pin (`Makefile` has the commit) and the
   CMake toolchain file for wasi-sdk. `wasi-host.patch` makes LLVM build for
