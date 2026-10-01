@@ -1,0 +1,22 @@
+diff --git a/lld/wasm/SyntheticSections.cpp b/lld/wasm/SyntheticSections.cpp
+index 9ba43ef0f..8c4a05d2e 100644
+--- a/lld/wasm/SyntheticSections.cpp
++++ b/lld/wasm/SyntheticSections.cpp
+@@ -84,13 +84,16 @@ void DylinkSection::writeBody() {
+   // exports and/or imports to the dynamic linker.
+   // For exports we need to notify the linker when an export is TLS since the
+   // exported value is relative to __tls_base rather than __memory_base.
++  // sc: and when it is weak, so that a later module does not take the place
++  // of an inline function, a vtable or a typeinfo that is already loaded.
+   // For imports we need to notify the dynamic linker when an import is weak
+   // so that knows not to report an error for such symbols.
+   std::vector<const Symbol *> importInfo;
+   std::vector<const Symbol *> exportInfo;
+   for (const Symbol *sym : symtab->symbols()) {
+     if (sym->isLive()) {
+-      if (sym->isExported() && sym->isTLS() && isa<DefinedData>(sym)) {
++      if (sym->isExported() && ((sym->isTLS() && isa<DefinedData>(sym)) ||
++                                (sym->isWeak() && sym->isDefined()))) {
+         exportInfo.push_back(sym);
+       }
+       if (sym->isUndefWeak()) {

@@ -18,6 +18,16 @@ sc.wasm -cc1 <cc1 flags> -fmodule-file=std=std.pcm -o out.o file.cpp  # import s
 `std.pcm` once (6.8 s) from libc++'s `std.cppm`, without `<csetjmp>` and
 `<csignal>`, which WASI's libc rejects.
 
+`loader/` is the prototype of the REPL's loader, which runs each input as a
+wasm shared object on top of the ones before:
+
+```sh
+sc.wasm -cc1 <cc1 flags for -fPIC> -o in1.o in1.c
+sc.wasm ld -shared --experimental-pic --unresolved-symbols=import-dynamic in1.o -lc \
+  libclang_rt.builtins.a -o in1.so
+scload -L <sysroot>/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if any
+```
+
 `ANALISE.md` (Portuguese) records how the build was chosen and measured.
 
 ## Layout
@@ -31,7 +41,9 @@ sc.wasm -cc1 <cc1 flags> -fmodule-file=std=std.pcm -o out.o file.cpp  # import s
 - `llvm/` has the patches over the LLVM pin (`Makefile` has the commit) and the
   CMake toolchain file for wasi-sdk. `wasi-host.patch` makes LLVM build for
   WASI, from YoWASP's patch. `no-veclibs.patch` lets `scripts/trim.py` build
-  `TargetLibraryInfo` without the vector library tables.
+  `TargetLibraryInfo` without the vector library tables. `dylink-weak.patch`
+  makes wasm-ld list the weak exports of a shared object, so the loader keeps
+  the first copy of an inline function, a vtable or a typeinfo.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the
   cuts. `scripts/trim.py` builds the trimmed intrinsics table and
@@ -41,14 +53,19 @@ sc.wasm -cc1 <cc1 flags> -fmodule-file=std=std.pcm -o out.o file.cpp  # import s
   [pic] [pcm|mod]` prints the cc1 flags; `WFLAGS=-Weverything` adds warnings).
   `test/checkinv.cpp` checks `sc_inv.cpp` against clang's option parser.
   `test/samples/` (C), `test/cxx/` (C++) and `test/mod/` (C++ with
-  `import std;`) have small student-style programs.
+  `import std;`) have small student-style programs. `test/repl/` has
+  sequences of REPL inputs (`c1.c`, `c2.c`...).
+- `loader/` (Rust, wasmtime) loads wasm shared objects the way the REPL will:
+  `libc.so` and `libc++.so` from wasi-sdk, then each input, sharing one
+  memory and one function table. A definition in an input hides an older one
+  for the inputs after it. `ANALISE.md` §18 has the design.
 - `bench/` times the engine in V8 (`cc.mjs`) and compares O0/O1/O2 code.
 - `build/` holds everything generated and is not tracked.
 
 ## Build
 
 Needs cmake, ninja, a native clang and lld, `wasm-opt` (binaryen),
-`wasm-tools`, `wasmtime` and `llvm-cxxfilt`.
+`wasm-tools`, `wasmtime`, `llvm-cxxfilt` and, for the loader, cargo.
 
 ```sh
 make             # build/sc.wasm; the first run builds LLVM twice (~1 h)
@@ -57,6 +74,7 @@ make test-small  # only the ~240 programs that are linked and run
 make test-warn   # the corpus with -Weverything against the uncut engine
 make checkinv    # the invocation of sc_inv.cpp against clang's parser
 make size        # raw, gzip and zstd sizes
+make loader      # build/loader/release/scload
 make learn       # rebuild what the cuts keep, from the corpus
 ```
 
@@ -89,11 +107,13 @@ traps with `unreachable`.
 
 The corpus has 11,736 files: c-testsuite, gcc's torture tests (`execute/` is
 linked and run, `compile/` only compiled), clang's own C and C++ tests
-(compiled only) and the programs in `test/samples`, `test/cxx` and `test/mod`.
+(compiled only) and the programs in `test/samples`, `test/cxx`, `test/mod`
+and `test/repl`.
 The engine first builds the `std` module, which `test/mod` imports. The engine
 itself writes each object to a file and links the programs with `sc.wasm ld`,
 so the cuts keep what the linker needs. The programs are also compiled with
-`-fPIC` and linked as shared objects (`pic-` results), as the REPL will do
-with each input. The
+`-fPIC`, linked as shared objects and run by the loader (`pic-` results), as
+the REPL will do with each input, and the sequences in `test/repl` run as
+REPL sessions (`repl-`). The
 compile-only files compare the diagnostics and the md5 of the object. The
 reference is `build/sc-full.wasm`, the same engine without cuts.

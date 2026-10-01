@@ -789,3 +789,97 @@ No V8, com o engine cortado:
 
 São +184 KB zstd no engine, e o `.pcm` (28 MB) não é baixado: é gerado
 no navegador.
+
+## 18. O loader do REPL
+
+O REPL vai carregar cada entrada como um objeto compartilhado (§15) por cima
+das anteriores. O protótipo do loader está em `loader/` (Rust e wasmtime,
+`build/loader/release/scload`) e roda o `.so` de cada programa do corpus e
+sequências de entradas no estilo do REPL.
+
+**Desenho.**
+
+- **Sem módulo principal.** O plano era ligar a libc e a libc++ num módulo
+  principal que exportasse tudo. Não foi preciso: o loader carrega o
+  `libc.so`, o `libc++abi.so` e o `libc++.so` do wasi-sdk como qualquer
+  outro `.so`, na ordem do `needed` do `dylink.0`.
+- **Recursos compartilhados.** O host cria a memória, a tabela de funções e
+  o `__stack_pointer`, e todos os módulos os importam.
+- **Memória dos módulos.**
+  - A pilha fica no começo, como no `--stack-first`, e um estouro dá trap.
+  - O primeiro grupo de módulos (as bibliotecas e o programa) fica logo
+    depois da pilha, e o heap da libc (`__heap_base`) começa onde ele termina.
+  - As entradas seguintes recebem memória do `aligned_alloc` da libc.
+- **Ligação de símbolos.**
+  - Os imports `GOT.mem` e `GOT.func` são globais mutáveis, preenchidos
+    quando o grupo inteiro já foi instanciado. Isso é necessário porque o
+    `libc++abi.so` e o `libc++.so` dependem um do outro.
+  - Uma função importada é ligada direto à definição já carregada. Se ainda
+    não existe definição, ela passa por um trampolim do host, que é fixado
+    no fim do grupo. Isso acontece, por exemplo, quando a libc chama um
+    símbolo próprio que pode ser substituído, como `lseek`.
+- **WASI.** O WASI do wasmtime lê a memória pelo export `memory` de quem
+  chama, e nenhum `.so` exporta a memória. O loader gera um módulo de ponte
+  que importa a memória, a exporta e repassa as chamadas.
+- **Execução.** No fim, o loader chama o `main` (pelo `__main_void` da libc,
+  se o programa recebe `argc` e `argv`) e o `exit` da libc, que esvazia o
+  `stdio`.
+
+**Regra das redefinições.**
+
+- Uma definição nova numa entrada esconde a antiga para as entradas
+  carregadas depois. Quem já estava ligado continua com a antiga: um ponteiro
+  para o `f` antigo segue chamando o antigo, e o `f` antigo segue lendo o `x`
+  antigo.
+- Funções inline, instâncias de template, vtables e typeinfo vêm em cada
+  entrada que as usa. Para elas, a primeira definição tem de valer em todas
+  as entradas, senão uma `static` dentro de uma função inline se duplica e o
+  `dynamic_cast` entre entradas falha.
+- O `wasm-ld` não diz ao loader quais definições são fracas, porque a seção
+  `dylink.0` só lista os exports de TLS. O `llvm/dylink-weak.patch` acrescenta
+  os exports fracos, com a flag `BINDING_WEAK`. Um corte não resolve isso. O
+  Emscripten só olha a flag TLS dessa lista, então a mudança não o afeta.
+  O engine cresce 41 bytes: 19.293.172 bruto, 7.106.613 gzip, 5.452.450 zstd.
+- As funções fracas já funcionavam sem o patch, porque o `wasm-ld` faz o
+  próprio módulo importá-las e o loader liga o import à primeira definição.
+  Os dados fracos (typeinfo, `static` locais) passam pelo GOT, e é para eles
+  que o patch serve.
+
+**O `.so` leva o compiler-rt.** O link estático inclui a
+`libclang_rt.builtins.a`, e o `-shared` não incluía. O `long double` e o
+`__int128` chamavam `__netf2`, `__multi3` e outras funções que não estavam
+em nenhum `.so`. Agora o corpus passa a `libclang_rt.builtins.a` ao `ld
+-shared`, e cada `.so` leva as funções de que precisa.
+
+**Resultados.**
+
+- Os 1.743 programas que rodam no estático dão o mesmo resultado como
+  `.so`: saída e código de saída iguais, ou trap nos dois. A única diferença
+  é a pilha: o loader usa 1 MiB, contra 64 KiB do `wasm-ld`. Com
+  `--stack 65536`, os 8 programas que estouram a pilha no estático também
+  dão trap no loader, e o `return-addr` imprime os mesmos endereços.
+- O corpus agora executa os `pic-` pelo loader, e o `test/repl` traz duas
+  sequências de entradas (`repl-c`, `repl-x`):
+  - C: redefinição de função e de global, ponteiro de função entre
+    entradas, heap entre entradas;
+  - C++: `std::vector<std::string>` vivo entre entradas, `static` de função
+    inline compartilhada, `dynamic_cast` entre entradas, e uma entrada com
+    `import std;` por cima de entradas compiladas com `#include`.
+
+Tempos do loader (nativo, 48 núcleos, cache do wasmtime):
+
+| programa | a frio | com cache |
+| --- | ---: | ---: |
+| C (`libc.so`) | 0,15 s | 0,03 s |
+| C++ (`libc++.so`) | 0,45 s (4,1 s com 1 núcleo) | 0,10 s |
+
+As bibliotecas que o REPL precisa ter à mão:
+
+| | bruto | zstd |
+| --- | ---: | ---: |
+| `libc.so` | 1.906.118 | 645.773 |
+| `libc++abi.so` | 1.074.125 | 230.638 |
+| `libc++.so` | 5.314.463 | 1.111.133 |
+
+Na web, os `.so` vão ser baixados (2 MB zstd no total) e o loader vai ser
+reescrito em JS com `WebAssembly.instantiate`, seguindo a mesma lógica.

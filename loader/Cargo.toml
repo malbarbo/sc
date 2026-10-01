@@ -1,0 +1,13 @@
+[package]
+name = "scload"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wasmparser = "0.239"
+wasmtime = "48.0.3"
+wasmtime-wasi = "48.0.3"
+
+[profile.release]
+debug = false

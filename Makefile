@@ -34,7 +34,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm engine trim baseline test test-small test-warn learn checkinv size clean
+.PHONY: all fetch llvm engine trim loader baseline test test-small test-warn learn checkinv size clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -44,7 +44,7 @@ $(W)/bin/clang:
 $(B)/src/llvm/CMakeLists.txt:
 	git init -q $(B)/src && cd $(B)/src && git sparse-checkout set $(LLVM_PATHS) \
 	  && git fetch -q --depth 1 $(LLVM_REPO) $(LLVM_COMMIT) && git checkout -q FETCH_HEAD \
-	  && git apply $(CURDIR)/llvm/wasi-host.patch $(CURDIR)/llvm/no-veclibs.patch
+	  && git apply $(CURDIR)/llvm/wasi-host.patch $(CURDIR)/llvm/no-veclibs.patch $(CURDIR)/llvm/dylink-weak.patch
 
 $(B)/c-testsuite/.git:
 	git init -q $(B)/c-testsuite && cd $(B)/c-testsuite \
@@ -95,23 +95,30 @@ $(B)/sc-cut.wasm: $(ENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj scrip
 $(B)/sc.wasm: $(B)/sc-cut.wasm
 	wasm-opt -Oz --strip-debug --strip-producers $< -o $@
 
+# --- the REPL's loader: runs the shared objects (native, wasmtime)
+SCLOAD := $(B)/loader/release/scload
+$(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/main.rs
+	cargo build --release --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader
+
+loader: $(SCLOAD)
+
 # --- tests: the corpus against the uncut engine
-$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS)
+$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS) $(SCLOAD)
 	test/corpus.py $< $(B)/res/base
 
 # the same with every warning on, so the cuts keep the code of all warnings
-$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS)
+$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS) $(SCLOAD)
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/wev-base
 
 baseline: $(B)/res/base/summary.json
 
-test: $(B)/sc.wasm $(B)/res/base/summary.json
+test: $(B)/sc.wasm $(B)/res/base/summary.json $(SCLOAD)
 	test/corpus.py $(B)/sc.wasm $(B)/res/sc $(B)/res/base/summary.json
 
-test-small: $(B)/sc.wasm $(B)/res/base/summary.json
+test-small: $(B)/sc.wasm $(B)/res/base/summary.json $(SCLOAD)
 	CORPUS=small test/corpus.py $(B)/sc.wasm $(B)/res/sc-small $(B)/res/base/summary.json
 
-test-warn: $(B)/sc.wasm $(B)/res/wev-base/summary.json
+test-warn: $(B)/sc.wasm $(B)/res/wev-base/summary.json $(SCLOAD)
 	WFLAGS=-Weverything test/corpus.py $(B)/sc.wasm $(B)/res/wev $(B)/res/wev-base/summary.json
 
 # rebuild what the cuts keep from the corpus with -Weverything (after an LLVM

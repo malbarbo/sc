@@ -12,6 +12,9 @@ WFLAGS adds warning flags (e.g. -Weverything).
 C++ (gnu++20, no exceptions) goes the same way: the programs in test/cxx,
 linked with libc++, and clang's C++ tests. The engine first builds libc++'s
 std module (std-pcm), which the programs in test/mod import.
+The programs are also compiled with -fPIC, linked as shared objects and run
+by the REPL's loader, build/loader/release/scload (pic-), and test/repl has
+sequences of REPL inputs, each loaded on top of the ones before (repl-).
 """
 from corpuslib import norm_hash, diff
 import hashlib, re, json, os, subprocess, sys, glob
@@ -30,6 +33,8 @@ CXXFLAGS = FLAGS[:FLAGS.index('/res/include') - 1] + [
     '-internal-isystem', '/sysroot/include/wasm32-wasip1/c++/v1', '-internal-isystem', '/sysroot/include/c++/v1'] + \
     FLAGS[FLAGS.index('/res/include') - 1:] + ['-std=gnu++20', '-mconstructor-aliases', '-fdeprecated-macro', '-fno-implicit-modules', '-fskip-odr-check-in-gmf']
 CXXEXT = ('.cpp', '.cc', '.cxx')
+SCLOAD = f'{B}/loader/release/scload'  # the REPL's loader (loader/)
+LIB = f'{SR}/lib/wasm32-wasip1'  # libc.so, libc++.so...
 W_EXTRA = os.environ.get('WFLAGS', '').split()  # e.g. WFLAGS=-Weverything
 
 
@@ -94,31 +99,51 @@ def one(pr):
     except subprocess.TimeoutExpired:
         open(f'{out}/{n}.txt', 'w').write('TIMEOUT\n'); return n, 'TIMEOUT'
 
+def cc1(d, f, n, fl, mod):
+    """compiles d/f to tmp/n.o: the result text, the object and whether it succeeded"""
+    r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{d}::/c', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot',
+                        '--dir', f'{RES}::/res'] + ['--dir', f'{M}::/m'] * mod + [cw] + fl + MODFILE * mod + W_EXTRA +
+                       ['-o', f'/o/{n}.o', f'/c/{f}'],
+                       capture_output=True, timeout=300)
+    obj = f'{tmp}/{n}.o'
+    o = open(obj, 'rb').read() if os.path.exists(obj) else b''
+    err = r.stderr.decode(errors='replace')
+    txt = err.split('wasm trap')[0] + ('<TRAP>\n' + err.split('wasm trap', 1)[1] if 'wasm trap' in err else '') + f'cc1 exit={r.returncode}\n'
+    return txt, o, r.returncode == 0
+
+def ld_so(n, cxx):
+    """links tmp/n.o as a shared object, as the REPL does with each input"""
+    l = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot', '--dir', f'{RES}::/res', cw,
+                        'ld', '-shared', '--experimental-pic', '--unresolved-symbols=import-dynamic', f'/o/{n}.o',
+                        '-L/sysroot/lib/wasm32-wasip1'] + (['-lc++', '-lc++abi'] if cxx else []) +
+                       ['-lc', '/res/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a', '-o', f'/o/{n}.so'],
+                       capture_output=True, text=True, timeout=300)
+    so = f'{tmp}/{n}.so'
+    txt = l.stderr + f'ld exit={l.returncode}\n'
+    if l.returncode == 0:
+        txt += 'so ' + hashlib.md5(open(so, 'rb').read()).hexdigest() + '\n'
+    return txt, l.returncode == 0
+
+def run(cmd):
+    try:
+        x = subprocess.run(cmd, input=b'linha1\nlinha2\n', capture_output=True, timeout=20)
+    except subprocess.TimeoutExpired as e:
+        x = subprocess.CompletedProcess(e.cmd, 'timeout', e.stdout or b'', e.stderr or b'')
+    return x.stdout.decode(errors='replace') + x.stderr.decode(errors='replace') + f'run exit={x.returncode}\n'
+
 def one1(p, d, f, n, kind):
     cxx = f.endswith(CXXEXT)
     obj = f'{tmp}/{n}.o'
     fl = CXXFLAGS if cxx else FLAGS
     fl = pic(fl) if kind == 'pic' else fl
-    mod = d == f'{R}/test/mod'
-    r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{d}::/c', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot',
-                        '--dir', f'{RES}::/res'] + ['--dir', f'{M}::/m'] * mod + [cw] + fl + MODFILE * mod + W_EXTRA +
-                       ['-o', f'/o/{n}.o', f'/c/{f}'],
-                       capture_output=True, timeout=300)
-    o = open(obj, 'rb').read() if os.path.exists(obj) else b''
-    err = r.stderr.decode(errors='replace')
-    txt = err.split('wasm trap')[0] + ('<TRAP>\n' + err.split('wasm trap', 1)[1] if 'wasm trap' in err else '') + f'cc1 exit={r.returncode}\n'
+    txt, o, ok = cc1(d, f, n, fl, d == f'{R}/test/mod')
     if o and kind is not True:
         txt += 'obj ' + hashlib.md5(o).hexdigest() + '\n'
-    if r.returncode == 0 and o and kind == 'pic':
-        l = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot', cw,
-                            'ld', '-shared', '--experimental-pic', '--unresolved-symbols=import-dynamic', f'/o/{n}.o',
-                            '-L/sysroot/lib/wasm32-wasip1'] + (['-lc++', '-lc++abi'] if cxx else []) + ['-lc', '-o', f'/o/{n}.so'],
-                           capture_output=True, text=True, timeout=300)
-        txt += l.stderr + f'ld exit={l.returncode}\n'
-        if l.returncode == 0:
-            txt += 'so ' + hashlib.md5(open(f'{tmp}/{n}.so', 'rb').read()).hexdigest() + '\n'
-            os.remove(f'{tmp}/{n}.so')
-    if r.returncode == 0 and o and kind is True:
+    if ok and o and kind == 'pic':  # the shared object, run by the REPL's loader
+        t, ok = ld_so(n, cxx)
+        txt += t + run([SCLOAD, '-L', LIB, f'{tmp}/{n}.so']) * ok
+        if ok: os.remove(f'{tmp}/{n}.so')
+    if ok and o and kind is True:
         l = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot',
                             '--dir', f'{RES}::/res', cw, 'ld', f'/o/{n}.o', '/sysroot/lib/wasm32-wasip1/crt1-command.o',
                             '-L/sysroot/lib/wasm32-wasip1', '-lc-printscan-long-double'] + (['-lc++', '-lc++abi'] if cxx else []) +
@@ -126,11 +151,7 @@ def one1(p, d, f, n, kind):
                            capture_output=True, text=True, timeout=300)
         txt += l.stderr
         if l.returncode == 0:
-            try:
-                x = subprocess.run(['wasmtime', f'{tmp}/{n}.wasm'], input=b'linha1\nlinha2\n', capture_output=True, timeout=20)
-            except subprocess.TimeoutExpired as e:
-                x = subprocess.CompletedProcess(e.cmd, 'timeout', e.stdout or b'', e.stderr or b'')
-            txt += x.stdout.decode(errors='replace') + x.stderr.decode(errors='replace') + f'run exit={x.returncode}\n'
+            txt += run(['wasmtime', f'{tmp}/{n}.wasm'])
             os.remove(f'{tmp}/{n}.wasm')
     for t in [obj] * os.path.exists(obj) + glob.glob(f'{tmp}/{glob.escape(n)}-{"[0-9a-f]" * 8}.o.tmp'):
         os.remove(t)  # the object and the temporary a failed write leaves
@@ -138,6 +159,33 @@ def one1(p, d, f, n, kind):
     txt = txt.replace(OUT, 'OUT/').replace(out + '/', 'OUT/')
     open(f'{out}/{n}.txt', 'w').write(txt)
     return norm_hash(txt)
+
+def repl(seq):
+    """a sequence of REPL inputs in test/repl (c1.c, c2.c...), each a shared
+    object loaded on top of the ones before"""
+    d = f'{R}/test/repl'
+    files = sorted((f for f in os.listdir(d) if re.fullmatch(seq + r'\d+\.\w+', f)), key=lambda f: int(re.sub(r'\D', '', f)))
+    txt, sos = '', []
+    for f in files:
+        n = f'repl-{os.path.splitext(f)[0]}'
+        cxx = f.endswith(CXXEXT)
+        t, o, ok = cc1(d, f, n, pic(CXXFLAGS if cxx else FLAGS), 'import std;' in open(f'{d}/{f}').read())
+        txt += f'== {f}\n' + t
+        if os.path.exists(f'{tmp}/{n}.o'):
+            if ok and o:
+                t, ok = ld_so(n, cxx)
+                txt += t
+                sos.append(f'{tmp}/{n}.so')
+            os.remove(f'{tmp}/{n}.o')
+        if not (ok and o):
+            break
+    else:
+        txt += run([SCLOAD, '-L', LIB] + sos)
+    for so in sos:
+        if os.path.exists(so): os.remove(so)
+    txt = txt.replace(OUT, 'OUT/').replace(out + '/', 'OUT/')
+    open(f'{out}/repl-{seq}.txt', 'w').write(txt)
+    return f'repl-{seq}', norm_hash(txt)
 
 def std_pcm():
     """libc++'s std module, without <csetjmp> and <csignal>, which WASI's libc rejects"""
@@ -160,6 +208,7 @@ progs = [p for p in progs if not p[0].endswith(tuple(x + '.c' for x in SKIP))]
 res = {'std-pcm': std_pcm()}
 with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
     res.update(ex.map(one, progs))
+    res.update(ex.map(repl, sorted({re.match(r'[a-z]+', f)[0] for f in os.listdir(f'{R}/test/repl')})))
 os.remove(cw)
 json.dump(res, open(f'{out}/summary.json', 'w'), indent=0, sort_keys=True)
 print(hashlib.md5(json.dumps(res, sort_keys=True).encode()).hexdigest())
