@@ -130,6 +130,8 @@ $(B)/checkinv: test/checkinv.cpp engine/sc_inv.cpp engine/sc_inv.h | $(N)/bin/wa
 checkinv: $(B)/checkinv
 	$< $$(test/corpus.py --flags) -o - /c/x.c
 	$< $$(test/corpus.py --flags c++) -o - /c/x.cpp
+	$< $$(test/corpus.py --flags pic) -o - /c/x.c
+	$< $$(test/corpus.py --flags c++ pic) -o - /c/x.cpp
 
 size: $(B)/sc.wasm
 	@printf '%s: %s raw, %s gzip, %s zstd\n' $< $$(stat -c %s $<) \

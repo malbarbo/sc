@@ -26,6 +26,8 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   TO.CodeObjectVersion = llvm::CodeObjectVersionKind::COV_6;
   TO.HLSLEntry = "main";
   TO.DxilValidatorVersion = "1.8";
+  if (O.PIC)
+    TO.FeaturesAsWritten.push_back("+mutable-globals");
 
   LangOptions &LO = Inv.getLangOpts();
   std::vector<std::string> Includes;
@@ -34,9 +36,12 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
                               O.CXX ? LangStandard::lang_gnucxx20 : LangStandard::lang_unspecified);
   LO.GNUCVersion = 40201;
   LO.setDefaultFPContractMode(LangOptions::FPM_On);
-  LO.setValueVisibilityMode(HiddenVisibility);
+  Visibility Vis = O.VisibilityDefault ? DefaultVisibility : HiddenVisibility;
+  LO.setValueVisibilityMode(Vis);
   // defaults of the cc1 option marshalling that differ from the struct defaults
-  LO.setTypeVisibilityMode(HiddenVisibility);
+  LO.setTypeVisibilityMode(Vis);
+  if (O.PIC)
+    LO.PICLevel = 2;
   LO.ConvergentFunctions = false;
   LO.BracketDepth = 2048;
   LO.CFRuntime = LangOptions::CoreFoundationABI::ObjectiveC;
@@ -85,13 +90,13 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   CG.ClearASTBeforeBackend = true;
   CG.VerifyModule = false;
   CG.DiscardValueNames = true;
-  CG.RelocationModel = llvm::Reloc::Static;
+  CG.RelocationModel = O.PIC ? llvm::Reloc::PIC_ : llvm::Reloc::Static;
   CG.setFramePointer(CodeGenOptions::FramePointerKind::None);
   CG.BBSections = "none";
   CG.NoCommon = true;
   CG.setAssignmentTrackingMode(CodeGenOptions::AssignmentTrackingOpts::Enabled);
   CG.MergeAllConstants = false;
-  CG.DirectAccessExternalData = true;
+  CG.DirectAccessExternalData = !O.PIC;
   CG.StrictLifetimes = true;
   CG.SanitizeAddressUseOdrIndicator = true;
   CG.SanitizeMemoryParamRetval = true;
@@ -163,7 +168,10 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
     else if (A == "-resource-dir") O.ResourceDir = Next();
     else if (A == "-internal-isystem") O.ISystem.push_back(Next());
     else if (A == "-internal-externc-isystem") O.ExternCISystem.push_back(Next());
-    else if (A == "-triple" || A == "-target-cpu" || A == "-mrelocation-model" || A == "-ferror-limit")
+    else if (A == "-mrelocation-model") O.PIC = llvm::StringRef(Next()) == "pic";
+    else if (A == "-fvisibility=default") O.VisibilityDefault = true;
+    else if (A == "-triple" || A == "-target-cpu" || A == "-ferror-limit" || A == "-pic-level" ||
+             A == "-target-feature")
       Next();
     else if (A.starts_with("-W"))
       O.Warnings.push_back(A.drop_front(2).str());

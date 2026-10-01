@@ -30,10 +30,17 @@ CXXFLAGS = FLAGS[:FLAGS.index('/res/include') - 1] + [
     FLAGS[FLAGS.index('/res/include') - 1:] + ['-std=gnu++20', '-mconstructor-aliases', '-fdeprecated-macro', '-fno-implicit-modules', '-fskip-odr-check-in-gmf']
 CXXEXT = ('.cpp', '.cc', '.cxx')
 W_EXTRA = os.environ.get('WFLAGS', '').split()  # e.g. WFLAGS=-Weverything
-if sys.argv[1:3] == ['--flags', 'c++']:
-    sys.exit(print(' '.join(CXXFLAGS[1:])))
-if sys.argv[1] == '--flags':  # the cc1 flags, for test/checkinv
-    sys.exit(print(' '.join(FLAGS[1:])))
+
+
+def pic(fl):
+    """the flags for a shared object, as the driver sets them for -fPIC -fvisibility=default"""
+    fl = [{'static': 'pic', '-fvisibility=hidden': '-fvisibility=default'}.get(x, x) for x in fl]
+    return fl + ['-pic-level', '2', '-target-feature', '+mutable-globals']
+
+
+if sys.argv[1] == '--flags':  # the cc1 flags, for test/checkinv: --flags [c++] [pic]
+    fl = CXXFLAGS if 'c++' in sys.argv else FLAGS
+    sys.exit(print(' '.join((pic(fl) if 'pic' in sys.argv else fl)[1:])))
 eng, out = os.path.realpath(sys.argv[1]), sys.argv[2]
 # objects and programs go to a directory of their own: it stays small, so
 # looking for the temporary a failed write leaves is cheap
@@ -42,7 +49,9 @@ OUT = os.path.realpath(out) + '/'
 os.makedirs(tmp, exist_ok=True)
 cw = f'{out}/engine.cwasm'
 subprocess.check_call(['wasmtime', 'compile', eng, '-o', cw])
-# (path, run?) — run: link and execute; otherwise compile only (diagnostics + object hash)
+# (path, kind) — True: link and execute; False: compile only (diagnostics + object
+# hash); 'pic': compile with -fPIC and link a shared object, as the REPL does
+# for each input (diagnostics + the object's md5)
 progs = [(p, True) for p in sorted(glob.glob(f'{R}/test/samples/*.c')) + sorted(glob.glob(f'{B}/c-testsuite/tests/single-exec/*.c'))]
 if os.environ.get('CORPUS', 'full') == 'full':
     T = f'{B}/src/clang/test'
@@ -54,32 +63,44 @@ progs += [(p, True) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp'))]
 if os.environ.get('CORPUS', 'full') == 'full':
     for sub in ['SemaCXX', 'SemaTemplate', 'CodeGenCXX', 'CXX/**', 'Parser', 'Lexer', 'AST', 'Misc']:
         progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.cpp', recursive=True))]
+progs += [(p, 'pic') for p, k in list(progs) if k is True]
 
 def one(pr):
-    p, runit = pr
+    p, kind = pr
     d, f = os.path.dirname(p), os.path.basename(p)
     rel = os.path.relpath(p, B)
     stem, rel = os.path.splitext(f)[0], os.path.splitext(rel)[0]
     n = stem if d == f'{R}/test/samples' else 'cxx-' + stem if d == f'{R}/test/cxx' else (
         'ct-' + stem if 'c-testsuite' in d else rel.replace('/', '_'))
     if len(n) > 200: n = n[-200:]
+    if kind == 'pic': n = 'pic-' + n
     try:
-        return n, one1(p, d, f, n, runit)
+        return n, one1(p, d, f, n, kind)
     except subprocess.TimeoutExpired:
         open(f'{out}/{n}.txt', 'w').write('TIMEOUT\n'); return n, 'TIMEOUT'
 
-def one1(p, d, f, n, runit):
+def one1(p, d, f, n, kind):
     cxx = f.endswith(CXXEXT)
     obj = f'{tmp}/{n}.o'
+    fl = CXXFLAGS if cxx else FLAGS
     r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{d}::/c', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot',
-                        '--dir', f'{RES}::/res', cw] + (CXXFLAGS if cxx else FLAGS) + W_EXTRA + ['-o', f'/o/{n}.o', f'/c/{f}'],
+                        '--dir', f'{RES}::/res', cw] + (pic(fl) if kind == 'pic' else fl) + W_EXTRA + ['-o', f'/o/{n}.o', f'/c/{f}'],
                        capture_output=True, timeout=300)
     o = open(obj, 'rb').read() if os.path.exists(obj) else b''
     err = r.stderr.decode(errors='replace')
     txt = err.split('wasm trap')[0] + ('<TRAP>\n' + err.split('wasm trap', 1)[1] if 'wasm trap' in err else '') + f'cc1 exit={r.returncode}\n'
-    if o and not runit:
+    if o and kind is not True:
         txt += 'obj ' + hashlib.md5(o).hexdigest() + '\n'
-    if r.returncode == 0 and o and runit:
+    if r.returncode == 0 and o and kind == 'pic':
+        l = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot', cw,
+                            'ld', '-shared', '--experimental-pic', '--unresolved-symbols=import-dynamic', f'/o/{n}.o',
+                            '-L/sysroot/lib/wasm32-wasip1'] + (['-lc++', '-lc++abi'] if cxx else []) + ['-lc', '-o', f'/o/{n}.so'],
+                           capture_output=True, text=True, timeout=300)
+        txt += l.stderr + f'ld exit={l.returncode}\n'
+        if l.returncode == 0:
+            txt += 'so ' + hashlib.md5(open(f'{tmp}/{n}.so', 'rb').read()).hexdigest() + '\n'
+            os.remove(f'{tmp}/{n}.so')
+    if r.returncode == 0 and o and kind is True:
         l = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot',
                             '--dir', f'{RES}::/res', cw, 'ld', f'/o/{n}.o', '/sysroot/lib/wasm32-wasip1/crt1-command.o',
                             '-L/sysroot/lib/wasm32-wasip1', '-lc-printscan-long-double'] + (['-lc++', '-lc++abi'] if cxx else []) +

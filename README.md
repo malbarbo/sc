@@ -30,8 +30,8 @@ sc.wasm ld out.o crt1-command.o -lc ...     # link with wasm-ld (C++: -lc++ -lc+
   cuts. `scripts/trim.py` builds the trimmed intrinsics table and
   `TargetLibraryInfo`. `attrib.py`, `cat2.py` and `o0passes.py` are for
   measuring (see `ANALISE.md` §10).
-- `test/corpus.py` runs the corpus through an engine (`--flags` and
-  `--flags c++` print the cc1 flags; `WFLAGS=-Weverything` adds warnings).
+- `test/corpus.py` runs the corpus through an engine (`--flags [c++]
+  [pic]` prints the cc1 flags; `WFLAGS=-Weverything` adds warnings).
   `test/checkinv.cpp` checks `sc_inv.cpp` against clang's option parser.
   `test/samples/` (C) and `test/cxx/` (C++) have small student-style
   programs.
@@ -84,6 +84,8 @@ The corpus has 11,736 files: c-testsuite, gcc's torture tests (`execute/` is
 linked and run, `compile/` only compiled), clang's own C and C++ tests
 (compiled only) and the programs in `test/samples` and `test/cxx`. The engine
 itself writes each object to a file and links the programs with `sc.wasm ld`,
-so the cuts keep what the linker needs. The
+so the cuts keep what the linker needs. The programs are also compiled with
+`-fPIC` and linked as shared objects (`pic-` results), as the REPL will do
+with each input. The
 compile-only files compare the diagnostics and the md5 of the object. The
 reference is `build/sc-full.wasm`, the same engine without cuts.

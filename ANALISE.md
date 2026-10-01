@@ -666,3 +666,39 @@ vão para um subdiretório `o/`, que só tem os que estão em uso.
 
 O wasmtime em si custa pouco: 480 compilações de um arquivo trivial, 48 por
 vez, levam 1 s.
+
+## 15. Objetos compartilhados (PIC) para o REPL
+
+O REPL vai compilar cada entrada como um objeto compartilhado, carregado sobre
+as anteriores (`-fPIC -fvisibility=default`, `wasm-ld -shared
+--experimental-pic`). O corpus só compilava com `-mrelocation-model static`, então
+nada garantia que os cortes mantinham o código de PIC no backend e o `-shared`
+no `ld`.
+
+O `sc_inv.cpp` agora aceita `-mrelocation-model pic -pic-level 2 -target-feature
++mutable-globals -fvisibility=default`, as flags que o driver passa para
+`-fPIC -fvisibility=default`. Com PIC o padrão de
+`-fdirect-access-external-data` muda para falso. O `checkinv` compara as quatro
+combinações (C e C++, estático e PIC) e dá SAME.
+
+O corpus ganhou uma fatia `pic-`: os 1.937 programas que são ligados e
+executados são compilados também com PIC e ligados com `sc.wasm ld -shared
+--experimental-pic --unresolved-symbols=import-dynamic` contra o `libc.so` (e o
+`libc++.so`) do wasi-sdk. O resultado são os diagnósticos e o md5 do objeto e
+do `.so`. Ainda não são executados: isso fica para o loader.
+
+O engine cortado deu 0 diferenças nos 13.673 arquivos, com e sem
+`-Weverything`, sem mudar os cortes: o código de PIC e de `-shared` já
+estava todo lá. O tamanho só muda pelo `sc_inv.cpp`:
+
+| engine | bruto | gzip | zstd |
+| --- | ---: | ---: | ---: |
+| §14 | 18.270.532 | 6.787.704 | 5.205.722 |
+| **+ PIC no `sc_inv`** | **18.270.869** | **6.787.594** | **5.205.596** |
+
+Achado à parte: `test/cxx/c12_format.cpp` falha também na compilação estática,
+com "Do not know how to promote this operator!". O `sc_backend.cpp` não roda os
+passes de corrotinas (CoroEarly, CoroSplit, CoroCleanup) que o pipeline O0 do
+LLVM roda, e as intrínsecas `llvm.coro.*` chegam ao backend. O corpus não
+pegou porque o engine inteiro, que é a base, usa o mesmo backend.
+
