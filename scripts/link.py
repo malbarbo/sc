@@ -293,9 +293,11 @@ if mode == 'learn':
                      f'  i32.const {i}\n  call sc_trace\n'
                      + ''.join(f'  local.get {k}\n' for k in range(len(ps))) + f'  call {real}\n  end_function\n\n')
         t = assemble('tstubs', body)
+        # the mark starts a line of its own: clang may be in the middle of one
+        # (#pragma clang __debug dump writes to stderr without a newline)
         open(f'{d}/trace.c', 'w').write(
             f'#include <stdio.h>\nstatic unsigned char seen[{len(stubs) + 1}];\n'
-            'void sc_trace(int i) { if (!seen[i]) { seen[i] = 1; fprintf(stderr, "SCWRAP %d\\n", i); } }\n')
+            'void sc_trace(int i) { if (!seen[i]) { seen[i] = 1; fprintf(stderr, "\\nSCWRAP %d\\n", i); } }\n')
         sh([f'{W}/bin/clang', '--target=wasm32-wasip1', '-O2', '-c', f'{d}/trace.c', '-o', f'{d}/trace.o'])
         return f'{t} {d}/trace.o'
 

@@ -35,7 +35,11 @@ if sys.argv[1:3] == ['--flags', 'c++']:
 if sys.argv[1] == '--flags':  # the cc1 flags, for test/checkinv
     sys.exit(print(' '.join(FLAGS[1:])))
 eng, out = os.path.realpath(sys.argv[1]), sys.argv[2]
-os.makedirs(out, exist_ok=True)
+# objects and programs go to a directory of their own: it stays small, so
+# looking for the temporary a failed write leaves is cheap
+tmp = f'{out}/o'
+OUT = os.path.realpath(out) + '/'
+os.makedirs(tmp, exist_ok=True)
 cw = f'{out}/engine.cwasm'
 subprocess.check_call(['wasmtime', 'compile', eng, '-o', cw])
 # (path, run?) — run: link and execute; otherwise compile only (diagnostics + object hash)
@@ -66,8 +70,8 @@ def one(pr):
 
 def one1(p, d, f, n, runit):
     cxx = f.endswith(CXXEXT)
-    obj = f'{out}/{n}.o'
-    r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{d}::/c', '--dir', f'{out}::/o', '--dir', f'{SR}::/sysroot',
+    obj = f'{tmp}/{n}.o'
+    r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{d}::/c', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot',
                         '--dir', f'{RES}::/res', cw] + (CXXFLAGS if cxx else FLAGS) + W_EXTRA + ['-o', f'/o/{n}.o', f'/c/{f}'],
                        capture_output=True, timeout=300)
     o = open(obj, 'rb').read() if os.path.exists(obj) else b''
@@ -76,7 +80,7 @@ def one1(p, d, f, n, runit):
     if o and not runit:
         txt += 'obj ' + hashlib.md5(o).hexdigest() + '\n'
     if r.returncode == 0 and o and runit:
-        l = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{out}::/o', '--dir', f'{SR}::/sysroot',
+        l = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot',
                             '--dir', f'{RES}::/res', cw, 'ld', f'/o/{n}.o', '/sysroot/lib/wasm32-wasip1/crt1-command.o',
                             '-L/sysroot/lib/wasm32-wasip1', '-lc-printscan-long-double'] + (['-lc++', '-lc++abi'] if cxx else []) +
                            ['-lc', '-lm', '/res/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a', '-o', f'/o/{n}.wasm'],
@@ -84,15 +88,15 @@ def one1(p, d, f, n, runit):
         txt += l.stderr
         if l.returncode == 0:
             try:
-                x = subprocess.run(['wasmtime', f'{out}/{n}.wasm'], input=b'linha1\nlinha2\n', capture_output=True, timeout=20)
+                x = subprocess.run(['wasmtime', f'{tmp}/{n}.wasm'], input=b'linha1\nlinha2\n', capture_output=True, timeout=20)
             except subprocess.TimeoutExpired as e:
                 x = subprocess.CompletedProcess(e.cmd, 'timeout', e.stdout or b'', e.stderr or b'')
             txt += x.stdout.decode(errors='replace') + x.stderr.decode(errors='replace') + f'run exit={x.returncode}\n'
-            os.remove(f'{out}/{n}.wasm')
-    for t in [obj] * os.path.exists(obj) + glob.glob(f'{out}/{glob.escape(n)}-{"[0-9a-f]" * 8}.o.tmp'):
+            os.remove(f'{tmp}/{n}.wasm')
+    for t in [obj] * os.path.exists(obj) + glob.glob(f'{tmp}/{glob.escape(n)}-{"[0-9a-f]" * 8}.o.tmp'):
         os.remove(t)  # the object and the temporary a failed write leaves
     txt = re.sub(r'main module `[^`]*/', 'main module `', txt)
-    txt = txt.replace(os.path.realpath(out) + '/', 'OUT/').replace(out + '/', 'OUT/')
+    txt = txt.replace(OUT, 'OUT/').replace(out + '/', 'OUT/')
     open(f'{out}/{n}.txt', 'w').write(txt)
     return norm_hash(txt)
 

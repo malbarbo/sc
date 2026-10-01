@@ -643,7 +643,26 @@ aparecia. O patch agora só devolve o `errno` quando `close` falha.
 `make test` e `make test-warn` dão 0 diferenças nos 11.736 arquivos, e o
 `checkinv` dá SAME.
 
-O `learn` não terminou em 2 horas: a descoberta não vê as funções do
-`TextNodeDumper` que o `#pragma clang __debug dump` chama, e o laço as devolve
-uma por iteração, rodando o corpus inteiro a cada vez. Elas já estavam no
-`symbols.used` antigo, e ele foi unido ao novo.
+O `learn` não terminou em 2 horas: a descoberta não via as funções do
+`TextNodeDumper` que o `#pragma clang __debug dump` chama, e o laço as devolvia
+uma por iteração, rodando o corpus inteiro a cada vez. A marca `SCWRAP n` que
+cada wrapper escreve no stderr caía no meio de uma linha do dump
+(`FunctionDeclSCWRAP 3998`) e a regex, ancorada no início da linha, não a via.
+Agora a marca começa com uma quebra de linha. A descoberta acha as 1.825
+funções, o laço de verificação fecha na primeira rodada, e o `symbols.used`
+sai igual ao anterior.
+
+Cada rodada do corpus ainda levava ~13 min, com a máquina quase parada: só
+0 a 6 processos do wasmtime vivos de cada vez, para 48 threads. Amostrando as
+threads do `corpus.py`, 86% do tempo estava no `glob` que procura o `.o.tmp`
+de uma escrita falha: ele lista o diretório de saída, que acumula um `.txt`
+por arquivo (11.737 no fim), e roda sob o GIL. Os objetos e programas agora
+vão para um subdiretório `o/`, que só tem os que estão em uso.
+
+| | antes | depois |
+| --- | ---: | ---: |
+| uma rodada do corpus | ~13 min | 2,5–3,5 min |
+| `make learn` | > 2 h (57 min só com a marca) | 11,4 min |
+
+O wasmtime em si custa pouco: 480 compilações de um arquivo trivial, 48 por
+vez, levam 1 s.
