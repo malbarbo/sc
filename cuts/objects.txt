@@ -187,3 +187,13 @@ tools/lld/wasm/CMakeFiles/.*/LTO\.cpp
 !lib/Transforms/Coroutines/CMakeFiles/LLVMCoroutines\.dir/SuspendCrossingInfo\.cpp\.obj$
 !lib/Transforms/IPO/CMakeFiles/LLVMipo\.dir/GlobalDCE\.cpp\.obj$
 !lib/Transforms/Scalar/CMakeFiles/LLVMScalarOpts\.dir/SimplifyCFGPass\.cpp\.obj$
+# import std (ANALISE.md §17): writing the .pcm and the rest of reading it
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/ASTCommon\.cpp\.obj$
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/ASTReaderStmt\.cpp\.obj$
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/ASTWriter\.cpp\.obj$
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/ASTWriterDecl\.cpp\.obj$
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/ASTWriterStmt\.cpp\.obj$
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/GeneratePCH\.cpp\.obj$
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/GlobalModuleIndex\.cpp\.obj$
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/InMemoryModuleCache\.cpp\.obj$
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/TemplateArgumentHasher\.cpp\.obj$

@@ -10,7 +10,8 @@ With a base summary, lists the files whose result differs and fails if any.
 CORPUS=small runs only the programs; JOBS sets the parallelism (48);
 WFLAGS adds warning flags (e.g. -Weverything).
 C++ (gnu++20, no exceptions) goes the same way: the programs in test/cxx,
-linked with libc++, and clang's C++ tests.
+linked with libc++, and clang's C++ tests. The engine first builds libc++'s
+std module (std-pcm), which the programs in test/mod import.
 """
 from corpuslib import norm_hash, diff
 import hashlib, re, json, os, subprocess, sys, glob
@@ -32,21 +33,35 @@ CXXEXT = ('.cpp', '.cc', '.cxx')
 W_EXTRA = os.environ.get('WFLAGS', '').split()  # e.g. WFLAGS=-Weverything
 
 
+# libc++'s std module, built as the driver does for --precompile, and its use
+STD_CPPM = f'{SR}/share/libc++/v1/std.cppm'
+MODFILE = ['-fmodule-file=std=/m/std.pcm']
+
+
+def iface(fl):
+    return [{'-emit-obj': '-emit-module-interface'}.get(x, x) for x in fl] + [
+        '-fmodules-reduced-bmi', '-I', '/sysroot/share/libc++/v1', '-Wno-reserved-module-identifier']
+
+
 def pic(fl):
     """the flags for a shared object, as the driver sets them for -fPIC -fvisibility=default"""
     fl = [{'static': 'pic', '-fvisibility=hidden': '-fvisibility=default'}.get(x, x) for x in fl]
     return fl + ['-pic-level', '2', '-target-feature', '+mutable-globals']
 
 
-if sys.argv[1] == '--flags':  # the cc1 flags, for test/checkinv: --flags [c++] [pic]
+if sys.argv[1] == '--flags':  # the cc1 flags, for test/checkinv: --flags [c++] [pic] [pcm|mod]
     fl = CXXFLAGS if 'c++' in sys.argv else FLAGS
-    sys.exit(print(' '.join((pic(fl) if 'pic' in sys.argv else fl)[1:])))
+    fl = pic(fl) if 'pic' in sys.argv else fl
+    fl = iface(fl) if 'pcm' in sys.argv else fl + MODFILE if 'mod' in sys.argv else fl
+    sys.exit(print(' '.join(fl[1:])))
 eng, out = os.path.realpath(sys.argv[1]), sys.argv[2]
 # objects and programs go to a directory of their own: it stays small, so
 # looking for the temporary a failed write leaves is cheap
 tmp = f'{out}/o'
 OUT = os.path.realpath(out) + '/'
 os.makedirs(tmp, exist_ok=True)
+M = f'{out}/m'  # the std module, built by the engine under test
+os.makedirs(M, exist_ok=True)
 cw = f'{out}/engine.cwasm'
 subprocess.check_call(['wasmtime', 'compile', eng, '-o', cw])
 # (path, kind) — True: link and execute; False: compile only (diagnostics + object
@@ -59,7 +74,7 @@ if os.environ.get('CORPUS', 'full') == 'full':
     progs += [(p, False) for p in sorted(glob.glob(f'{B}/gcc-ts/gcc/testsuite/gcc.c-torture/compile/*.c'))]
     for sub in ['Sema', 'Parser', 'CodeGen', 'Lexer', 'Preprocessor', 'Misc', 'Frontend', 'AST', 'C/*', 'C/*/*']:
         progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.c'))]
-progs += [(p, True) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp'))]
+progs += [(p, True) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp')) + sorted(glob.glob(f'{R}/test/mod/*.cpp'))]
 if os.environ.get('CORPUS', 'full') == 'full':
     for sub in ['SemaCXX', 'SemaTemplate', 'CodeGenCXX', 'CXX/**', 'Parser', 'Lexer', 'AST', 'Misc']:
         progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.cpp', recursive=True))]
@@ -70,7 +85,7 @@ def one(pr):
     d, f = os.path.dirname(p), os.path.basename(p)
     rel = os.path.relpath(p, B)
     stem, rel = os.path.splitext(f)[0], os.path.splitext(rel)[0]
-    n = stem if d == f'{R}/test/samples' else 'cxx-' + stem if d == f'{R}/test/cxx' else (
+    n = stem if d == f'{R}/test/samples' else 'cxx-' + stem if d == f'{R}/test/cxx' else 'mod-' + stem if d == f'{R}/test/mod' else (
         'ct-' + stem if 'c-testsuite' in d else rel.replace('/', '_'))
     if len(n) > 200: n = n[-200:]
     if kind == 'pic': n = 'pic-' + n
@@ -83,8 +98,11 @@ def one1(p, d, f, n, kind):
     cxx = f.endswith(CXXEXT)
     obj = f'{tmp}/{n}.o'
     fl = CXXFLAGS if cxx else FLAGS
+    fl = pic(fl) if kind == 'pic' else fl
+    mod = d == f'{R}/test/mod'
     r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{d}::/c', '--dir', f'{tmp}::/o', '--dir', f'{SR}::/sysroot',
-                        '--dir', f'{RES}::/res', cw] + (pic(fl) if kind == 'pic' else fl) + W_EXTRA + ['-o', f'/o/{n}.o', f'/c/{f}'],
+                        '--dir', f'{RES}::/res'] + ['--dir', f'{M}::/m'] * mod + [cw] + fl + MODFILE * mod + W_EXTRA +
+                       ['-o', f'/o/{n}.o', f'/c/{f}'],
                        capture_output=True, timeout=300)
     o = open(obj, 'rb').read() if os.path.exists(obj) else b''
     err = r.stderr.decode(errors='replace')
@@ -121,10 +139,27 @@ def one1(p, d, f, n, kind):
     open(f'{out}/{n}.txt', 'w').write(txt)
     return norm_hash(txt)
 
+def std_pcm():
+    """libc++'s std module, without <csetjmp> and <csignal>, which WASI's libc rejects"""
+    src = [l for l in open(STD_CPPM) if 'csetjmp' not in l and 'csignal' not in l]
+    open(f'{M}/std.cppm', 'w').writelines(src)
+    os.utime(f'{M}/std.cppm', (0, 0))  # the .pcm records it
+    if os.path.exists(f'{M}/std.pcm'):
+        os.remove(f'{M}/std.pcm')
+    r = subprocess.run(['wasmtime', 'run', '--allow-precompiled', '--dir', f'{M}::/m', '--dir', f'{SR}::/sysroot',
+                        '--dir', f'{RES}::/res', cw] + iface(CXXFLAGS) + W_EXTRA + ['-o', '/m/std.pcm', '/m/std.cppm'],
+                       capture_output=True, timeout=600)
+    txt = r.stderr.decode(errors='replace') + f'cc1 exit={r.returncode}\n'
+    if os.path.exists(f'{M}/std.pcm'):
+        txt += 'pcm ' + hashlib.md5(open(f'{M}/std.pcm', 'rb').read()).hexdigest() + '\n'
+    open(f'{out}/std-pcm.txt', 'w').write(txt)
+    return norm_hash(txt)
+
 SKIP = ('warn-date-time', 'SOURCE_DATE_EPOCH', 'pr133574', 'builtin_redef')  # depend on the clock
 progs = [p for p in progs if not p[0].endswith(tuple(x + '.c' for x in SKIP))]
+res = {'std-pcm': std_pcm()}
 with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
-    res = dict(ex.map(one, progs))
+    res.update(ex.map(one, progs))
 os.remove(cw)
 json.dump(res, open(f'{out}/summary.json', 'w'), indent=0, sort_keys=True)
 print(hashlib.md5(json.dumps(res, sort_keys=True).encode()).hexdigest())

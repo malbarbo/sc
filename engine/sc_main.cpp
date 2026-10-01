@@ -1,12 +1,14 @@
 // sc compiler core, v2: clang frontend (invocation built in code, see
 // sc_inv.cpp), our own O0 backend (sc_backend.cpp) and wasm-ld in one module.
-//   sc.wasm -cc1 <cc1 args...>   compile one TU (only the flags sc_inv knows)
+//   sc.wasm -cc1 <cc1 args...>   compile one TU (only the flags sc_inv knows), or
+//                                build a module's .pcm with -emit-module-interface
 //   sc.wasm ld <wasm-ld args...> link
 #include "sc_inv.h"
 #include "clang/Basic/DiagnosticFrontend.h"
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
+#include "clang/Frontend/FrontendActions.h"
 #include "lld/Common/Driver.h"
 #include "llvm/Support/BuryPointer.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -52,7 +54,10 @@ static int cc1(llvm::ArrayRef<const char *> Args) {
   Clang->createDiagnostics();
   llvm::install_fatal_error_handler(errorHandler, &Clang->getDiagnostics());
   bool Ok;
-  {
+  if (O.ModuleInterface) {
+    clang::GenerateModuleInterfaceAction Act;
+    Ok = Clang->ExecuteAction(Act);
+  } else {
     clang::EmitObjAction Act;
     Ok = Clang->ExecuteAction(Act);
   }

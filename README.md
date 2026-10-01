@@ -3,14 +3,20 @@
 sc is the C and C++ engine for students, in the family of
 [sgleam](https://github.com/malbarbo/sgleam) and spython. The engine is clang
 and wasm-ld built for `wasm32-wasip1` as one module, cut down to what C (gnu17)
-and C++ (gnu++20, no exceptions) at `-O0` need: 18.5 MB, 6.9 MB gzip, 5.3 MB
+and C++ (gnu++20, no exceptions) at `-O0` need: 19.3 MB, 7.1 MB gzip, 5.5 MB
 zstd. Warnings come from the `-W` flags, as in clang (`-Wall`, `-Wshadow`,
 `-Weverything`...); none is on beyond clang's defaults.
 
 ```sh
 sc.wasm -cc1 <cc1 flags> -o out.o file.c    # compile one file (.cpp, .cc, .cxx: C++)
 sc.wasm ld out.o crt1-command.o -lc ...     # link with wasm-ld (C++: -lc++ -lc++abi)
+sc.wasm -cc1 <cc1 flags> -emit-module-interface -o std.pcm std.cppm
+sc.wasm -cc1 <cc1 flags> -fmodule-file=std=std.pcm -o out.o file.cpp  # import std;
 ```
+
+`import std;` takes a hello from 2.8 s to 0.14 s in V8. The engine builds
+`std.pcm` once (6.8 s) from libc++'s `std.cppm`, without `<csetjmp>` and
+`<csignal>`, which WASI's libc rejects.
 
 `ANALISE.md` (Portuguese) records how the build was chosen and measured.
 
@@ -32,10 +38,10 @@ sc.wasm ld out.o crt1-command.o -lc ...     # link with wasm-ld (C++: -lc++ -lc+
   `TargetLibraryInfo`. `attrib.py`, `cat2.py` and `o0passes.py` are for
   measuring (see `ANALISE.md` §10).
 - `test/corpus.py` runs the corpus through an engine (`--flags [c++]
-  [pic]` prints the cc1 flags; `WFLAGS=-Weverything` adds warnings).
+  [pic] [pcm|mod]` prints the cc1 flags; `WFLAGS=-Weverything` adds warnings).
   `test/checkinv.cpp` checks `sc_inv.cpp` against clang's option parser.
-  `test/samples/` (C) and `test/cxx/` (C++) have small student-style
-  programs.
+  `test/samples/` (C), `test/cxx/` (C++) and `test/mod/` (C++ with
+  `import std;`) have small student-style programs.
 - `bench/` times the engine in V8 (`cc.mjs`) and compares O0/O1/O2 code.
 - `build/` holds everything generated and is not tracked.
 
@@ -83,7 +89,8 @@ traps with `unreachable`.
 
 The corpus has 11,736 files: c-testsuite, gcc's torture tests (`execute/` is
 linked and run, `compile/` only compiled), clang's own C and C++ tests
-(compiled only) and the programs in `test/samples` and `test/cxx`. The engine
+(compiled only) and the programs in `test/samples`, `test/cxx` and `test/mod`.
+The engine first builds the `std` module, which `test/mod` imports. The engine
 itself writes each object to a file and links the programs with `sc.wasm ld`,
 so the cuts keep what the linker needs. The programs are also compiled with
 `-fPIC` and linked as shared objects (`pic-` results), as the REPL will do

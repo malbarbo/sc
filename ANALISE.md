@@ -730,3 +730,62 @@ GlobalDCE) e 40 funções. Depois, 0 diferenças com e sem `-Weverything`.
 | **+ corrotinas** | **18.471.730** | **6.867.480** | **5.268.583** |
 
 São +201 KB bruto e +63 KB zstd, por uma parte do C++20 que antes quebrava.
+
+## 17. `import std` e o `.pcm`
+
+Processar o `<iostream>` é quase todo o tempo de uma compilação: no V8, 2,8 s
+para um hello, contra 21 ms para um `main` vazio. O `<iostream>` são 841 headers,
+82 mil linhas pré-processadas em C++20, e o tempo é de parse e Sema (com
+`-fsyntax-only` é o mesmo). Comparei, no clang nativo do pin com os headers
+da libc++ 21 do wasi-sdk:
+
+| forma | bruto | zstd | hello | 5 headers |
+| --- | ---: | ---: | ---: | ---: |
+| headers crus | 4,9 MB | 0,53 MB | 1,98 s | 2,18 s |
+| PCH do `<iostream>` | 17,2 MB | 8,2 MB | 0,12 s | — |
+| PCH dos 5 headers | 17,8 MB | 8,6 MB | — | 0,31 s |
+| `import std;` (`std.pcm`) | 28,4 MB | 13,4 MB | 0,08 s | 0,31 s |
+| Clang modules (cache) | 44,9 MB | 19,9 MB | 0,13 s | 0,37 s |
+| snapshot com Wizer (estimado) | ~64 MB | ~14,3 MB | ~0 | ~0 |
+
+O PCH e o snapshot entram antes da primeira linha do arquivo: um `#define`
+antes do `#include` é ignorado sem aviso, e o que o prelúdio inclui fica
+visível. Um módulo é compilado isolado, então isso não acontece, e a libc++
+divide o `std` em submódulos (`std::map` sem `<map>` dá "declaration of 'map'
+must be imported from module 'std.map'"). O `wasm-ctor-eval` não serve para
+o snapshot: para no primeiro `memory.grow` e não chama WASI. O `wasmtime
+wizer` serve.
+
+Escolhi `import std;`: é o que o aluno aprende primeiro, e o `.pcm` é gerado
+pelo próprio engine na primeira execução e guardado em cache. O
+`std.cppm` do wasi-sdk não compila para wasip1 como está: `<csetjmp>` e
+`<csignal>` dão `#error` na libc do WASI, então o corpus tira as duas linhas.
+
+O `sc_inv.cpp` aceita `-emit-module-interface -fmodules-reduced-bmi`, `-I` e
+`-fmodule-file=<nome>=<pcm>`, e o `checkinv` compara as três combinações novas
+(SAME). O BMI reduzido do driver só vale com `-fmodule-output`; com
+`--precompile` o `.pcm` é o completo, e o reduzido seria quase do mesmo tamanho
+(27,8 MB). O corpus gera o `std.pcm` com o engine em teste (`std-pcm`, o md5
+é estável entre o engine inteiro e o cortado) e compila os programas de
+`test/mod`, que importam o `std`, também como PIC com o mesmo `.pcm`.
+
+O `make learn` devolveu 9 objetos de `clangSerialization` (o `ASTWriter` e o
+resto do `ASTReader`; o `ASTReader.cpp` e o `ASTReaderDecl.cpp` já ficavam) e 352 funções. Depois,
+0 diferenças nos 13.680 arquivos, com e sem `-Weverything`.
+
+| engine | bruto | gzip | zstd |
+| --- | ---: | ---: | ---: |
+| §16 | 18.471.730 | 6.867.480 | 5.268.583 |
+| **+ `import std`** | **19.293.131** | **7.106.557** | **5.452.461** |
+
+No V8, com o engine cortado:
+
+| | tempo |
+| --- | ---: |
+| gerar o `std.pcm` (uma vez) | 6,8 s |
+| hello com `import std;` | 0,14 s |
+| 5 headers com `import std;` | 0,48 s |
+| hello com `#include <iostream>` | 2,8 s |
+
+São +184 KB zstd no engine, e o `.pcm` (28 MB) não é baixado: é gerado
+no navegador.

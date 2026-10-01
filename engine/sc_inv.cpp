@@ -145,14 +145,23 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   HeaderSearchOptions &HS = Inv.getHeaderSearchOpts();
   HS.Sysroot = O.Sysroot;
   HS.ResourceDir = O.ResourceDir;
+  for (const auto &P : O.Include)
+    HS.AddPath(P, frontend::Angled, false, true);
   for (const auto &P : O.ISystem)
     HS.AddPath(P, frontend::System, false, true);
   for (const auto &P : O.ExternCISystem)
     HS.AddPath(P, frontend::ExternCSystem, false, true);
+  for (const auto &[Name, File] : O.ModuleFiles)
+    HS.PrebuiltModuleFiles[Name] = File;
 
   FrontendOptions &FO = Inv.getFrontendOpts();
   FO.DisableFree = true;
   FO.ProgramAction = frontend::EmitObj;
+  if (O.ModuleInterface) {
+    FO.ProgramAction = frontend::GenerateModuleInterface;
+    FO.GenReducedBMI = true;
+    HS.ModulesSkipDiagnosticOptions = HS.ModulesSkipHeaderSearchPaths = true;
+  }
   FO.DashX = InputKind(L);
   FO.OutputFile = O.Output;
   FO.Inputs.push_back(FrontendInputFile(O.Input, InputKind(L)));
@@ -170,6 +179,12 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
     else if (A == "-internal-externc-isystem") O.ExternCISystem.push_back(Next());
     else if (A == "-mrelocation-model") O.PIC = llvm::StringRef(Next()) == "pic";
     else if (A == "-fvisibility=default") O.VisibilityDefault = true;
+    else if (A == "-emit-module-interface" || A == "-fmodules-reduced-bmi") O.ModuleInterface = true;
+    else if (A == "-I") O.Include.push_back(Next());
+    else if (A.consume_front("-fmodule-file=")) {
+      auto [Name, File] = A.split('=');
+      O.ModuleFiles.emplace_back(Name.str(), File.str());
+    }
     else if (A == "-triple" || A == "-target-cpu" || A == "-ferror-limit" || A == "-pic-level" ||
              A == "-target-feature")
       Next();
@@ -177,7 +192,7 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
       O.Warnings.push_back(A.drop_front(2).str());
     else if (!A.starts_with("-")) {
       O.Input = A.str();
-      O.CXX = A.ends_with(".cpp") || A.ends_with(".cc") || A.ends_with(".cxx");
+      O.CXX = A.ends_with(".cpp") || A.ends_with(".cc") || A.ends_with(".cxx") || A.ends_with(".cppm");
     }
   }
   return !O.Input.empty();
