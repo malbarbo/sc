@@ -2,21 +2,27 @@
 
 sc is the C and C++ engine for students, in the family of
 [sgleam](https://github.com/malbarbo/sgleam) and spython. The engine is clang
-and wasm-ld built for `wasm32-wasip1` as one module, cut down to what C (gnu17)
-and C++ (gnu++20, no exceptions) at `-O0` need: 19.3 MB, 7.1 MB gzip, 5.5 MB
-zstd. Warnings come from the `-W` flags, as in clang (`-Wall`, `-Wshadow`,
+and wasm-ld built for `wasm32-wasip1` as one module, cut down to what C (gnu23)
+and C++ (gnu++26, with exceptions) at `-O0` need: 19.4 MB, 7.1 MB gzip, 5.5 MB
+zstd. Exceptions and `setjmp`/`longjmp` use wasm's exception handling, in the
+standard form (exnref), with libc++, libc++abi and libunwind built from the
+LLVM pin into `build/sysroot` (`make sysroot`). Warnings come from the `-W` flags, as in clang (`-Wall`, `-Wshadow`,
 `-Weverything`...); none is on beyond clang's defaults.
 
 ```sh
 sc.wasm -cc1 <cc1 flags> -o out.o file.c    # compile one file (.cpp, .cc, .cxx: C++)
-sc.wasm ld out.o crt1-command.o -lc ...     # link with wasm-ld (C++: -lc++ -lc++abi)
+sc.wasm ld out.o crt1-command.o -lsetjmp -lc ...  # link with wasm-ld (C++: -lc++ -lc++abi)
 sc.wasm -cc1 <cc1 flags> -emit-module-interface -o std.pcm std.cppm
 sc.wasm -cc1 <cc1 flags> -fmodule-file=std=std.pcm -o out.o file.cpp  # import std;
 ```
 
+The same engine is also built natively (`build/sc`, x86-64 Linux), for the
+native REPL, with the same cuts: 24.5 MB (7.6 MB zstd) against 52 MB uncut.
+It still compiles to wasm, so the student's code runs in wasm either way.
+
 `import std;` takes a hello from 2.8 s to 0.14 s in V8. The engine builds
-`std.pcm` once (6.8 s) from libc++'s `std.cppm`, without `<csetjmp>` and
-`<csignal>`, which WASI's libc rejects.
+`std.pcm` once (6.8 s) from libc++'s `std.cppm`, without `<csignal>`, which
+WASI's libc rejects.
 
 `loader/` is the prototype of the REPL's loader, which runs each input as a
 wasm shared object on top of the ones before:
@@ -25,7 +31,7 @@ wasm shared object on top of the ones before:
 sc.wasm -cc1 <cc1 flags for -fPIC> -o in1.o in1.c
 sc.wasm ld -shared --experimental-pic --unresolved-symbols=import-dynamic in1.o -lc \
   libclang_rt.builtins.a -o in1.so
-scload -L <sysroot>/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if any
+scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if any
 ```
 
 `ANALISE.md` (Portuguese) records how the build was chosen and measured.
@@ -44,12 +50,13 @@ scload -L <sysroot>/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if any
   `TargetLibraryInfo` without the vector library tables. `dylink-weak.patch`
   makes wasm-ld list the weak exports of a shared object, so the loader keeps
   the first copy of an inline function, a vtable or a typeinfo.
+  `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the
-  cuts. `scripts/trim.py` builds the trimmed intrinsics table and
+  cuts; `--native` links `build/sc` from the host build of LLVM. `scripts/trim.py` builds the trimmed intrinsics table and
   `TargetLibraryInfo`. `attrib.py`, `cat2.py` and `o0passes.py` are for
   measuring (see `ANALISE.md` §10).
-- `test/corpus.py` runs the corpus through an engine (`--flags [c++]
+- `test/corpus.py` runs the corpus through an engine (`--flags [c++|gnu17]
   [pic] [pcm|mod]` prints the cc1 flags; `WFLAGS=-Weverything` adds warnings).
   `test/checkinv.cpp` checks `sc_inv.cpp` against clang's option parser.
   `test/samples/` (C), `test/cxx/` (C++) and `test/mod/` (C++ with
@@ -76,6 +83,9 @@ make checkinv    # the invocation of sc_inv.cpp against clang's parser
 make size        # raw, gzip and zstd sizes
 make loader      # build/loader/release/scload
 make learn       # rebuild what the cuts keep, from the corpus
+make native      # build/sc, the native engine (builds LLVM once more)
+make test-native # the corpus on build/sc against the uncut native engine
+make learn-native # after make learn: what only the native engine calls
 ```
 
 The first `make` fetches wasi-sdk 29, the LLVM pin with the patches, and the
@@ -104,6 +114,15 @@ a cut rule or bumping LLVM, then `make test`.
 
 A C or C++ feature the corpus does not cover can reach a stub. The engine then
 traps with `unreachable`.
+
+The native engine (`build/sc`) takes the same cuts from a host build of LLVM
+(`build/host`, from the same patched sources). The function names learned on
+wasm are matched by their demangled names, where `int64_t` is `long long`
+on wasm and `long` on x86-64, and `std::` is libc++'s `std::__2` on wasm and
+libstdc++'s `std::__cxx11` natively. What inlines differently on x86-64 adds
+the functions in `cuts/symbols.host.used` (`make learn-native`). A cut
+function prints its name and aborts; cut data is zeros, as at address 0 in
+`sc.wasm`.
 
 The corpus has 11,736 files: c-testsuite, gcc's torture tests (`execute/` is
 linked and run, `compile/` only compiled), clang's own C and C++ tests

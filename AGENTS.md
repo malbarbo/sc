@@ -1,7 +1,7 @@
 # sc
 
 The C and C++ engine: clang and wasm-ld built for wasm32-wasip1 as one module,
-cut to what C and C++20 (no exceptions) at -O0 need. `README.md` has the
+cut to what C23 and C++26 (with exceptions) at -O0 need. `README.md` has the
 layout, the build and how the cuts work. `ANALISE.md` (Portuguese) records the measurements behind each
 decision. Add to it when a size or a decision changes.
 
@@ -9,11 +9,15 @@ decision. Add to it when a size or a decision changes.
 
 ```sh
 make             # build/sc.wasm
+make sysroot     # build/sysroot: wasi-sdk's libc, libc++ with exceptions from the pin
 make test        # the full corpus (~4 min on 48 cores) against build/sc-full.wasm
 make test-small  # the programs only
 make checkinv    # after changing engine/sc_inv.cpp
 make test-warn   # the full corpus with -Weverything
 make learn       # after changing cuts/ or the LLVM pin, then make test and test-warn
+make native      # build/sc, the same engine for x86-64 Linux
+make test-native # the corpus on build/sc against the uncut native engine
+make learn-native # after make learn: what only the native engine calls
 ```
 
 The cuts keep the code of every warning: `make learn` runs the corpus with

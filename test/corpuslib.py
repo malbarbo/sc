@@ -6,7 +6,9 @@ import hashlib, json, os, re, sys
 
 # tests whose result is not a function of the compiler's behaviour
 # (order of pointer-keyed maps, stack overflow in the baseline)
-IGNORE = {'src_clang_test_C_C99_n590', 'src_clang_test_CodeGen_alias'}
+# c2x-fallthrough: in C23 the order of its [[fallthrough]] errors, and so which
+# source lines are shown, changes from run to run in the native engine
+IGNORE = {'src_clang_test_C_C99_n590', 'src_clang_test_CodeGen_alias', 'src_clang_test_Sema_c2x-fallthrough'}
 
 
 def norm_hash(txt):

@@ -6,13 +6,16 @@
   * TargetLibraryInfo.cpp.obj: compiled with -DSC_NO_VECLIBS (see
     llvm/no-veclibs.patch), without the vector library tables.
 
-Each uses the compile command of the wasm build, from ninja.
+Each uses the compile command of the wasm build, from ninja (--native: of
+the host build, into build/trim-host).
 """
 import os, re, subprocess, sys
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 B = os.environ.get('SC_BUILD', f'{R}/build')
-WB, T = f'{B}/wasm', f'{B}/trim'
+NATIVE = sys.argv[1:] == ['--native']
+WB, T = (f'{B}/host', f'{B}/trim-host') if NATIVE else (f'{B}/wasm', f'{B}/trim')
+O = '.o' if NATIVE else '.obj'
 os.makedirs(f'{T}/llvm/IR', exist_ok=True)
 env = dict(os.environ, PATH=f'{B}/tools:' + os.environ['PATH'])
 subprocess.check_call([sys.executable, f'{R}/scripts/trim_intrinsics.py',
@@ -26,7 +29,7 @@ def compile(obj, edit):
     subprocess.check_call(edit(cmd), shell=True, cwd=WB)
 
 
-compile('lib/IR/CMakeFiles/LLVMCore.dir/Intrinsics.cpp.obj',
+compile(f'lib/IR/CMakeFiles/LLVMCore.dir/Intrinsics.cpp{O}',
         lambda c: c.replace(f' -I{WB}/include ', f' -I{T} -I{WB}/include ', 1))
-compile('lib/Analysis/CMakeFiles/LLVMAnalysis.dir/TargetLibraryInfo.cpp.obj',
+compile(f'lib/Analysis/CMakeFiles/LLVMAnalysis.dir/TargetLibraryInfo.cpp{O}',
         lambda c: c.replace(' -o ', ' -DSC_NO_VECLIBS -o ', 1))

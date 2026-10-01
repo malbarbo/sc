@@ -19,7 +19,9 @@
 //! to the definition visible when its group is loaded, or to a host
 //! trampoline when there is none yet (a library that calls one of its own
 //! preemptible symbols, a weak undefined symbol). GOT imports are mutable
-//! globals set once the group is loaded. WASI calls go through a shim module
+//! globals set once the group is loaded. An exception tag is one for all
+//! modules: the first module that defines it, or the loader when a module
+//! imports it first, so a C++ exception or a longjmp crosses modules. WASI calls go through a shim module
 //! that exports the memory, because wasmtime-wasi reads it from the caller.
 
 use wasmtime::error::Context;
@@ -38,6 +40,7 @@ const PAGE: u32 = 1 << 16;
 enum Sym {
     Func(Func),
     Data(u32), // an absolute address
+    Tag(Tag),  // an exception tag: __cpp_exception (libc++abi), __c_longjmp (libsetjmp)
 }
 
 struct Host {
@@ -302,6 +305,14 @@ impl Loader {
                         Some((Sym::Func(f), _)) => (*f).into(),
                         _ => self.trampoline(n, ft).into(),
                     },
+                    ("env", _, ExternType::Tag(tt)) => match self.store.data().syms.get(n) {
+                        Some((Sym::Tag(t), _)) => (*t).into(),
+                        _ => {
+                            let t = Tag::new(&mut self.store, &tt)?;
+                            self.define(n, Sym::Tag(t), false);
+                            t.into()
+                        }
+                    },
                     _ => bail!("{}: unsupported import {m}.{n}", p.name),
                 });
             }
@@ -316,6 +327,7 @@ impl Loader {
                 let shadow = shadow && !p.info.weak_def.contains(&n);
                 match e {
                     Extern::Func(f) => self.define(&n, Sym::Func(f), shadow),
+                    Extern::Tag(t) => self.define(&n, Sym::Tag(t), false),
                     Extern::Global(g) if g.ty(&self.store).mutability() == Mutability::Const => {
                         if let Val::I32(v) = g.get(&mut self.store) {
                             self.define(&n, Sym::Data(mem_base.wrapping_add(v as u32)), shadow);
@@ -378,6 +390,24 @@ impl Loader {
         self.call("exit", &[Val::I32(code)])?;
         Ok(code)
     }
+
+    /// A C++ exception no one caught reaches the host: wasm has no search
+    /// phase, so libc++abi never calls `std::terminate`. Do what it does on
+    /// a native target: catch it and terminate, which prints its type and
+    /// `what()` and aborts.
+    fn uncaught(&mut self, e: Error) -> Result<i32> {
+        let Some(exn) = self.store.take_pending_exception() else { return Err(e) };
+        let tag = exn.tag(&mut self.store)?;
+        if let Some((Sym::Tag(cpp), _)) = self.store.data().syms.get("__cpp_exception").copied() {
+            if Tag::eq(&cpp, &tag, &self.store) {
+                if let Val::I32(p) = exn.field(&mut self.store, 0)? {
+                    self.call("__cxa_begin_catch", &[Val::I32(p)])?;
+                    self.call("_ZSt9terminatev", &[])?;
+                }
+            }
+        }
+        Err(e)
+    }
 }
 
 fn main() {
@@ -419,8 +449,14 @@ fn run(libdirs: Vec<PathBuf>, mods: Vec<PathBuf>, dirs: Vec<String>, args: Vec<S
         b.preopened_dir(h, g, FsPerms::ReadWrite)?;
     }
     let mut l = Loader::new(b.build_p1(), libdirs, stack)?;
-    for (i, m) in mods.iter().enumerate() {
-        l.load(m, i > 0)?;
+    let r = (|| {
+        for (i, m) in mods.iter().enumerate() {
+            l.load(m, i > 0)?;
+        }
+        l.run()
+    })();
+    match r {
+        Err(e) if e.is::<ThrownException>() => l.uncaught(e),
+        r => r,
     }
-    l.run()
 }

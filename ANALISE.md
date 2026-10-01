@@ -883,3 +883,223 @@ As bibliotecas que o REPL precisa ter à mão:
 
 Na web, os `.so` vão ser baixados (2 MB zstd no total) e o loader vai ser
 reescrito em JS com `WebAssembly.instantiate`, seguindo a mesma lógica.
+
+## 19. O engine nativo
+
+O REPL nativo vai rodar o compilador como código nativo e só o código do
+aluno em wasm. Por isso o mesmo engine agora também é ligado para x86-64
+Linux (`build/sc`, `make native`), com os mesmos cortes. Ele continua
+gerando wasm32-wasip1.
+
+**Build.**
+
+- O LLVM do host fica em `build/host`. Ele é compilado das mesmas fontes
+  com patches (`build/src`), com as opções do build wasm: `MinSizeRel`, sem
+  PIC e sem threads (como no wasm). Os `tblgen` vêm do `build/native`.
+- O `build/native` não serve para isso. Ele só existe para as ferramentas,
+  e aqui ele foi configurado de outra árvore, sem os nossos patches.
+- O `scripts/link.py --native` liga o engine com o `ld.lld`. As regras de
+  `cuts/` são as mesmas: os membros `.cpp.o` são comparados como `.cpp.obj`.
+  - Uma função cortada vira um stub que imprime o nome
+    (`sc: cut function called: ...`) e chama `abort`.
+  - Um dado cortado vira zeros. Antes, o stub de um dado era código, e a
+    `cl::opt` `EnableSingleByteCoverage`, lida como verdadeira, mudava o
+    código gerado para o operador `?:`. No `sc.wasm`, o `wasm-ld` deixa um
+    dado indefinido no endereço 0, onde a memória é zero.
+- O `--icf=safe` do `ld.lld` funde as funções idênticas cujo endereço não é
+  usado. Isso tira mais 11%.
+
+**As funções que o corpus usa.**
+
+- O `cuts/symbols.used` foi aprendido no wasm. O nativo casa os nomes
+  desmanglados, com duas diferenças de ABI:
+  - o `int64_t` é `long long` no wasm32 e `long` no x86-64;
+  - o `std::` é `std::__2` (libc++ do wasi-sdk) no wasm e `std::__cxx11`
+    (libstdc++), com `[abi:cxx11]`, no nativo.
+- Sobram 14 funções que só o nativo chama (`cuts/symbols.host.used`,
+  `make learn-native`). A maioria o `-Os` inlinou no wasm e não no x86-64,
+  como os `TypeLocReader::Visit*` do `.pcm`. Uma muda de nome:
+  `SmallVector<Literal, N>` tem `N` 13 no wasm e 12 no x86-64, porque o `N`
+  padrão depende do tamanho do ponteiro.
+- O `link.py --learn` agora roda de novo só os arquivos que diferem, até
+  passarem, e depois o corpus inteiro. O `make learn-native` levou 20 min.
+
+**O nativo contra o wasm, sem cortes.** Os dois diferem em 45 dos 13.682
+arquivos, todos por causa do host:
+
+- **A pilha:** em recursão profunda (`instantiation-depth`, `limits-*`,
+  `deep_recursion`), a pilha do wasm e os 8 MB do nativo estouram em pontos
+  diferentes, ou só um deles estoura.
+- **A memória:** um arquivo dá "Out of memory" no wasm32 e compila no
+  nativo.
+- **O sandbox:** um `#include "../x"` fora da pasta mapeada dá "Operation
+  not permitted" no wasmtime e "file not found" no bwrap.
+- **O `std.pcm`:** os bytes diferem (224 bytes a menos no nativo), mas os
+  programas com `import std;` dão o mesmo resultado, e o `sc.wasm` usa o
+  `.pcm` gerado pelo nativo.
+
+Fora isso, os objetos e os `.wasm` ligados são idênticos byte a byte. Por
+isso o `make test-native` compara o `build/sc` com o nativo sem cortes
+(`build/sc-host-full`): 13.682 arquivos, 0 diferenças. O `corpus.py` roda o
+nativo no `bwrap`, com as mesmas pastas que o wasmtime mapeia.
+
+**Tamanho** (sem símbolos):
+
+| | bruto | gzip | zstd |
+| --- | ---: | ---: | ---: |
+| nativo sem cortes | 51.748.552 | | 15.776.120 |
+| nativo cortado (`build/sc`) | 24.545.480 | 9.950.566 | 7.637.727 |
+| `sc.wasm` | 19.293.172 | 7.106.613 | 5.452.450 |
+
+Os cortes tiram 53% do nativo, quase a mesma fração que tiram do wasm.
+
+**Tempo** (o menor de três, máquina com carga 10 a 20, wasmtime com o
+engine pré-compilado):
+
+| | nativo | wasmtime | razão |
+| --- | ---: | ---: | ---: |
+| C pequeno (`p1.c`) | 0,038 s | 0,071 s | 1,9 |
+| `#include <iostream>` | 1,88 s | 2,87 s | 1,5 |
+| `c3_stl.cpp` | 2,55 s | 4,26 s | 1,7 |
+| `ld` de C++ | 0,094 s | 0,137 s | 1,5 |
+| compilar o `sc.wasm` para o wasmtime, uma vez | | 2,8 s (29 s com 1 núcleo) | |
+
+No REPL nativo o ganho maior não é o tempo de cada compilação. É não
+precisar compilar o engine na primeira execução, nem do Cranelift para
+isso: o host só precisa de um runtime para o código do aluno. O nativo é
+`-Os`, como o wasm. Um `-O2` seria mais rápido e maior; isso ainda não foi
+medido.
+
+## 20. Exceções, `setjmp` e os padrões mais novos
+
+O REPL vai precisar de exceções em C++ (requisito do professor). O
+`setjmp`/`longjmp` do C usa o mesmo mecanismo do wasm, então entrou junto.
+Na mesma rodada, os padrões passaram a ser os mais novos: **gnu23** para C
+e **gnu++26** para C++ (`PLANO-REPL.md` §1.5 e §1.6).
+
+**A forma das exceções.**
+
+- A forma é a padronizada (exnref, `try_table`). O LLVM do pin ainda gera a
+  legada por padrão (`-wasm-use-legacy-eh`, `cl::init(true)`).
+- O wasmtime 48 recusa a forma legada: "legacy_exceptions feature required
+  for try instruction". A padronizada roda no wasmtime 48 e no node 24.
+- As flags são as do driver com `-fwasm-exceptions` e `-mllvm
+  -wasm-enable-sjlj`, mais `-mllvm -wasm-use-legacy-eh=false`:
+  - target features `+exception-handling`, `+multivalue`, `+reference-types`;
+  - `-exception-model=wasm`;
+  - `-fcxx-exceptions -fexceptions` e `-mllvm -wasm-enable-eh` em C++.
+- O sc não tem o parser do `-mllvm`. O `sc_inv` põe os valores em
+  `FrontendOptions::LLVMArgs`, que o `checkinv` compara, e o
+  `scSetLLVMArgs` os aplica direto no `cl::opt` registrado.
+- O backend (`sc_backend.cpp`) passa a usar `ExceptionHandling::Wasm`.
+- O `checkinv` ganhou o caso gnu17 e dá SAME nos 8 casos. Ele pegou uma
+  diferença: no C++23 em diante, o padrão de `CheckConstexprFunctionBodies`
+  é falso.
+
+**O sysroot** (`make sysroot`, `build/sysroot`).
+
+- A libc++ do wasi-sdk 29 vem sem exceções. A libc++, a libc++abi e a
+  libunwind agora são compiladas do pin (`build/src`), com o clang do pin
+  (`build/native`) e `-fwasm-exceptions`.
+  - As opções seguem o `__config_site` do wasi-sdk: ABI 2, musl, pthread,
+    hardening `fast`.
+  - A libc do wasi-sdk continua, inclusive a `libsetjmp`.
+- O pin ganhou as árvores `libcxx`, `libcxxabi`, `libunwind` e `runtimes`
+  inteiras. A libc++ do pin também precisa de alguns headers da llvm-libc
+  (`libc/shared`, `libc/src/__support`…), para o `from_chars` de ponto
+  flutuante.
+- Três detalhes de build:
+  - O driver do pin passa `-fvisibility=hidden` por padrão no wasm, e a
+    libunwind não exportava nada. Ela é compilada com
+    `-fvisibility=default`; no wasm, o `__declspec(dllexport)` dela pede
+    `-fdeclspec`.
+  - No wasm, a libunwind chama `__gxx_personality_wasm0` (libc++abi), e a
+    libc++abi chama `_Unwind_RaiseException` (libunwind). Uma `.so` de
+    cada não liga com `-z defs`. Por isso a libunwind vai dentro da
+    libc++abi, na `.a` e na `.so`, e o corpus continua ligando com
+    `-lc++ -lc++abi`.
+  - `LIBCXXABI_SILENT_TERMINATE` fica desligado (o wasi-sdk o liga), para
+    o aluno ver a mensagem do `terminate`.
+- Tamanhos: `libc++.so` 788 KB e `libc++abi.so` 129 KB, sem informação de
+  depuração. As do wasi-sdk têm 5,3 MB e 1,1 MB, com ela.
+
+**O loader.**
+
+- A `libc++abi.so` define e exporta a tag `__cpp_exception`. A
+  `libsetjmp.so` importa a `__c_longjmp`. O loader guarda as tags como
+  símbolos: a primeira definição vale para todos os módulos, e uma tag que
+  um módulo importa antes de alguém a definir é criada pelo loader. Assim a
+  exceção e o `longjmp` cruzam módulos (`repl-e`, `repl-j`).
+- **Exceção não capturada.** No wasm não há fase de busca. A libc++abi
+  nunca chama o `std::terminate`, e a exceção sai para o host ("thrown Wasm
+  exception"), sem dizer qual era. O loader faz o que a libc++abi faz no
+  nativo: pega a exnref pendente com a tag `__cpp_exception`, lê o ponteiro
+  (campo 0), chama `__cxa_begin_catch` e `std::terminate`. A saída fica
+  "libc++abi: terminating due to uncaught exception of type
+  std::out_of_range: vector". O programa ligado estático, rodado pelo
+  wasmtime, continua só com "thrown Wasm exception".
+
+**Os padrões.**
+
+- C: gnu23. C++: gnu++26. O `sc_inv` aceita `-std=` só para o corpus.
+- O C23 rejeita definições K&R e `int` implícito, e a c-testsuite e os
+  testes gcc torture parariam no frontend sem chegar ao backend. Essas
+  fatias continuam em gnu17 (`gnu17()` no `corpus.py`). O resto (programas,
+  REPL, testes do clang) usa o padrão novo.
+- O `views::enumerate` ainda não existe na libc++ do pin. `std::print`,
+  `std::expected`, `ranges::to`, deducing this, pack indexing, `=
+  delete("…")` e `_` funcionam (`c18_cxx23`).
+
+**O corpus.**
+
+- Programas novos:
+  - exceções (`c15`): por valor e por referência, hierarquia, as da
+    biblioteca, RAII no desenrolar, rethrow, function-try-block,
+    `exception_ptr`, `throw_with_nested`;
+  - `terminate` em `noexcept` (`c16`) e exceção não capturada (`c17`);
+  - C++23/26 (`c18`), C23 (`p7`), `setjmp` em C (`p6`), `import std` com
+    exceções (`m4`);
+  - REPL: exceção lançada numa entrada e pega em outra (`repl-e`), e
+    `longjmp` de uma entrada para o `setjmp` de outra (`repl-j`).
+- O `std.pcm` agora tem o `<csetjmp>` (sai só o `<csignal>`).
+- São 13.698 arquivos. 7.940 mudaram de resultado contra a base anterior:
+  os objetos mudam com as features novas, e o C++ usa a libc++ nova.
+  - O pin compila agora os testes gcc torture com `setjmp` (`pr56982`,
+    `20210505-1`).
+  - Dois testes do clang passaram a quebrar o compilador: um `goto`
+    computado (`ast-dump-APValue-addrlabeldiff`, agora com o `constexpr`
+    do C23) e uma recursão que estoura a pilha
+    (`cxx2b-deducing-this`). São as mesmas classes de antes, e os
+    `const-init*` deixaram de quebrar.
+
+**Os cortes.**
+
+- O `make learn` levou 12 min. Ele trouxe de volta 46 funções
+  (`cuts/symbols.used` foi de 2.218 para 2.261): o EH do CodeGen e da Sema
+  (`EmitCXXTryStmt`, `EmitCXXThrowExpr`, `getEHDispatchBlock`,
+  `handlerCanCatch`, as exception specs), o `WinEHPrepare` (que o EH do
+  wasm usa) e a `ASTStructuralEquivalence`, porque o C23 aceita redeclarar
+  uma struct igual. Os cortes de objetos não mudaram.
+
+| `sc.wasm` | bruto | gzip | zstd |
+| --- | ---: | ---: | ---: |
+| C gnu17 + C++20 sem exceções (§19) | 19.293.172 | 7.106.613 | 5.452.450 |
+| **C gnu23 + C++26 com exceções** | **19.388.589** | **7.141.165** | **5.479.984** |
+
+As exceções e os padrões novos custam 95 KB bruto e 27,5 KB zstd (+0,5%).
+`make test` e `make test-warn` passam nos 13.698 arquivos. O `checkinv` dá
+SAME.
+
+**O nativo.** O `make learn-native` levou 8 min, e o
+`cuts/symbols.host.used` passou de 14 para 17 funções. O `build/sc` tem
+24.633.560 bytes (+88 KB) e 7.668.404 zstd (+31 KB). O `make test-native`
+passa nos 13.698 arquivos com uma exceção: o `Sema/c2x-fallthrough` foi
+para o `IGNORE`. Em C23, a ordem dos seus erros de `[[fallthrough]]` muda
+de uma execução para outra no nativo (o ASLR muda a ordem de um mapa por
+ponteiro), e com ela muda quais linhas de código aparecem.
+
+**Tempo.** O `c3_stl.cpp` compila em 2,72 s no nativo, contra 2,55 s na
+§19, com a mesma carga. São 7% a mais, que vêm da libc++ nova em gnu++26 e
+do código de EH.
+
+**Pendente:** o `learn` precisa ser refeito depois do pin 23.1.3 (fase P).

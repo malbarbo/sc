@@ -45,6 +45,7 @@ static void initTargetOptions(const CompilerInstance &CI, llvm::TargetOptions &O
   Options.AllowFPOpFusion = LO.getDefaultFPContractMode() == LangOptions::FPM_Fast
                                 ? llvm::FPOpFusion::Fast
                                 : llvm::FPOpFusion::Standard;
+  Options.ExceptionModel = llvm::ExceptionHandling::Wasm; // always -fwasm-exceptions
   Options.UseInitArray = CG.UseInitArray;
   Options.NoZerosInBSS = CG.NoZeroInitializedInBSS;
   Options.FunctionSections = CG.FunctionSections;

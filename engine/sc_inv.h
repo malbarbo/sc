@@ -7,6 +7,7 @@ namespace clang { class CompilerInvocation; }
 
 struct ScOptions {
   std::string Input, Output = "-", Sysroot, ResourceDir;
+  std::string Std;             // -std=, for the corpus only (default gnu23, gnu++26)
   std::vector<std::string> ISystem, ExternCISystem, Include, Warnings;
   std::vector<std::pair<std::string, std::string>> ModuleFiles; // -fmodule-file=<name>=<pcm>
   bool CXX = false;
@@ -17,3 +18,6 @@ struct ScOptions {
 
 bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O);
 void scBuildInvocation(clang::CompilerInvocation &Inv, const ScOptions &O);
+// sets the backend options the invocation lists (FrontendOptions::LLVMArgs, the
+// driver's -mllvm), as cc1 does, but without the command line parser
+void scSetLLVMArgs(const clang::CompilerInvocation &Inv);

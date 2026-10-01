@@ -7,7 +7,8 @@ W := $(CURDIR)/build/wasi-sdk-29.0-x86_64-linux
 WASI_SDK_URL := https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-29/wasi-sdk-29.0-x86_64-linux.tar.gz
 LLVM_REPO := https://github.com/llvm/llvm-project
 LLVM_COMMIT := 5fe235b9862f7fb87012eb06bd71890fa5f41736
-LLVM_PATHS := llvm clang lld cmake third-party libunwind/include libcxx/src/filesystem
+LLVM_PATHS := llvm clang lld cmake third-party libunwind libcxx libcxxabi runtimes \
+  libc/shared libc/src/__support libc/hdr libc/include/llvm-libc-macros libc/include/llvm-libc-types libc/config
 CTS_REPO := https://github.com/c-testsuite/c-testsuite
 CTS_COMMIT := 5c7275656d751de0e68b2d340a95b5681858ed07
 GCC_REPO := https://github.com/gcc-mirror/gcc
@@ -34,7 +35,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm engine trim loader baseline test test-small test-warn learn checkinv size clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -73,6 +74,42 @@ $(B)/wasm/lib/libclangSema.a: | $(B)/native/bin/wasm-ld $(B)/Toolchain-WASI-LLVM
 
 llvm: $(B)/wasm/lib/libclangSema.a
 
+# --- the sysroot: wasi-sdk's libc, with libc++, libc++abi and libunwind built
+# from the pin with exceptions (-fwasm-exceptions, the standard form, exnref);
+# libunwind goes inside libc++abi, which the wasm unwinder calls back
+SR := $(B)/sysroot
+RT_EH := -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false -resource-dir $(W)/lib/clang/21
+RT_OPTS := -DCMAKE_BUILD_TYPE=MinSizeRel -DLLVM_COMPILER_CHECKED=ON -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+  -DCMAKE_C_FLAGS="$(RT_EH)" -DCMAKE_CXX_FLAGS="$(RT_EH)" \
+  -DLIBCXX_ABI_VERSION=2 -DLIBCXX_HAS_MUSL_LIBC=ON -DLIBCXX_ENABLE_THREADS=ON -DLIBCXX_HAS_PTHREAD_API=ON \
+  -DLIBCXX_ENABLE_SHARED=ON -DLIBCXX_ENABLE_STATIC=ON -DLIBCXX_ENABLE_EXCEPTIONS=ON -DLIBCXX_ENABLE_TIME_ZONE_DATABASE=OFF \
+  -DLIBCXX_ENABLE_ABI_LINKER_SCRIPT=OFF -DLIBCXX_CXX_ABI=libcxxabi -DLIBCXX_HARDENING_MODE=fast \
+  -DLIBCXX_INCLUDE_TESTS=OFF -DLIBCXX_INCLUDE_BENCHMARKS=OFF -DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=OFF -DLIBCXX_INSTALL_MODULES=ON \
+  -DLIBCXXABI_ENABLE_EXCEPTIONS=ON -DLIBCXXABI_ENABLE_SHARED=ON -DLIBCXXABI_ENABLE_THREADS=ON -DLIBCXXABI_HAS_PTHREAD_API=ON \
+  -DLIBCXXABI_USE_LLVM_UNWINDER=ON -DLIBCXXABI_ENABLE_STATIC_UNWINDER=ON -DLIBCXXABI_SILENT_TERMINATE=OFF \
+  -DLIBCXXABI_STATICALLY_LINK_UNWINDER_IN_SHARED_LIBRARY=ON -DLIBCXXABI_STATICALLY_LINK_UNWINDER_IN_STATIC_LIBRARY=ON \
+  -DLIBCXXABI_INCLUDE_TESTS=OFF -DLIBCXXABI_ENABLE_ASSERTIONS=OFF \
+  -DLIBUNWIND_ENABLE_SHARED=OFF -DLIBUNWIND_ENABLE_THREADS=ON -DLIBUNWIND_INCLUDE_TESTS=OFF -DLIBUNWIND_USE_COMPILER_RT=OFF \
+  -DLIBUNWIND_HIDE_SYMBOLS=OFF -DLIBUNWIND_ENABLE_ASSERTIONS=OFF \
+  -DLIBUNWIND_ADDITIONAL_COMPILE_FLAGS="-fvisibility=default;-fdeclspec;-Wno-ignored-attributes" \
+  -DLIBCXX_INSTALL_INCLUDE_DIR=include/wasm32-wasip1/c++/v1 -DLIBCXX_INSTALL_INCLUDE_TARGET_DIR=include/wasm32-wasip1/c++/v1 \
+  -DLIBCXX_INSTALL_LIBRARY_DIR=lib/wasm32-wasip1 -DLIBCXXABI_INSTALL_LIBRARY_DIR=lib/wasm32-wasip1 \
+  -DLIBUNWIND_INSTALL_LIBRARY_DIR=lib/wasm32-wasip1 -DLIBUNWIND_INSTALL_INCLUDE_DIR=include/wasm32-wasip1 \
+  -DLIBCXX_INSTALL_MODULES_DIR=share/libc++/v1
+
+$(B)/Toolchain-runtimes.cmake: llvm/runtimes.cmake.in
+	sed 's#@WASI_SDK@#$(W)#g; s#@NATIVE@#$(CURDIR)/$(B)/native#g' $< > $@
+
+$(SR)/lib/wasm32-wasip1/libc++.so: $(B)/Toolchain-runtimes.cmake | $(B)/native/bin/wasm-ld $(W)/bin/clang
+	cmake -G Ninja -S $(B)/src/runtimes -B $(B)/runtimes -Wno-dev -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/$< $(RT_OPTS)
+	ninja -C $(B)/runtimes cxx cxxabi unwind
+	rm -rf $(SR) && mkdir -p $(SR)/include $(SR)/lib
+	cp -a $(W)/share/wasi-sysroot/include/wasm32-wasip1 $(SR)/include/ && rm -rf $(SR)/include/wasm32-wasip1/c++
+	cp -a $(W)/share/wasi-sysroot/lib/wasm32-wasip1 $(SR)/lib/ && rm -f $(SR)/lib/wasm32-wasip1/libc++*
+	cmake --install $(B)/runtimes --prefix $(CURDIR)/$(SR) >/dev/null
+
+sysroot: $(SR)/lib/wasm32-wasip1/libc++.so
+
 # --- the engine
 $(B)/engine/%.o: engine/%.cpp engine/sc_inv.h | $(B)/wasm/lib/libclangSema.a
 	@mkdir -p $(@D)
@@ -95,6 +132,42 @@ $(B)/sc-cut.wasm: $(ENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj scrip
 $(B)/sc.wasm: $(B)/sc-cut.wasm
 	wasm-opt -Oz --strip-debug --strip-producers $< -o $@
 
+# --- the native engine: the same engine and cuts over a host build of LLVM
+# from the patched sources (build/native, for the tools, is not cut)
+HOST_OPTS := $(LLVM_OPTS) -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_USE_LINKER=lld \
+  -DLLVM_ENABLE_PIC=OFF -DLLVM_ENABLE_THREADS=OFF -DLLVM_DEFAULT_TARGET_TRIPLE=wasm32-wasip1 \
+  -DLLVM_TABLEGEN=$(CURDIR)/$(B)/native/bin/llvm-tblgen -DCLANG_TABLEGEN=$(CURDIR)/$(B)/native/bin/clang-tblgen \
+  -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_UTILS=OFF -DLLVM_BUILD_UTILS=OFF -DLLVM_INCLUDE_RUNTIMES=OFF \
+  -DCLANG_INCLUDE_TESTS=OFF -DCLANG_BUILD_TOOLS=OFF -DLLD_BUILD_TOOLS=OFF -DDEFAULT_SYSROOT=/usr -DCLANG_RESOURCE_DIR=/usr
+HOST_FLAGS := -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS \
+  -I$(B)/src/clang/include -I$(B)/host/tools/clang/include -I$(B)/host/include -I$(B)/src/llvm/include \
+  -I$(B)/src/lld/include -I$(B)/host/tools/lld/include \
+  -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
+  -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
+
+$(B)/host/lib/libclangSema.a: | $(B)/native/bin/wasm-ld
+	cmake -G Ninja -S $(B)/src/llvm -B $(B)/host $(HOST_OPTS)
+	ninja -C $(B)/host clang lld
+
+$(B)/engine-host/%.o: engine/%.cpp engine/sc_inv.h | $(B)/host/lib/libclangSema.a
+	@mkdir -p $(@D)
+	clang++ $(HOST_FLAGS) -c $< -o $@
+
+$(B)/trim-host/Intrinsics.cpp.o: scripts/trim.py scripts/trim_intrinsics.py | $(B)/host/lib/libclangSema.a
+	scripts/trim.py --native
+
+$(B)/sc-host-cut: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o scripts/link.py \
+    cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/symbols.host.used cuts/o0init.txt
+	scripts/link.py --native $@
+
+$(B)/sc: $(B)/sc-host-cut
+	llvm-strip -o $@ $<
+
+$(B)/sc-host-full: $(ENGINE:%=$(B)/engine-host/%.o) scripts/link.py
+	scripts/link.py --native --full $@
+
+native: $(B)/sc
+
 # --- the REPL's loader: runs the shared objects (native, wasmtime)
 SCLOAD := $(B)/loader/release/scload
 $(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/main.rs
@@ -103,11 +176,11 @@ $(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/main.rs
 loader: $(SCLOAD)
 
 # --- tests: the corpus against the uncut engine
-$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS) $(SCLOAD)
+$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
 	test/corpus.py $< $(B)/res/base
 
 # the same with every warning on, so the cuts keep the code of all warnings
-$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS) $(SCLOAD)
+$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/wev-base
 
 baseline: $(B)/res/base/summary.json
@@ -118,6 +191,17 @@ test: $(B)/sc.wasm $(B)/res/base/summary.json $(SCLOAD)
 test-small: $(B)/sc.wasm $(B)/res/base/summary.json $(SCLOAD)
 	CORPUS=small test/corpus.py $(B)/sc.wasm $(B)/res/sc-small $(B)/res/base/summary.json
 
+# the native engine against the uncut native engine (sc.wasm and the native
+# engine differ where the host does: stack depth, memory, the sandbox)
+$(B)/res/native-base/summary.json: $(B)/sc-host-full test/corpus.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+	test/corpus.py $< $(B)/res/native-base
+
+$(B)/res/native-wev-base/summary.json: $(B)/sc-host-full test/corpus.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+	WFLAGS=-Weverything test/corpus.py $< $(B)/res/native-wev-base
+
+test-native: $(B)/sc $(B)/res/native-base/summary.json $(SCLOAD)
+	test/corpus.py $(B)/sc $(B)/res/native $(B)/res/native-base/summary.json
+
 test-warn: $(B)/sc.wasm $(B)/res/wev-base/summary.json $(SCLOAD)
 	WFLAGS=-Weverything test/corpus.py $(B)/sc.wasm $(B)/res/wev $(B)/res/wev-base/summary.json
 
@@ -125,6 +209,10 @@ test-warn: $(B)/sc.wasm $(B)/res/wev-base/summary.json $(SCLOAD)
 # bump or new cuts)
 learn: $(ENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj $(B)/res/wev-base/summary.json
 	WFLAGS=-Weverything SC_BASE=$(CURDIR)/$(B)/res/wev-base/summary.json scripts/link.py --learn $(B)/sc-cut.wasm
+
+# what only the native engine calls (cuts/symbols.host.used), after learn
+learn-native: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o $(B)/res/native-wev-base/summary.json
+	WFLAGS=-Weverything SC_BASE=$(CURDIR)/$(B)/res/native-wev-base/summary.json scripts/link.py --native --learn $(B)/sc-host-cut
 
 # the invocation built by engine/sc_inv.cpp against clang's option parser (native)
 N := $(B)/native
@@ -136,6 +224,7 @@ $(B)/checkinv: test/checkinv.cpp engine/sc_inv.cpp engine/sc_inv.h | $(N)/bin/wa
 
 checkinv: $(B)/checkinv
 	$< $$(test/corpus.py --flags) -o - /c/x.c
+	$< $$(test/corpus.py --flags gnu17) -o - /c/x.c
 	$< $$(test/corpus.py --flags c++) -o - /c/x.cpp
 	$< $$(test/corpus.py --flags pic) -o - /c/x.c
 	$< $$(test/corpus.py --flags c++ pic) -o - /c/x.cpp
@@ -144,8 +233,8 @@ checkinv: $(B)/checkinv
 	$< $$(test/corpus.py --flags c++ pic mod) -o - /c/x.cpp
 
 size: $(B)/sc.wasm
-	@printf '%s: %s raw, %s gzip, %s zstd\n' $< $$(stat -c %s $<) \
-	  $$(gzip -9 -c $< | wc -c) $$(zstd -19 -c $< 2>/dev/null | wc -c)
+	@for f in $(wildcard $(B)/sc.wasm $(B)/sc); do printf '%s: %s raw, %s gzip, %s zstd\n' $$f $$(stat -c %s $$f) \
+	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
 clean:
-	rm -rf $(B)/engine $(B)/trim $(B)/link-* $(B)/sc*.wasm $(B)/res/sc*
+	rm -rf $(B)/engine $(B)/engine-host $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native

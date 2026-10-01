@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Link the sc engine from the LLVM wasm build, applying the cuts in cuts/.
 
-usage: link.py [--full | --learn] <out.wasm>
+usage: link.py [--native] [--full | --learn] <out>
   (default)  cut link: deterministic, from cuts/objects.txt, cuts/symbols.txt
              and cuts/symbols.used
   --full     no cuts and no trims: the reference engine for the corpus
   --learn    also run the corpus and rewrite what the cuts keep: objects that
              trap are appended to cuts/objects.txt as '!' lines, and
              cuts/symbols.used is rebuilt from a traced run
+  --native   the native engine (x86-64 ELF) from the host LLVM build
+             (build/host), with the same cuts; a cut function prints its
+             name and aborts
 
 Two kinds of cut:
   * objects (cuts/objects.txt, one regex per line over member paths such as
@@ -34,12 +37,16 @@ sys.path.insert(0, f'{R}/test')
 import corpuslib
 
 B = os.environ.get('SC_BUILD', f'{R}/build')
-WB, W = f'{B}/wasm', f'{B}/wasi-sdk-29.0-x86_64-linux'
+W = f'{B}/wasi-sdk-29.0-x86_64-linux'
 CUTS = os.environ.get('SC_CUTS', f'{R}/cuts')
 args = sys.argv[1:]
+NATIVE = bool(args) and args[0] == '--native'
+args = args[NATIVE:]
 mode = args.pop(0)[2:] if args and args[0] in ('--full', '--learn') else 'cut'
 out = os.path.realpath(args[0])
-d = os.environ.get('SC_LINKDIR', f'{B}/link-{mode}')
+WB = f'{B}/host' if NATIVE else f'{B}/wasm'
+H = '-host' if NATIVE else ''  # the native build keeps its files apart
+d = os.environ.get('SC_LINKDIR', f'{B}/link{H}-{mode}')
 os.makedirs(f'{d}/lib', exist_ok=True)
 env = dict(os.environ)
 env['PATH'] = f'{B}/tools:' + ':'.join(x for x in env['PATH'].split(':') if '.local/bin' not in x)
@@ -64,25 +71,32 @@ def ninja_cmd(target):
 
 
 # --- the link line: clang's, with the engine objects in place of the driver
-ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine')}/{f}.o" for f in ('sc_main', 'sc_inv', 'sc_backend', 'sc_cuts')]
+ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine{H}')}/{f}.o" for f in ('sc_main', 'sc_inv', 'sc_backend', 'sc_cuts')]
 toks = shlex.split(ninja_cmd('bin/clang-23').split(': && ', 1)[1].removesuffix(' && :'))
-flags = [t for t in toks if not t.endswith(('.a', '.obj')) and t not in ('-o', 'bin/clang-23', '-Os')]
+flags = [t for t in toks if not t.endswith(('.a', '.obj', '.o')) and t not in ('-o', 'bin/clang-23', '-Os', '-Xlinker')
+         and not t.startswith(('--dependency-file', '-Wl,--color-diagnostics', '-fdiagnostics-color'))]
 archives = [t for t in shlex.split(ninja_cmd('bin/lld')) if t.startswith('lib/liblld') and t.endswith('.a')]
 archives = list(dict.fromkeys(archives + [t for t in toks if t.endswith('.a')]))
 
 # archive members, from the ninja rule that builds each archive
-mfile = f'{B}/link-members.json'
+mfile = f'{B}/link{H}-members.json'
 members = json.load(open(mfile)) if os.path.exists(mfile) else {}
 for a in archives:
     if a not in members:
-        members[a] = shlex.split(ninja_cmd(a).split(' qc ', 1)[1].split(' && ')[0])[1:]
+        members[a] = shlex.split(re.split(r' D?qc ', ninja_cmd(a), maxsplit=1)[1].split(' && ')[0])[1:]
 json.dump(members, open(mfile, 'w'), indent=0)
 
 # trimmed tablegen/data objects (scripts/trim.py) replace their members
+O = '.o' if NATIVE else '.obj'
 TRIMS = {} if mode == 'full' else {
-    'lib/IR/CMakeFiles/LLVMCore.dir/Intrinsics.cpp.obj': f'{B}/trim/Intrinsics.cpp.obj',
-    'lib/Analysis/CMakeFiles/LLVMAnalysis.dir/TargetLibraryInfo.cpp.obj': f'{B}/trim/TargetLibraryInfo.cpp.obj',
+    f'lib/IR/CMakeFiles/LLVMCore.dir/Intrinsics.cpp{O}': f'{B}/trim{H}/Intrinsics.cpp{O}',
+    f'lib/Analysis/CMakeFiles/LLVMAnalysis.dir/TargetLibraryInfo.cpp{O}': f'{B}/trim{H}/TargetLibraryInfo.cpp{O}',
 }
+
+
+def rpath(o):
+    """a member path as the rules spell it, those of the wasm build (.cpp.obj)"""
+    return o[:-2] + '.obj' if NATIVE and o.endswith('.o') else o
 
 
 def rules(path):
@@ -101,7 +115,7 @@ if mode != 'full':
 
 def removed():
     return {o for a in archives for o in members[a]
-            if any(r.search(o) for r in rm) and not any(k.search(o) for k in keep)}
+            if any(r.search(rpath(o)) for r in rm) and not any(k.search(rpath(o)) for k in keep)}
 
 
 def import_sigs(wasm, prefix=''):
@@ -118,11 +132,32 @@ def import_sigs(wasm, prefix=''):
 
 def assemble(name, body):
     open(f'{d}/{name}.s', 'w').write(body)
-    sh([f'{W}/bin/clang', '--target=wasm32-wasip1', '-c', f'{d}/{name}.s', '-o', f'{d}/{name}.o'])
+    sh(['clang', '-c', f'{d}/{name}.s', '-o', f'{d}/{name}.o'] if NATIVE else
+       [f'{W}/bin/clang', '--target=wasm32-wasip1', '-c', f'{d}/{name}.s', '-o', f'{d}/{name}.o'])
     return f'{d}/{name}.o'
 
 
+def removed_data():
+    """the data symbols of the removed objects, with their sizes (native)"""
+    data = {}
+    for o in removed():
+        for l in sh(['llvm-nm', '--defined-only', '-S', TRIMS.get(o, f'{WB}/{o}')]).stdout.splitlines():
+            f = l.split()
+            if len(f) == 4 and f[2] in 'BbDdRrVvu':
+                data[f[3]] = max(int(f[1], 16), data.get(f[3], 0))
+    return data
+
+
 def trap_stubs(name, sigs):
+    if NATIVE:
+        # a function: sc_cut_called (sc_cuts.cpp) prints its name and aborts.
+        # Data (an option, a vtable): zeros, as at address 0 in sc.wasm,
+        # where wasm-ld leaves undefined data
+        data = removed_data()
+        return assemble(name, ''.join(
+            f'.bss\n.globl {s}\n.type {s},@object\n.p2align 4\n{s}:\n  .zero {data[s]}\n' if s in data else
+            f'.text\n.globl {s}\n.type {s},@function\n{s}:\n  leaq .Lsc{i}(%rip), %rdi\n  jmp sc_cut_called\n'
+            f'.section .rodata.str1.1,"aMS",@progbits,1\n.Lsc{i}:\n  .asciz "{s}"\n' for i, (s, _) in enumerate(sigs)))
     return assemble(name, ''.join(
         f'.globl {s}\n.type {s},@function\n{s}:\n  .functype {s} ({", ".join(ps)}) -> ({", ".join(rs)})\n'
         f'  unreachable\n  end_function\n\n' for s, (ps, rs) in sigs))
@@ -143,14 +178,26 @@ def link_objects():
         sh([f'{W}/bin/llvm-ar', 'qc', na] + objs)
         libs.append(na)
     # wasm-ld 21 (wasi-sdk 29) crashes on --wrap + --allow-undefined; use the one we built
+    if NATIVE:  # identical functions folded, those whose address is not taken
+        return shlex.join(flags + ['-Wl,--icf=safe'] + ENGINE + libs), len(gone)
     return shlex.join(flags + ENGINE + libs + [f'-fuse-ld={B}/native/bin/wasm-ld']), len(gone)
+
+
+def undefined(cmd, prefix=''):
+    """the functions a link leaves undefined, with their signatures (wasm)"""
+    if NATIVE:
+        r = subprocess.run(f'{cmd} -Wl,--error-limit=0 -Wl,--no-demangle -o {d}/undef', shell=True, cwd=WB,
+                           capture_output=True, text=True, env=env)
+        return sorted({(s, None) for s in re.findall(r'undefined (?:hidden )?symbol: (' + prefix + r'\S+)$', r.stderr, re.M)})
+    sh(f'{cmd} -Wl,--allow-undefined -o {d}/imports.wasm')
+    sigs = import_sigs(f'{d}/imports.wasm', prefix)
+    os.remove(f'{d}/imports.wasm')
+    return sigs
 
 
 def link_with_stubs(base, extra, out_, name):
     """link; functions still undefined become trapping stubs <name>.o"""
-    sh(f'{base} {extra} -Wl,--allow-undefined -o {d}/imports.wasm')
-    stubs = import_sigs(f'{d}/imports.wasm')
-    os.remove(f'{d}/imports.wasm')
+    stubs = undefined(f'{base} {extra}')
     o = trap_stubs(name, stubs)
     cmd = f'{base} {extra} {o} -Wl,--warn-unresolved-symbols -Wl,-Map={d}/engine.map -o {out_}'
     open(f'{d}/link.sh', 'w').write(f'cd {WB} && {cmd}\n')
@@ -161,22 +208,33 @@ def link_with_stubs(base, extra, out_, name):
 baseline = os.environ.get('SC_BASE', f'{B}/res/base/summary.json')
 
 
-def corpus(wasm, res):
-    subprocess.check_call([f'{R}/test/corpus.py', wasm, res], stdout=subprocess.DEVNULL)
-    return corpuslib.diff(json.load(open(baseline)), json.load(open(f'{res}/summary.json')))
+def corpus(wasm, res, only=None):
+    """the results that differ from the baseline; with only, run just those"""
+    e = dict(os.environ)
+    if only:
+        open(f'{d}/only.txt', 'w').write('\n'.join(only) + '\n')
+        e['ONLY'] = f'{d}/only.txt'
+    subprocess.check_call([f'{R}/test/corpus.py', wasm, res], stdout=subprocess.DEVNULL, env=e)
+    r = json.load(open(f'{res}/summary.json'))
+    return corpuslib.diff({k: v for k, v in json.load(open(baseline)).items() if k in r}, r)
 
 
 def traps(res, bad, prefix):
     txt = ''.join(open(f'{res}/{k}.txt').read() for k in bad)
+    if NATIVE:
+        return set(re.findall(r'^sc: cut function called: ' + prefix + r'(\S+)$', txt, re.M))
     return set(re.findall(r'^\s+0: +0x[0-9a-f]+ - [^!\s]+!' + prefix + r'(.*)$', txt, re.M))
 
 
-# --- stage 1: object cuts
+# the engine as linked here: corpus.py runs a .wasm under wasmtime, else natively
+ENG = f'{d}/engine' if NATIVE else f'{d}/engine.wasm'
+
+# --- stage 1: object cuts (learned on the wasm engine only)
 base, ngone = link_objects()
-if mode == 'learn':
+if mode == 'learn' and not NATIVE:
     for it in range(25):
-        stubs1, n = link_with_stubs(base, '', f'{d}/engine.wasm', 'stubs')
-        bad = corpus(f'{d}/engine.wasm', f'{d}/res')
+        stubs1, n = link_with_stubs(base, '', ENG, 'stubs')
+        bad = corpus(ENG, f'{d}/res')
         say(f'objects {it}: removed={ngone} stubs={n} corpus={"OK" if not bad else f"DIFF {len(bad)}"}')
         if not bad:
             break
@@ -198,11 +256,11 @@ if mode == 'learn':
         say('   put back: ' + ', '.join(sorted(x.split('.dir/')[-1] for x in back)))
         base, ngone = link_objects()
 else:
-    stubs1, n = link_with_stubs(base, '', f'{d}/engine.wasm', 'stubs')
+    stubs1, n = link_with_stubs(base, '', ENG, 'stubs')
     say(f'objects: removed={ngone} stubs={n}')
 
 if mode == 'full':
-    os.replace(f'{d}/engine.wasm', out)
+    os.replace(ENG, out)
     sys.exit()
 
 # --- stage 2: function cuts over what stage 1 linked
@@ -220,15 +278,16 @@ bymember = {}
 for a, ms in members.items():
     for o in ms:
         bymember.setdefault((a.split('/')[-1], o.split('/')[-1]), o)
-line_re = re.compile(r'^\s*(\S+)\s+([0-9a-f]+)\s+([0-9a-f]+) (\s*)(\S.*)$')
+# wasm: Addr Off Size Out In Symbol; ELF: VMA LMA Size Align Out In Symbol
+line_re = re.compile(r'^\s*(?:\S+\s+){%d}\S+ (\s*)(\S.*)$' % (3 if NATIVE else 2))
 sec = cur = None
 linked = {}
 for l in open(f'{d}/engine.map'):
     m = line_re.match(l)
     if not m: continue
-    ind, rest = len(m.group(4)), m.group(5)
+    ind, rest = len(m.group(1)), m.group(2)
     if ind == 0: sec = rest.split()[0]; continue
-    if sec != 'CODE': continue
+    if sec != ('.text' if NATIVE else 'CODE'): continue
     if ind == 8:
         mm = re.match(r'(.*?)(?:\((.*?)\))?:\((.*)\)$', rest)
         cur = None
@@ -240,10 +299,10 @@ for l in open(f'{d}/engine.map'):
         linked.setdefault(rest, cur)
 
 # global functions of the selected objects (mangled, demangled)
-nmfile = f'{B}/link-nm.json'
+nmfile = f'{B}/link{H}-nm.json'
 nm = json.load(open(nmfile)) if os.path.exists(nmfile) else {}
-objs = {o for o in linked.values() if o.endswith('.obj') and any(r.search(o) for r in objre)}
-objs |= {o for s, o in linked.items() if o.endswith('.obj') and any(r.search(s) for r in symre + noopre)}
+objs = {o for o in linked.values() if o.endswith(O) and any(r.search(rpath(o)) for r in objre)}
+objs |= {o for s, o in linked.items() if o.endswith(O) and any(r.search(s) for r in symre + noopre)}
 for o in sorted(objs - nm.keys()):
     p = o if o.startswith('/') else f'{WB}/{o}'
     r = sh([f'{W}/bin/llvm-nm', '--defined-only', '-g', p])
@@ -259,25 +318,35 @@ for o in sorted(objs):
             continue
         if any(r.search(dm) for r in noopre) and dm not in noopkeep:
             noops[mg] = dm
-        elif (any(r.search(o) for r in objre) or any(r.search(dm) for r in symre)) and not any(k.search(dm) for k in symkeep):
+        elif (any(r.search(rpath(o)) for r in objre) or any(r.search(dm) for r in symre)) and not any(k.search(dm) for k in symkeep):
             cands[mg] = dm
 say(f'functions: {len(cands)} candidates in {len(objs)} objects, {len(noops)} no-ops')
 
-o = assemble('noops', ''.join(f'.globl __wrap_{s}\n.type __wrap_{s},@function\n__wrap_{s}:\n'
+o = assemble('noops', ''.join(f'.text\n.globl __wrap_{s}\n.type __wrap_{s},@function\n__wrap_{s}:\n  ret\n'
+                              for s in sorted(noops))) if NATIVE else \
+    assemble('noops', ''.join(f'.globl __wrap_{s}\n.type __wrap_{s},@function\n__wrap_{s}:\n'
                               f'  .functype __wrap_{s} (i32) -> ()\n  end_function\n\n' for s in sorted(noops)))
 open(f'{d}/noops.rsp', 'w').write(''.join(f'--wrap={s}\n' for s in sorted(noops)) + f'{o}\n')
 base += f' -Wl,@{d}/noops.rsp'
 
 used_file = f'{CUTS}/symbols.used'
-used = set(rules(used_file)) if os.path.exists(used_file) and mode != 'learn' else set()
+used = set(rules(used_file)) if os.path.exists(used_file) and (mode != 'learn' or NATIVE) else set()
+# what only the native engine calls (link.py --native --learn), native names
+host_file = f'{CUTS}/symbols.host.used'
+host = set(rules(host_file)) if os.path.exists(host_file) and mode != 'learn' else set()
 
 
 def write_used():
+    if NATIVE:
+        open(host_file, 'w').write('# functions of cuts/symbols.txt that only the native engine calls\n'
+                                   '# (link.py --native --learn), on top of symbols.used\n'
+                                   + ''.join(f'{s}\n' for s in sorted(host)))
+        return
     open(used_file, 'w').write('# functions of cuts/symbols.txt that the corpus calls (link.py --learn)\n'
                                + ''.join(f'{s}\n' for s in sorted(used)))
 
 
-if mode == 'learn':
+if mode == 'learn' and not NATIVE:
     # discovery: every wrapper records its first call and forwards to the original.
     # The originals (__real_) pull in more objects, which may reference more
     # wrapped functions: relink with the stubs so far until none is missing.
@@ -319,20 +388,38 @@ if mode == 'learn':
     write_used()
     say(f'discovery: {len(stubs)} wrappers, {len(used)} called by the corpus')
 
-for it in range(40):
+if NATIVE:
+    # symbols.used has the wasm names: int64_t is long long there and long
+    # here, and std:: is libc++'s std::__2 there and libstdc++'s
+    # std::__cxx11 (and [abi:cxx11]) here. Compare the demangled names
+    # without those.
+    def unll(x):
+        return re.sub(r'\blong long\b', 'long', re.sub(r'std::__(?:\d+|cxx11)::|\[abi:cxx11\]', lambda m: 'std::' * (m[0][0] == 's'), x))
+    dem = subprocess.run(['llvm-cxxfilt'], input='\n'.join(sorted(used)), capture_output=True, text=True).stdout.split('\n')
+    used = {s for s, dm in cands.items() if unll(dm) in set(map(unll, dem))} | host
+# after a run with differences, run only the files that differ until they
+# pass, then the whole corpus again
+only = None
+for it in range(100):
     wrap = sorted(s for s in cands if s not in used)
     open(f'{d}/wrap.rsp', 'w').write(''.join(f'--wrap={s}\n' for s in wrap))
-    _, n = link_with_stubs(base, f'-Wl,@{d}/wrap.rsp', f'{d}/engine.wasm', 'wstubs')
+    _, n = link_with_stubs(base, f'-Wl,@{d}/wrap.rsp', ENG, 'wstubs')
     if mode != 'learn':
         say(f'functions: wrapped={len(wrap)} stubs={n}')
         break
-    bad = corpus(f'{d}/engine.wasm', f'{d}/res')
-    say(f'functions {it}: wrapped={len(wrap)} stubs={n} corpus={"OK" if not bad else f"DIFF {len(bad)}"}')
+    bad = corpus(ENG, f'{d}/res', only)
+    say(f'functions {it}: wrapped={len(wrap)} stubs={n} corpus{"" if only is None else f" ({len(only)} files)"}='
+        + ("OK" if not bad else f"DIFF {len(bad)}"))
     if not bad:
-        break
+        if only is None:
+            break
+        only = None
+        continue
+    only = bad
     frames = traps(f'{d}/res', bad, '__wrap_')
     if not frames:
         sys.exit(f'corpus differs without a __wrap_ trap: {bad[:5]}')
     used |= frames
+    host |= frames
     write_used()
-os.replace(f'{d}/engine.wasm', out)
+os.replace(ENG, out)

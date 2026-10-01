@@ -49,6 +49,7 @@ static int cc1(llvm::ArrayRef<const char *> Args) {
 
   auto Inv = std::make_shared<clang::CompilerInvocation>();
   scBuildInvocation(*Inv, O);
+  scSetLLVMArgs(*Inv);
   auto Clang = std::make_unique<clang::CompilerInstance>(std::move(Inv));
   Clang->createVirtualFileSystem(llvm::vfs::getRealFileSystem());
   Clang->createDiagnostics();

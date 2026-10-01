@@ -12,6 +12,7 @@
 #include "clang/StaticAnalyzer/Core/AnalyzerOptions.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/TargetParser/Triple.h"
 
 using namespace clang;
@@ -26,14 +27,20 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   TO.CodeObjectVersion = llvm::CodeObjectVersionKind::COV_6;
   TO.HLSLEntry = "main";
   TO.DxilValidatorVersion = "1.8";
+  // -fwasm-exceptions: C++ exceptions and setjmp/longjmp, in the standard form
+  // (exnref); the pin still defaults to the legacy one
+  for (const char *F : {"+exception-handling", "+multivalue", "+reference-types"})
+    TO.FeaturesAsWritten.push_back(F);
   if (O.PIC)
     TO.FeaturesAsWritten.push_back("+mutable-globals");
 
   LangOptions &LO = Inv.getLangOpts();
   std::vector<std::string> Includes;
   Language L = O.CXX ? Language::CXX : Language::C;
-  LangOptions::setLangDefaults(LO, L, T, Includes,
-                              O.CXX ? LangStandard::lang_gnucxx20 : LangStandard::lang_unspecified);
+  LangStandard::Kind Std = O.CXX ? LangStandard::lang_gnucxx26 : LangStandard::lang_gnu23;
+  if (!O.Std.empty())
+    Std = LangStandard::getLangKind(O.Std);
+  LangOptions::setLangDefaults(LO, L, T, Includes, Std);
   LO.GNUCVersion = 40201;
   LO.setDefaultFPContractMode(LangOptions::FPM_On);
   Visibility Vis = O.VisibilityDefault ? DefaultVisibility : HiddenVisibility;
@@ -53,7 +60,7 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   LO.WCharIsSigned = true;
   LO.setComplexRange(LangOptions::CX_Full);
   // marshalled options whose default is another option (invisible to the round trip)
-  LO.CheckConstexprFunctionBodies = true;
+  LO.CheckConstexprFunctionBodies = !LO.CPlusPlus23;
   LO.Coroutines = false;
   LO.CPlusPlusModules = false;
   LO.DollarIdents = true;
@@ -72,8 +79,8 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   LO.NativeInt16Type = true;
   LO.HLSLRootSigVer = llvm::dxbc::RootSignatureVersion::V1_1;
   if (O.CXX) {
-    // gnu++20, -fno-exceptions (wasi-sdk's libc++ is built without them)
     LO.CXXOperatorNames = true;
+    LO.Exceptions = LO.CXXExceptions = true;
     LO.RTTI = LO.RTTIData = true;
     LO.SizedDeallocation = LO.CPlusPlus14;
     LO.AlignedAllocation = LO.CPlusPlus17;
@@ -126,6 +133,7 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   CG.EmitVersionIdentMetadata = true;
   CG.EmitIEEENaNCompliantInsts = true;
   CG.CodeModel = TO.CodeModel;
+  CG.setExceptionHandling(CodeGenOptions::ExceptionHandlingKind::Wasm);
   if (O.CXX)
     CG.CXXCtorDtorAliases = true;
 
@@ -162,9 +170,21 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
     FO.GenReducedBMI = true;
     HS.ModulesSkipDiagnosticOptions = HS.ModulesSkipHeaderSearchPaths = true;
   }
+  FO.LLVMArgs = {"-wasm-enable-sjlj", "-wasm-use-legacy-eh=false"};
+  if (O.CXX)
+    FO.LLVMArgs.insert(FO.LLVMArgs.begin(), "-wasm-enable-eh");
   FO.DashX = InputKind(L);
   FO.OutputFile = O.Output;
   FO.Inputs.push_back(FrontendInputFile(O.Input, InputKind(L)));
+}
+
+void scSetLLVMArgs(const CompilerInvocation &Inv) {
+  auto &Opts = llvm::cl::getRegisteredOptions();
+  for (llvm::StringRef A : Inv.getFrontendOpts().LLVMArgs) {
+    auto [Name, Value] = A.drop_front().split('=');
+    if (llvm::cl::Option *Opt = Opts.lookup(Name))
+      Opt->addOccurrence(1, Name, Value);
+  }
 }
 
 // Accepts the subset of cc1 flags the engine passes; everything else is fixed.
@@ -181,12 +201,13 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
     else if (A == "-fvisibility=default") O.VisibilityDefault = true;
     else if (A == "-emit-module-interface" || A == "-fmodules-reduced-bmi") O.ModuleInterface = true;
     else if (A == "-I") O.Include.push_back(Next());
+    else if (A.consume_front("-std=")) O.Std = A.str();
     else if (A.consume_front("-fmodule-file=")) {
       auto [Name, File] = A.split('=');
       O.ModuleFiles.emplace_back(Name.str(), File.str());
     }
     else if (A == "-triple" || A == "-target-cpu" || A == "-ferror-limit" || A == "-pic-level" ||
-             A == "-target-feature")
+             A == "-target-feature" || A == "-mllvm")
       Next();
     else if (A.starts_with("-W"))
       O.Warnings.push_back(A.drop_front(2).str());
