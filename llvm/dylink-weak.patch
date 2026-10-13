@@ -1,8 +1,8 @@
 diff --git a/lld/wasm/SyntheticSections.cpp b/lld/wasm/SyntheticSections.cpp
-index 9ba43ef0f..8c4a05d2e 100644
+index b6d572277..14a28f611 100644
 --- a/lld/wasm/SyntheticSections.cpp
 +++ b/lld/wasm/SyntheticSections.cpp
-@@ -84,13 +84,16 @@ void DylinkSection::writeBody() {
+@@ -94,13 +94,16 @@ void DylinkSection::writeBody() {
    // exports and/or imports to the dynamic linker.
    // For exports we need to notify the linker when an export is TLS since the
    // exported value is relative to __tls_base rather than __memory_base.

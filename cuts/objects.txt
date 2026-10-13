@@ -197,3 +197,5 @@ tools/lld/wasm/CMakeFiles/.*/LTO\.cpp
 !tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/GlobalModuleIndex\.cpp\.obj$
 !tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/InMemoryModuleCache\.cpp\.obj$
 !tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/TemplateArgumentHasher\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/Analysis/LifetimeSafety/CMakeFiles/obj\.clangAnalysisLifetimeSafety\.dir/Facts\.cpp\.obj$

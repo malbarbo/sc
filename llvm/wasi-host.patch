@@ -1,18 +1,18 @@
 diff --git a/clang/include/clang/Support/Compiler.h b/clang/include/clang/Support/Compiler.h
-index e1ae3eda4..477d1045b 100644
+index d7f7a0b09..66d6c5b30 100644
 --- a/clang/include/clang/Support/Compiler.h
 +++ b/clang/include/clang/Support/Compiler.h
-@@ -54,7 +54,7 @@
- #define CLANG_ABI LLVM_ATTRIBUTE_VISIBILITY_DEFAULT
+@@ -62,7 +62,7 @@
+ #define CLANG_ABI_EXPORT LLVM_ATTRIBUTE_VISIBILITY_DEFAULT
  #define CLANG_TEMPLATE_ABI LLVM_ATTRIBUTE_VISIBILITY_DEFAULT
  #define CLANG_EXPORT_TEMPLATE
 -#elif defined(__MACH__) || defined(__WASM__) || defined(__EMSCRIPTEN__)
 +#elif defined(__MACH__) || defined(__wasm__) || defined(__EMSCRIPTEN__)
  #define CLANG_ABI LLVM_ATTRIBUTE_VISIBILITY_DEFAULT
+ #define CLANG_ABI_EXPORT LLVM_ATTRIBUTE_VISIBILITY_DEFAULT
  #define CLANG_TEMPLATE_ABI
- #define CLANG_EXPORT_TEMPLATE
 diff --git a/clang/lib/AST/ByteCode/Interp.cpp b/clang/lib/AST/ByteCode/Interp.cpp
-index 8cc3c9216..14bbff1a2 100644
+index 58bbf4aaf..bda0660c3 100644
 --- a/clang/lib/AST/ByteCode/Interp.cpp
 +++ b/clang/lib/AST/ByteCode/Interp.cpp
 @@ -41,7 +41,8 @@ using namespace clang::interp;
@@ -26,10 +26,10 @@ index 8cc3c9216..14bbff1a2 100644
  #define MUSTTAIL
  #define USE_TAILCALLS 0
 diff --git a/clang/lib/Driver/Driver.cpp b/clang/lib/Driver/Driver.cpp
-index 54c9a651f..254075af6 100644
+index e606cdc4c..7743813a0 100644
 --- a/clang/lib/Driver/Driver.cpp
 +++ b/clang/lib/Driver/Driver.cpp
-@@ -1922,7 +1922,7 @@ bool Driver::getCrashDiagnosticFile(StringRef ReproCrashFilename,
+@@ -1894,7 +1894,7 @@ bool Driver::getCrashDiagnosticFile(StringRef ReproCrashFilename,
      CrashDiagDir = "/";
    path::append(CrashDiagDir, "Library/Logs/DiagnosticReports");
    int PID =
@@ -39,7 +39,7 @@ index 54c9a651f..254075af6 100644
  #else
        0;
 diff --git a/clang/tools/driver/driver.cpp b/clang/tools/driver/driver.cpp
-index f22c4b705..13774fdb4 100644
+index d4d913a89..82a78686c 100644
 --- a/clang/tools/driver/driver.cpp
 +++ b/clang/tools/driver/driver.cpp
 @@ -55,7 +55,7 @@
@@ -61,7 +61,7 @@ index f22c4b705..13774fdb4 100644
    // number. If the return code indicates it was from a signal handler, raise
    // the signal so that the exit code includes the signal number, as required
 diff --git a/libcxx/src/filesystem/operations.cpp b/libcxx/src/filesystem/operations.cpp
-index 745db87ce..fe180abbc 100644
+index cd55b797e..57a0cae8b 100644
 --- a/libcxx/src/filesystem/operations.cpp
 +++ b/libcxx/src/filesystem/operations.cpp
 @@ -41,7 +41,7 @@
@@ -87,7 +87,7 @@ index c2d364419..c2c97c482 100644
      return;
  
 diff --git a/lld/wasm/SymbolTable.cpp b/lld/wasm/SymbolTable.cpp
-index 93d3e5f71..7e55f61b0 100644
+index 88ac54302..ea4d83314 100644
 --- a/lld/wasm/SymbolTable.cpp
 +++ b/lld/wasm/SymbolTable.cpp
 @@ -81,6 +81,8 @@ void SymbolTable::addFile(InputFile *file, StringRef symName) {
@@ -100,10 +100,10 @@ index 93d3e5f71..7e55f61b0 100644
    // Collect the bitcode library functions that are not safe to call because
    // they were not yet brought in the link. (Such symbols are lazy.)
 diff --git a/llvm/cmake/config-ix.cmake b/llvm/cmake/config-ix.cmake
-index 7a5631b1a..a6d760fbb 100644
+index aca87f154..ff1e8cd0b 100644
 --- a/llvm/cmake/config-ix.cmake
 +++ b/llvm/cmake/config-ix.cmake
-@@ -390,6 +390,7 @@ check_symbol_exists(malloc_zone_statistics malloc/malloc.h
+@@ -411,6 +411,7 @@ check_symbol_exists(malloc_zone_statistics malloc/malloc.h
  check_symbol_exists(posix_spawn spawn.h HAVE_POSIX_SPAWN)
  check_symbol_exists(pread unistd.h HAVE_PREAD)
  check_symbol_exists(sbrk unistd.h HAVE_SBRK)
@@ -112,7 +112,7 @@ index 7a5631b1a..a6d760fbb 100644
  check_symbol_exists(strerror_s string.h HAVE_DECL_STRERROR_S)
  check_symbol_exists(setenv stdlib.h HAVE_SETENV)
 diff --git a/llvm/cmake/modules/HandleLLVMOptions.cmake b/llvm/cmake/modules/HandleLLVMOptions.cmake
-index 5f1d68762..cf8556fa8 100644
+index deca04852..9a2f19ca9 100644
 --- a/llvm/cmake/modules/HandleLLVMOptions.cmake
 +++ b/llvm/cmake/modules/HandleLLVMOptions.cmake
 @@ -252,6 +252,10 @@ elseif(FUCHSIA OR UNIX OR CYGWIN)
@@ -127,7 +127,7 @@ index 5f1d68762..cf8556fa8 100644
    set(LLVM_ON_UNIX 0)
    set(LLVM_HAVE_LINK_VERSION_SCRIPT 0)
 diff --git a/llvm/include/llvm/ADT/bit.h b/llvm/include/llvm/ADT/bit.h
-index 2bb0b881f..2c96c39c5 100644
+index 3ac23d6d4..0cfb092b8 100644
 --- a/llvm/include/llvm/ADT/bit.h
 +++ b/llvm/include/llvm/ADT/bit.h
 @@ -30,7 +30,8 @@
@@ -156,10 +156,10 @@ index 94fde52de..46b838d8b 100644
  #cmakedefine HAVE_SETENV ${HAVE_SETENV}
  
 diff --git a/llvm/include/llvm/Support/Compiler.h b/llvm/include/llvm/Support/Compiler.h
-index f4bd89402..ddc2a22d4 100644
+index cffab778d..04a304665 100644
 --- a/llvm/include/llvm/Support/Compiler.h
 +++ b/llvm/include/llvm/Support/Compiler.h
-@@ -201,7 +201,7 @@
+@@ -203,7 +203,7 @@
  #define LLVM_TEMPLATE_ABI LLVM_ABI
  #define LLVM_EXPORT_TEMPLATE
  #define LLVM_ABI_EXPORT LLVM_ABI
@@ -195,7 +195,7 @@ index 9fe748981..5c8b94e44 100644
  }
  
 diff --git a/llvm/lib/Support/CrashRecoveryContext.cpp b/llvm/lib/Support/CrashRecoveryContext.cpp
-index fb9f2ec33..9939cc50c 100644
+index 493ba951f..d8afb3b96 100644
 --- a/llvm/lib/Support/CrashRecoveryContext.cpp
 +++ b/llvm/lib/Support/CrashRecoveryContext.cpp
 @@ -13,8 +13,15 @@
@@ -211,10 +211,10 @@ index fb9f2ec33..9939cc50c 100644
 +// builds.
  #include <setjmp.h>
 +#endif
- 
- using namespace llvm;
- 
-@@ -31,7 +38,9 @@ struct CrashRecoveryContextImpl {
+ #ifdef __APPLE__
+ #include <sys/resource.h>
+ #endif
+@@ -34,7 +41,9 @@ struct CrashRecoveryContextImpl {
    const CrashRecoveryContextImpl *Next;
  
    CrashRecoveryContext *CRC;
@@ -224,7 +224,7 @@ index fb9f2ec33..9939cc50c 100644
    volatile unsigned Failed : 1;
    unsigned SwitchedThread : 1;
    unsigned ValidJumpBuffer : 1;
-@@ -50,9 +59,7 @@ public:
+@@ -53,9 +62,7 @@ public:
    /// Called when the separate crash-recovery thread was finished, to
    /// indicate that we don't need to clear the thread-local CurrentContext.
    void setSwitchedThread() {
@@ -234,7 +234,7 @@ index fb9f2ec33..9939cc50c 100644
    }
  
    // If the function ran by the CrashRecoveryContext crashes or fails, then
-@@ -72,9 +79,11 @@ public:
+@@ -75,9 +82,11 @@ public:
  
      CRC->RetCode = RetCode;
  
@@ -246,7 +246,7 @@ index fb9f2ec33..9939cc50c 100644
  
      // Otherwise let the caller decide of the outcome of the crash. Currently
      // this occurs when using SEH on Windows with MSVC or clang-cl.
-@@ -332,7 +341,17 @@ static void uninstallExceptionOrSignalHandlers() {
+@@ -335,7 +344,17 @@ static void uninstallExceptionOrSignalHandlers() {
    }
  }
  
@@ -265,7 +265,7 @@ index fb9f2ec33..9939cc50c 100644
  
  // Generic POSIX implementation.
  //
-@@ -428,10 +447,12 @@ bool CrashRecoveryContext::RunSafely(function_ref<void()> Fn) {
+@@ -431,10 +450,12 @@ bool CrashRecoveryContext::RunSafely(function_ref<void()> Fn) {
      CrashRecoveryContextImpl *CRCI = new CrashRecoveryContextImpl(this);
      Impl = CRCI;
  
@@ -278,7 +278,7 @@ index fb9f2ec33..9939cc50c 100644
    }
  
    Fn();
-@@ -478,7 +499,9 @@ bool CrashRecoveryContext::isCrash(int RetCode) {
+@@ -481,7 +502,9 @@ bool CrashRecoveryContext::isCrash(int RetCode) {
  bool CrashRecoveryContext::throwIfCrash(int RetCode) {
    if (!isCrash(RetCode))
      return false;
@@ -353,7 +353,7 @@ index 564cfc5b2..959ae3775 100644
    if (getHostID(StoredHostID))
      return true; // Conservatively assume it's executing on error.
 diff --git a/llvm/lib/Support/ProgramStack.cpp b/llvm/lib/Support/ProgramStack.cpp
-index e48265afb..1a42d333e 100644
+index 1f234ab58..a3a3c0dde 100644
 --- a/llvm/lib/Support/ProgramStack.cpp
 +++ b/llvm/lib/Support/ProgramStack.cpp
 @@ -10,7 +10,7 @@
@@ -365,7 +365,7 @@ index e48265afb..1a42d333e 100644
  # include <sys/resource.h> // for getrlimit
  #endif
  
-@@ -40,7 +40,7 @@ uintptr_t llvm::getStackPointer() {
+@@ -42,7 +42,7 @@ uintptr_t llvm::getStackPointer() {
  }
  
  unsigned llvm::getDefaultStackSize() {
@@ -375,10 +375,10 @@ index e48265afb..1a42d333e 100644
    getrlimit(RLIMIT_STACK, &RL);
    return RL.rlim_cur;
 diff --git a/llvm/lib/Support/Signals.cpp b/llvm/lib/Support/Signals.cpp
-index f160a135f..34e867e71 100644
+index 8b839c78e..17bfa3dbf 100644
 --- a/llvm/lib/Support/Signals.cpp
 +++ b/llvm/lib/Support/Signals.cpp
-@@ -353,9 +353,20 @@ static bool printMarkupStackTrace(StringRef Argv0, void **StackTrace, int Depth,
+@@ -357,9 +357,20 @@ static bool printMarkupStackTrace(StringRef Argv0, void **StackTrace, int Depth,
  }
  
  // Include the platform-specific parts of this class.
@@ -419,7 +419,7 @@ index bac208a7d..2fa9db84c 100644
    if (M.Address == nullptr || M.AllocatedSize == 0)
      return std::error_code();
 diff --git a/llvm/lib/Support/Unix/Path.inc b/llvm/lib/Support/Unix/Path.inc
-index 3ed56ef01..4275c44e7 100644
+index d01967330..0cf21f3c2 100644
 --- a/llvm/lib/Support/Unix/Path.inc
 +++ b/llvm/lib/Support/Unix/Path.inc
 @@ -31,7 +31,9 @@
@@ -514,7 +514,16 @@ index 3ed56ef01..4275c44e7 100644
    // If we don't have madvise, or it isn't beneficial, treat this as a no-op.
  #elif defined(POSIX_MADV_WILLNEED)
    ::posix_madvise(Mapping, Size, POSIX_MADV_WILLNEED);
-@@ -1298,6 +1313,9 @@ Expected<size_t> readNativeFileSlice(file_t FD, MutableArrayRef<char> Buf,
+@@ -948,7 +963,7 @@ void mapped_file_region::randomAccessImpl() {
+   assert(Mode == mapped_file_region::readonly);
+   if (!Mapping)
+     return;
+-#if defined(__MVS__) || defined(_AIX)
++#if defined(__MVS__) || defined(_AIX) || defined(__wasi__)
+   // If we don't have madvise, or it isn't beneficial, treat this as a no-op.
+ #elif defined(POSIX_MADV_RANDOM)
+   ::posix_madvise(Mapping, Size, POSIX_MADV_RANDOM);
+@@ -1318,6 +1333,9 @@ Expected<size_t> readNativeFileSlice(file_t FD, MutableArrayRef<char> Buf,
  
  std::error_code tryLockFile(int FD, std::chrono::milliseconds Timeout,
                              LockKind Kind) {
@@ -524,7 +533,7 @@ index 3ed56ef01..4275c44e7 100644
    auto Start = std::chrono::steady_clock::now();
    auto End = Start + Timeout;
    do {
-@@ -1324,9 +1342,13 @@ std::error_code tryLockFile(int FD, std::chrono::milliseconds Timeout,
+@@ -1344,9 +1362,13 @@ std::error_code tryLockFile(int FD, std::chrono::milliseconds Timeout,
      usleep(1000);
    } while (std::chrono::steady_clock::now() < End);
    return make_error_code(errc::no_lock_available);
@@ -538,8 +547,8 @@ index 3ed56ef01..4275c44e7 100644
    struct flock Lock;
    memset(&Lock, 0, sizeof(Lock));
    switch (Kind) {
-@@ -1343,9 +1365,13 @@ std::error_code lockFile(int FD, LockKind Kind) {
-   if (::fcntl(FD, F_SETLKW, &Lock) != -1)
+@@ -1363,9 +1385,13 @@ std::error_code lockFile(int FD, LockKind Kind) {
+   if (sys::RetryAfterSignal(-1, ::fcntl, FD, F_SETLKW, &Lock) != -1)
      return std::error_code();
    return errnoAsErrorCode();
 +#endif
@@ -552,15 +561,15 @@ index 3ed56ef01..4275c44e7 100644
    struct flock Lock;
    Lock.l_type = F_UNLCK;
    Lock.l_whence = SEEK_SET;
-@@ -1354,6 +1380,7 @@ std::error_code unlockFile(int FD) {
-   if (::fcntl(FD, F_SETLK, &Lock) != -1)
+@@ -1374,6 +1400,7 @@ std::error_code unlockFile(int FD) {
+   if (sys::RetryAfterSignal(-1, ::fcntl, FD, F_SETLK, &Lock) != -1)
      return std::error_code();
    return errnoAsErrorCode();
 +#endif
  }
  
  std::error_code closeFile(file_t &F) {
-@@ -1459,11 +1486,15 @@ std::error_code readlink(const Twine &path, SmallVectorImpl<char> &dest) {
+@@ -1479,11 +1506,15 @@ std::error_code readlink(const Twine &path, SmallVectorImpl<char> &dest) {
  }
  
  std::error_code changeFileOwnership(int FD, uint32_t Owner, uint32_t Group) {
@@ -576,7 +585,7 @@ index 3ed56ef01..4275c44e7 100644
  }
  
  } // end namespace fs
-@@ -1473,6 +1504,7 @@ namespace path {
+@@ -1493,6 +1524,7 @@ namespace path {
  bool home_directory(SmallVectorImpl<char> &result) {
    std::unique_ptr<char[]> Buf;
    char *RequestedDir = getenv("HOME");
@@ -584,7 +593,7 @@ index 3ed56ef01..4275c44e7 100644
    if (!RequestedDir) {
      long BufSize = sysconf(_SC_GETPW_R_SIZE_MAX);
      if (BufSize <= 0)
-@@ -1484,6 +1516,7 @@ bool home_directory(SmallVectorImpl<char> &result) {
+@@ -1504,6 +1536,7 @@ bool home_directory(SmallVectorImpl<char> &result) {
      if (pw && pw->pw_dir)
        RequestedDir = pw->pw_dir;
    }
@@ -836,7 +845,7 @@ index b33e52d88..415a23ee0 100644
  #endif
  }
 diff --git a/llvm/lib/Support/raw_socket_stream.cpp b/llvm/lib/Support/raw_socket_stream.cpp
-index 9fb408425..c9255bb2e 100644
+index cdf793c89..09b10660b 100644
 --- a/llvm/lib/Support/raw_socket_stream.cpp
 +++ b/llvm/lib/Support/raw_socket_stream.cpp
 @@ -41,6 +41,8 @@
@@ -848,7 +857,7 @@ index 9fb408425..c9255bb2e 100644
  #ifdef _WIN32
  WSABalancer::WSABalancer() {
    WSADATA WsaData;
-@@ -358,3 +360,5 @@ ssize_t raw_socket_stream::read(char *Ptr, size_t Size,
+@@ -370,3 +372,5 @@ ssize_t raw_socket_stream::read(char *Ptr, size_t Size,
    }
    return raw_fd_stream::read(Ptr, Size);
  }

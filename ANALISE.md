@@ -1,7 +1,8 @@
 # sc: análise de um engine C baseado em clang/LLVM
 
 Data: 2026-09-29. LLVM no pin do `rustports/llvm/upstream`
-(`5fe235b9862f`, 23.0.0git). Toolchain de build: wasi-sdk 29 (clang 21).
+(`5fe235b9862f`, 23.0.0git); desde 2026-10-13, `llvmorg-23.1.3`
+(`0d261d1ca552`, §21). Toolchain de build: wasi-sdk 29 (clang 21).
 Tudo o que está aqui foi medido; o build está descrito no `README.md` e os caminhos antigos em §9.
 
 ## 1. Resumo
@@ -1103,3 +1104,63 @@ ponteiro), e com ela muda quais linhas de código aparecem.
 do código de EH.
 
 **Pendente:** o `learn` precisa ser refeito depois do pin 23.1.3 (fase P).
+
+## 21. O pin vai para a 23.1.3
+
+O pin saiu do `main` de 8 de abril (`5fe235b9862f`) para a tag
+`llvmorg-23.1.3` (`0d261d1ca552`), antes do trabalho do REPL
+(`PLANO-REPL.md`, fase P). A 23.1.3 traz três correções do clang-repl de
+que o REPL precisa: a duplicação de vtable (#185648), o `Undo` que
+desliga a PTU retirada (#213235, backport `ea5cc83`) e as declarações
+anteriores mantidas quando uma entrada falha (#218149).
+
+**Os patches.**
+
+- `wasi-host.patch`: três hunks não aplicavam mais e foram refeitos à mão
+  (`clang/Support/Compiler.h`, os includes do `CrashRecoveryContext.cpp`,
+  o `lockFile`/`unlockFile` do `Unix/Path.inc`). A 23.1.3 trouxe o
+  `mapped_file_region::randomAccessImpl`, que chama `posix_madvise`, que a
+  wasi-libc não tem; ganhou o mesmo `defined(__wasi__)` dos vizinhos.
+- `libcxx-locale.patch` (novo): na 23.x, o `locale_base_api.h` da libc++
+  inclui o `locale_base_api/ibm.h` em toda plataforma sem suporte próprio,
+  e não só no z/OS. No wasm, o clang define `_GNU_SOURCE` em C++, a
+  `stdlib.h` da wasi-libc declara `strtod_l` e o `ibm.h` a redefine com
+  `abi_tag`: o build da libc++ para, e qualquer `<iostream>` do aluno
+  pararia também. O patch devolve o `#if defined(__MVS__)` de antes. O
+  `main` do LLVM ainda está assim.
+- `no-veclibs.patch` aplicou limpo; `dylink-weak.patch` só mudou de
+  contexto.
+
+**O `sc_inv`.** O `LangOptions::EnableLifetimeSafety` sumiu (a análise
+agora segue o `-Wlifetime-safety`). O `DiagnosticOptions::ShowColors`
+virou um enum, e o cc1 agora o deixa em `Auto`, resolvido contra o stream
+na hora de imprimir; antes o parser já o resolvia para falso. O `sc_inv`
+deixa de mexer nos dois. O `checkinv` dá SAME nos 8 casos. Num terminal, o
+nativo pode passar a colorir os diagnósticos; no corpus a saída é
+redirecionada e nada muda.
+
+**O corpus e os cortes.**
+
+- São 13.819 arquivos (eram 13.698): os testes do clang do pin novo.
+- O `make learn` levou 26 min, contando a base e o build do `scload`. O
+  `cuts/symbols.used` foi de 2.261 para 2.281 funções. A maior parte da
+  diferença é renomeação (`UnsignedOrNone` virou `OptionalUnsigned`, os
+  `LateParsed*` saíram de dentro do `Parser`). O que é novo: as
+  *expansion statements* do C++26 (`CXXExpansionStmt*`) e o
+  `mayVTableBeDuplicated` (#185648). Nos cortes de objetos, o `Facts.cpp`
+  da `LifetimeSafety` voltou.
+- O `make learn-native` levou 12 min e trouxe uma função
+  (`TypeLocReader::VisitDependentBitIntTypeLoc`, 17 para 18).
+- A `libc++.so` foi de 788 KB para 856 KB (o `<text_encoding>` entrou); a
+  `libc++abi.so` tem 130 KB.
+
+| | bruto | gzip | zstd |
+| --- | ---: | ---: | ---: |
+| `sc.wasm`, pin de abril (§20) | 19.388.589 | 7.141.165 | 5.479.984 |
+| **`sc.wasm`, 23.1.3** | **19.660.880** | **7.246.200** | **5.552.971** |
+| `build/sc`, pin de abril (§20) | 24.633.560 | | 7.668.404 |
+| **`build/sc`, 23.1.3** | **25.122.800** | **10.195.747** | **7.803.852** |
+
+O pin novo custa 272 KB bruto e 73 KB zstd no `sc.wasm` (+1,3%), e 135 KB
+zstd no nativo (+1,8%). `make test`, `make test-warn` e `make test-native`
+passam nos 13.819 arquivos sem diferença; o `checkinv` dá SAME.

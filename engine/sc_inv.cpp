@@ -56,7 +56,6 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   LO.MaxBitIntWidth = 0;
   LO.MathErrno = false;
   LO.ModulesSearchAll = false;
-  LO.EnableLifetimeSafety = true;
   LO.WCharIsSigned = true;
   LO.setComplexRange(LangOptions::CX_Full);
   // marshalled options whose default is another option (invisible to the round trip)
@@ -143,7 +142,6 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   DO.ShowOptionNames = true;
   DO.ShowPresumedLoc = true;
   DO.ElideType = true;
-  DO.ShowColors = false;
 
   AnalyzerOptions &AO = Inv.getAnalyzerOpts();
   AO.ShouldEmitErrorsOnInvalidConfigValue = true;

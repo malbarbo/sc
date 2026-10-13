@@ -50,6 +50,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `TargetLibraryInfo` without the vector library tables. `dylink-weak.patch`
   makes wasm-ld list the weak exports of a shared object, so the loader keeps
   the first copy of an inline function, a vtable or a typeinfo.
+  `libcxx-locale.patch` keeps libc++'s z/OS locale shims off WASI.
   `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the

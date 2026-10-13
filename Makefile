@@ -6,7 +6,7 @@ B := build
 W := $(CURDIR)/build/wasi-sdk-29.0-x86_64-linux
 WASI_SDK_URL := https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-29/wasi-sdk-29.0-x86_64-linux.tar.gz
 LLVM_REPO := https://github.com/llvm/llvm-project
-LLVM_COMMIT := 5fe235b9862f7fb87012eb06bd71890fa5f41736
+LLVM_COMMIT := 0d261d1ca552c95a8f007e061c787ac7132fbcbc
 LLVM_PATHS := llvm clang lld cmake third-party libunwind libcxx libcxxabi runtimes \
   libc/shared libc/src/__support libc/hdr libc/include/llvm-libc-macros libc/include/llvm-libc-types libc/config
 CTS_REPO := https://github.com/c-testsuite/c-testsuite
@@ -45,7 +45,8 @@ $(W)/bin/clang:
 $(B)/src/llvm/CMakeLists.txt:
 	git init -q $(B)/src && cd $(B)/src && git sparse-checkout set $(LLVM_PATHS) \
 	  && git fetch -q --depth 1 $(LLVM_REPO) $(LLVM_COMMIT) && git checkout -q FETCH_HEAD \
-	  && git apply $(CURDIR)/llvm/wasi-host.patch $(CURDIR)/llvm/no-veclibs.patch $(CURDIR)/llvm/dylink-weak.patch
+	  && git apply $(CURDIR)/llvm/wasi-host.patch $(CURDIR)/llvm/no-veclibs.patch $(CURDIR)/llvm/dylink-weak.patch \
+	  $(CURDIR)/llvm/libcxx-locale.patch
 
 $(B)/c-testsuite/.git:
 	git init -q $(B)/c-testsuite && cd $(B)/c-testsuite \
