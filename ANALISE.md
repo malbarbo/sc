@@ -1475,3 +1475,59 @@ usado antes da definição, são o §3.4 do plano e ainda não foram filtrados.
 - Tamanho: `sc.wasm` 5.552.276 bytes zstd (+80, o patch) e `build/sc`
   7.799.434 zstd. A sessão ainda não está neles.
 
+
+## 25. A célula que falha: snapshot por `fork`
+
+**O problema.** Uma célula com erro passa pelo `CleanUpPTU`, copiado do
+clang-repl. Ele tira do lookup as declarações da célula, mas não o resto.
+Casos que quebram a célula seguinte, todos com `int x = ;` na que falha:
+
+| célula que falha | a seguinte, igual mas sem erro |
+| --- | --- |
+| `#include <stdio.h>` (C) | `printf` não declarado: a guarda `_STDIO_H` ficou definida e o cabeçalho não é lido |
+| `#include <vector>` (C++) | "reference to ... is ambiguous": o `Sema` guarda o `namespace std` da célula, e o `std` novo reabre o morto |
+| `new int(3)` (C++, sem cabeçalho) | "no matching function for call to 'operator new'": o `operator new` implícito ficou no TU morto |
+| `#include <vector>` com `<cstdio>` antes | "redefinition of enumerator": os enumeradores ficam no lookup do `std`, que sobrevive |
+
+Desfazer as macros e o `#pragma once` resolve o C. Zerar os ponteiros do
+`Sema` para o `std` troca a ambiguidade pelo `operator new` e pelas
+categorias de comparação. Tapar cache por cache não termina.
+
+**Decisão: o filho faz `fork` antes de cada célula** (`serve`, em
+`proto/src/engine.rs`):
+
+- a cópia espera num pipe;
+- se a célula é aceita, o original manda `d` e a cópia acaba;
+- se falha, o original manda `t` e a resposta, e acaba. A cópia envia a
+  resposta e segue com a sessão de antes da célula;
+- se o original morre na célula (o `#pragma clang __debug crash` do
+  teste), o pipe fecha sem nada. A cópia responde `SC_ERROR` ("the engine
+  crashed on this cell") e segue, sem repasse;
+- se o `fork` falha, uma célula com erro vira `SC_LOST`, e o `Repl` repassa
+  o log sem ela.
+
+Assim o log do `Repl` guarda só as células aceitas. O pid do filho muda a
+cada erro, e o `Child` não conta mais com ele para saber como o filho
+acabou. O `CleanUpPTU` continua: é ele que deixa o `sc_session_cell`
+utilizável sem o filho, nos testes da API.
+
+**Custo**, no `sc-engine-full`, com os cabeçalhos `iostream`, `vector`,
+`string`, `map` e `algorithm` mais 20 funções, uma por célula:
+
+| | mediana de 5 |
+| --- | --- |
+| sem `fork` | 3,27 s |
+| com `fork` | 3,62 s |
+
+São ~17 ms por célula aceita: a cópia das tabelas de páginas e as cópias
+na escrita enquanto a cópia vive. 20 células com erro custam 3 ms cada.
+Repassar o log a cada erro, a outra opção correta, custaria ~2 s por erro
+nessa sessão.
+
+**No navegador** não há `fork`. O equivalente é copiar a memória linear do
+wasm antes da célula e restaurá-la se ela falhar. Fica para a fase 6b.
+
+**Regressões.** `make test-proto` verde: o teste do `Repl` cobre um
+`#include` repetido depois de uma célula com erro, e o crash agora é
+`Error` sem repasse. `make test-split`: 1.947 programas, 0 diferenças fora
+os 6 conhecidos.

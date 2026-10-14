@@ -15,7 +15,9 @@ extern "C" {
 
 enum sc_status {
   SC_OK = 0,    /* done */
-  SC_ERROR = 1, /* an error in the student's code; the session is as before the call */
+  SC_ERROR = 1, /* an error in the student's code. A failed cell leaves part of
+                   itself in the session (§3.3); the child of the protocol
+                   goes on from a copy taken before it */
   SC_LOST = 2,  /* after a fatal error, a failed link or an undo: the session must be
                    recreated and the log replayed (§3.6) */
 };
@@ -60,7 +62,10 @@ int sc_main(int argc, const char **argv);
      SC_MSG_NEW   a session (it replaces the one before): the arguments of
                   sc_session_new, each followed by a NUL, in the first part
      SC_MSG_CELL  sc_session_cell: the source in the first part, the mode in
-                  status
+                  status. In SC_CELL_SO the child forks a copy of itself
+                  first; if the cell fails or ends the process, the copy
+                  answers SC_ERROR and goes on, so the session is as before
+                  the cell
      SC_MSG_UNDO  sc_session_undo */
 enum sc_msg { SC_MSG_NEW = 1, SC_MSG_CELL = 2, SC_MSG_UNDO = 3, SC_MSG_REPLY = 4 };
 struct sc_msg_header {

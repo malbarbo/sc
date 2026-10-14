@@ -2,6 +2,8 @@
 use crate::{msg, sys, wire, Mode, Status};
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, CString};
+use std::fs::File;
+use std::os::fd::FromRawFd;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::marker::PhantomData;
@@ -199,11 +201,11 @@ impl<'s> Reply<'s> {
 }
 
 impl Reply<'_> {
-    /// The reply as a message of the protocol.
-    fn write(&self, output: &mut impl Write) -> io::Result<()> {
+    /// The reply as a message of the protocol, with this status.
+    fn write(&self, output: &mut impl Write, status: Status) -> io::Result<()> {
         let s = self.session;
         let parts = [sys::sc_part::SC_DIAGS, sys::sc_part::SC_SO, sys::sc_part::SC_SYMS].map(|p| s.part(p));
-        wire::write(output, msg::SC_MSG_REPLY, self.status.to_raw(), parts)
+        wire::write(output, msg::SC_MSG_REPLY, status.to_raw(), parts)
     }
 }
 
@@ -218,11 +220,20 @@ impl fmt::Debug for Reply<'_> {
 }
 
 /// The child's side of the protocol (`engine/sc.h`, [`crate::Child`]): one
-/// session at a time, until the end of `input`.
+/// session at a time, until the end of `input`. The parent waits for each
+/// reply before it sends the next message.
+///
+/// A cell that fails leaves part of itself in clang (declarations in lookup
+/// tables, Sema's caches, macros, IR: PLANO-REPL.md §3.3), so before each
+/// cell the child forks a copy of itself ([`Copy`]), which goes on in its
+/// place if the cell fails or brings the engine down. The session is then
+/// as before the cell, and the reply says [`Status::Error`].
 pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error> {
     claim()?;
     let mut session: Option<Session> = None;
-    let reply = |output: &mut _, st: Status, diags: &[u8]| wire::write(output, msg::SC_MSG_REPLY, st.to_raw(), [diags, b"", b""]);
+    fn reply(output: &mut impl Write, st: Status, diags: &[u8]) -> io::Result<()> {
+        wire::write(output, msg::SC_MSG_REPLY, st.to_raw(), [diags, b"", b""])
+    }
     while let Some(m) = wire::read(input)? {
         match (m.kind, &mut session) {
             (msg::SC_MSG_NEW, _) => {
@@ -242,15 +253,119 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
                     reply(output, Status::Error, b"sc: unknown cell mode\n")?;
                     continue;
                 };
-                match s.cell(&m.parts[0], mode) {
-                    Ok(r) => r.write(output)?,
-                    Err(e) => reply(output, Status::Error, format!("sc: {e}\n").as_bytes())?,
+                // a replayed cell is one that was accepted
+                output.flush()?;
+                let copy = match mode {
+                    Mode::So => match Copy::fork()? {
+                        Fork::Original(c) => c,
+                        Fork::Copy(answer) => {
+                            output.write_all(&answer)?;
+                            output.flush()?;
+                            continue;
+                        }
+                    },
+                    Mode::Replay => None,
+                };
+                let mut answer = vec![];
+                let status = match s.cell(&m.parts[0], mode) {
+                    Ok(r) => {
+                        // without a copy, a failed cell loses the session
+                        let st = match (r.status(), mode, &copy) {
+                            (Status::Ok, _, _) | (_, Mode::Replay, _) => r.status(),
+                            (_, Mode::So, Some(_)) => Status::Error,
+                            (_, Mode::So, None) => Status::Lost,
+                        };
+                        r.write(&mut answer, st)?;
+                        st
+                    }
+                    Err(e) => {
+                        reply(&mut answer, Status::Error, format!("sc: {e}\n").as_bytes())?;
+                        Status::Error
+                    }
+                };
+                match copy {
+                    Some(c) if status != Status::Ok => c.hand_over(&answer),
+                    Some(c) => c.discard(),
+                    None => {}
                 }
+                output.write_all(&answer)?;
             }
-            (msg::SC_MSG_UNDO, Some(s)) => s.undo().write(output)?,
+            (msg::SC_MSG_UNDO, Some(s)) => {
+                let r = s.undo();
+                r.write(output, r.status())?
+            }
             (msg::SC_MSG_CELL | msg::SC_MSG_UNDO, None) => reply(output, Status::Error, b"sc: no session\n")?,
             _ => reply(output, Status::Error, b"sc: unknown message\n")?,
         }
+        output.flush()?;
     }
     Ok(())
+}
+
+extern "C" {
+    fn fork() -> c_int;
+    fn pipe(fds: *mut c_int) -> c_int;
+    fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int;
+    fn _exit(code: c_int) -> !;
+}
+
+/// The copy of the child taken before a cell, as its original sees it. The
+/// copy waits on a pipe for one of: `d` (the cell was accepted: the copy
+/// ends), `t` and the answer (the copy goes on in the original's place and
+/// sends the answer), or the end of the pipe alone (the original ended
+/// during the cell: the copy goes on and answers with an error).
+struct Copy {
+    pid: c_int,
+    to: File,
+}
+
+enum Fork {
+    /// In the original: its copy, or none if the fork failed.
+    Original(Option<Copy>),
+    /// In the copy, which goes on: the answer to send.
+    Copy(Vec<u8>),
+}
+
+impl Copy {
+    fn fork() -> io::Result<Fork> {
+        let mut fds = [0; 2];
+        if unsafe { pipe(fds.as_mut_ptr()) } < 0 {
+            return Ok(Fork::Original(None));
+        }
+        // the fds are new and owned here
+        let (from, to) = unsafe { (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1])) };
+        match unsafe { fork() } {
+            pid if pid < 0 => Ok(Fork::Original(None)),
+            0 => {
+                drop(to);
+                let mut said = vec![];
+                (&from).read_to_end(&mut said)?;
+                match said.split_first() {
+                    Some((b'd', _)) => unsafe { _exit(0) },
+                    Some((b't', answer)) => Ok(Fork::Copy(answer.to_vec())),
+                    _ => {
+                        let diags: &[u8] = b"sc: the engine crashed on this cell; the session is as it was before it\n";
+                        let mut answer = vec![];
+                        wire::write(&mut answer, msg::SC_MSG_REPLY, Status::Error.to_raw(), [diags, b"", b""])?;
+                        Ok(Fork::Copy(answer))
+                    }
+                }
+            }
+            pid => Ok(Fork::Original(Some(Copy { pid, to }))),
+        }
+    }
+
+    /// The cell was accepted: the copy ends.
+    fn discard(mut self) {
+        let _ = self.to.write_all(b"d");
+        drop(self.to);
+        unsafe { waitpid(self.pid, ptr::null_mut(), 0) };
+    }
+
+    /// The cell failed: the copy goes on with the answer, and the original,
+    /// whose session has the cell's leftovers, ends.
+    fn hand_over(mut self, answer: &[u8]) -> ! {
+        let _ = self.to.write_all(b"t").and_then(|_| self.to.write_all(answer));
+        unsafe { _exit(0) }
+    }
 }

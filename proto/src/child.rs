@@ -60,9 +60,15 @@ impl Child {
 
     /// The child is gone: how it ended.
     fn ended(&mut self) -> io::Error {
+        // after a failed cell the process spawned may have handed over to
+        // its copy ([`crate::serve`]) and ended with 0
         let _ = self.proc.kill();
-        let how = self.proc.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
-        io::Error::new(io::ErrorKind::BrokenPipe, format!("the engine ended ({how})"))
+        let how = match self.proc.wait() {
+            Ok(s) if s.success() => String::new(),
+            Ok(s) => format!(" ({s})"),
+            Err(e) => format!(" ({e})"),
+        };
+        io::Error::new(io::ErrorKind::BrokenPipe, format!("the engine ended{how}"))
     }
 
     /// A session (it replaces the one before): see [`crate::sys::sc_session_new`].
@@ -123,17 +129,17 @@ impl From<io::Error> for ReplError {
     }
 }
 
-/// A cell of the log: its source and, if accepted, the names it exported.
+/// An accepted cell of the log: its source and the names it exported.
 struct Entry {
     src: Vec<u8>,
-    syms: Option<Vec<String>>,
+    syms: Vec<String>,
 }
 
-/// A session in a child, with the log of its cells. When the session is
-/// lost (a crash, a failed link, an undo), a new child replays the log
-/// without the backend, and each accepted cell must export the same names
-/// (§3.6). Failed cells are replayed too, so the session goes through the
-/// same states.
+/// A session in a child, with the log of its accepted cells. A failed cell
+/// leaves nothing in the child ([`crate::serve`]), so the log does not keep
+/// it. When the session is lost (the child ended, an undo), a new child
+/// replays the log without the backend, and each cell must export the same
+/// names (§3.6).
 pub struct Repl {
     program: PathBuf,
     child_args: Vec<String>,
@@ -164,18 +170,14 @@ impl Repl {
         self.child = Repl::start(&self.program, &self.child_args, &self.args)?;
         for (i, e) in self.log.iter().enumerate() {
             let a = self.child.cell(&e.src, Mode::Replay)?;
-            let same = match &e.syms {
-                Some(syms) => a.status == Status::Ok && a.syms == *syms,
-                None => a.status == Status::Error,
-            };
-            if !same {
+            if a.status != Status::Ok || a.syms != e.syms {
                 return Err(ReplError::Diverged(i));
             }
         }
         Ok(())
     }
 
-    /// The cells of the log.
+    /// The accepted cells.
     pub fn len(&self) -> usize {
         self.log.len()
     }
@@ -189,8 +191,8 @@ impl Repl {
             Err(e) => return Err(e.into()),
         };
         match a.status {
-            Status::Ok => self.log.push(Entry { src: src.to_vec(), syms: Some(a.syms.clone()) }),
-            Status::Error => self.log.push(Entry { src: src.to_vec(), syms: None }),
+            Status::Ok => self.log.push(Entry { src: src.to_vec(), syms: a.syms.clone() }),
+            Status::Error => {}
             Status::Lost => self.restart()?,
         }
         Ok(a)
@@ -199,11 +201,10 @@ impl Repl {
     /// Undoes the last accepted cell: [`Status::Ok`] once the session is
     /// back without it, [`Status::Error`] if there is none.
     pub fn undo(&mut self) -> Result<Answer, ReplError> {
-        let Some(i) = self.log.iter().rposition(|e| e.syms.is_some()) else {
+        if self.log.pop().is_none() {
             return Ok(Answer { status: Status::Error, diags: "sc: no cell to undo\n".into(), so: vec![], syms: vec![] });
-        };
+        }
         // the generated code cannot be undone in the session (§3.3)
-        self.log.remove(i);
         self.restart()?;
         Ok(Answer { status: Status::Ok, diags: String::new(), so: vec![], syms: vec![] })
     }

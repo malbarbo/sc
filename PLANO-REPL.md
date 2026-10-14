@@ -76,8 +76,10 @@ sinais, e compilar dentro do processo do REPL não é seguro:
     para os testes;
   - `build/sc` passa a ser o binário entregue;
   - o wasm continua `sc.wasm`.
-- Crash, timeout ou Ctrl-C matam o filho. O REPL lança outro e faz o
-  repasse (§3.6).
+- Antes de cada célula o filho faz `fork` de si mesmo (§3.3). Se a célula
+  falha ou derruba o compilador, a cópia segue no lugar dele, sem repasse.
+  Timeout ou Ctrl-C matam o filho. O REPL lança outro e faz o repasse
+  (§3.6).
 - Lançar o filho custa 4,5 ms e 11 MB, e matá-lo libera de verdade a
   memória.
 - **Ligação do engine ao Rust, sem `ld -r`** (R7, que perderia o ICF):
@@ -334,8 +336,8 @@ limites conhecidos (`KNOWN` no `test/split.py`). Para chegar lá, a sessão
 ganhou quatro correções (§3.8) e o loader, as referências para a frente.
 Ainda faltam o §3.4 (o aviso de não usado só na célula que define, o erro
 de "falta `;`", a nota da redefinição), as combinações incrementais no
-`checkinv` (§3.5) e os dois bugs abertos do §3.7 (`return` no topo e
-`#include` depois de uma célula que falhou).
+`checkinv` (§3.5) e o `return` no topo (§3.7). O `#include` depois de uma
+célula que falhou foi resolvido pelo snapshot por `fork` (§3.3).
 
 ### 3.1 Montagem (C-B3, C-m1, C-m3)
 
@@ -397,6 +399,22 @@ Testes: os casos `cnt`, `nx` (`static` local de função `static`) e `an`
   3. só então `CleanUpPTU` e `Diags.Reset`.
 
   Status `SC_ERROR`.
+- **Isso não basta** (fase 2). O `CleanUpPTU` deixa restos de cabeçalhos
+  lidos pela célula que falhou:
+  - as guardas de inclusão continuam definidas (o `#include` seguinte não
+    lê nada);
+  - o `Sema` guarda o `namespace std` da célula;
+  - o `operator new` implícito e enumeradores continuam no lookup.
+
+  Tapar cache por cache não termina. **Decidido (2026-10-14): snapshot por
+  `fork`.** No `serve` (`proto/src/engine.rs`), antes de cada célula
+  `SC_CELL_SO`, o filho faz `fork`. A cópia espera num pipe. Se a célula é
+  aceita, a cópia acaba. Se falha, o original passa a resposta à cópia e
+  acaba, e a cópia segue com a sessão de antes da célula. Se o original
+  morre na célula (crash), a cópia responde `SC_ERROR` com "the engine
+  crashed" e segue. O log do `Repl` guarda só as células aceitas. O pid do
+  filho muda a cada erro. No navegador o equivalente é copiar a memória do
+  wasm antes da célula (fase 6b).
 - **Desfazer depois do codegen** (link ou carga falhou, ou `undo` pedido
   pelo aluno): o `CleanUpPTU` restaura só o lookup. O estado do CodeGen e as
   especializações não voltam. Então `undo` de uma célula já gerada é
@@ -462,8 +480,8 @@ declarações, e elas não são exportadas pelo `.so` antigo.
 
 **O repasse:**
 
-1. O host guarda o **log exato**: todas as células, inclusive as que falharam,
-   e os undos.
+1. O host guarda o log das células aceitas, menos as desfeitas. Uma célula
+   que falhou não deixa nada no filho (§3.3).
 2. Sessão nova. O log é reaplicado com codegen completo e com o pós-passo do
    §3.2 (reconstrói os nomes promovidos), mas sem backend e sem link
    (`codegen=1`, com o objeto descartado).
@@ -485,8 +503,8 @@ traz três correções de que a sessão precisa:
 | `Undo` não desliga a PTU | #213235, no 23.1.3 | vem com o pin |
 | entrada que falha apaga declarações anteriores | #218149, no release/23.x depois do 23.1.2 | vem com o pin |
 | reemissão de `static` | aberto | §3.2 (pós-passo de IR, sem patch) |
-| entrada que falha vaza IR | #226252, aberto | §3.3 |
-| `#include` depois de uma entrada que falhou ou de `undo` | aberto | teste `seq-` + correção nossa (patch se preciso) |
+| entrada que falha vaza IR | #226252, aberto | §3.3 (snapshot por `fork`) |
+| `#include` depois de uma entrada que falhou ou de `undo` | aberto | resolvido: snapshot por `fork` (§3.3); o `undo` já era repasse |
 | `return` no topo derruba o compilador | aberto | teste `seq-` + diagnóstico nosso antes do CodeGen |
 
 A cópia do `IncrementalParser` (§3.1) é feita a partir do 23.1.3, não do pin

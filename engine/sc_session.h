@@ -10,8 +10,9 @@
 namespace llvm { class Module; class raw_ostream; }
 namespace clang { class Decl; }
 
-// What a cell left: SC_OK with the object, SC_ERROR (the session is back to
-// before the cell) or SC_LOST (the session must be recreated and replayed).
+// What a cell left: SC_OK with the object, SC_ERROR (an error; the session
+// keeps part of the cell, §3.3) or SC_LOST (the session must be recreated
+// and replayed).
 enum ScStatus { ScOk = 0, ScError = 1, ScLost = 2 };
 
 // The internal globals of a module that stand for a declaration (a static

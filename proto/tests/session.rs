@@ -155,17 +155,23 @@ fn repl() {
         assert_eq!(cell(&mut r, &mut sos, src).status, Status::Ok);
     }
     assert_eq!(cell(&mut r, &mut sos, "int y = ;").status, Status::Error);
-    // a crash ends the child; the log is replayed in a new one
+    // a failed cell leaves nothing behind, not even the guard of a header
+    let a = cell(&mut r, &mut sos, "#include <stdio.h>\nint z = ;");
+    assert_eq!(a.status, Status::Error);
+    assert_eq!(cell(&mut r, &mut sos, "#include <stdio.h>\nint p(void) { return EOF; }").status, Status::Ok);
+    sos.pop();
+    assert_eq!(r.undo().unwrap().status, Status::Ok);
+    // a crash ends the child's process; its copy from before the cell goes on
     let a = cell(&mut r, &mut sos, "#pragma clang __debug crash");
-    assert_eq!(a.status, Status::Lost);
-    assert!(a.diags.contains("the engine ended"), "{a:?}");
-    assert_eq!(r.len(), 4);
+    assert_eq!(a.status, Status::Error);
+    assert!(a.diags.contains("the engine crashed"), "{a:?}");
+    assert_eq!(r.len(), 3);
     // undo replays the log without the last accepted cell
     assert_eq!(cell(&mut r, &mut sos, "int bad(void) { return 1; }").status, Status::Ok);
     assert_eq!(r.undo().unwrap().status, Status::Ok);
     sos.pop();
-    assert_eq!(r.len(), 4);
-    // the static of the first child is the one of the cells after the crash
+    assert_eq!(r.len(), 3);
+    // the static of the first child is the one of the cells after the replays
     assert_eq!(cell(&mut r, &mut sos, C[4]).status, Status::Ok);
     assert_eq!(run("repl", &sos), "2\n");
     drop(r);

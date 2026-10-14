@@ -35,7 +35,9 @@ pub use sys::sc_msg as msg;
 pub enum Status {
     /// Done.
     Ok,
-    /// An error in the student's code; the session is as before the call.
+    /// An error in the student's code. From a `Session`, which keeps part
+    /// of a failed cell (PLANO-REPL.md §3.3); from a [`Child`], the session
+    /// is as before the cell.
     Error,
     /// The session must be recreated and its log replayed.
     Lost,
