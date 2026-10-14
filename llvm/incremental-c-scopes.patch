@@ -1,0 +1,17 @@
+diff --git a/clang/lib/Sema/SemaDecl.cpp b/clang/lib/Sema/SemaDecl.cpp
+index 6a25a799a..80812e28f 100644
+--- a/clang/lib/Sema/SemaDecl.cpp
++++ b/clang/lib/Sema/SemaDecl.cpp
+@@ -2346,9 +2346,10 @@ void Sema::ActOnPopScope(SourceLocation Loc, Scope *S) {
+ 
+     // Partial translation units that are created in incremental processing must
+     // not clean up the IdResolver because PTUs should take into account the
+-    // declarations that came from previous PTUs.
++    // declarations that came from previous PTUs. Only the translation unit's
++    // scope: a parameter, a local or a label goes out of scope as usual.
+     if (!PP.isIncrementalProcessingEnabled() || getLangOpts().ObjC ||
+-        getLangOpts().CPlusPlus)
++        getLangOpts().CPlusPlus || S->getParent())
+       IdResolver.RemoveDecl(D);
+ 
+     // Warn on it if we are shadowing a declaration.

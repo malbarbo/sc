@@ -1,8 +1,9 @@
 //! The safe API over the linked engine.
-use crate::{sys, Status};
+use crate::{msg, sys, wire, Mode, Status};
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, CString};
 use std::fmt;
+use std::io::{self, Read, Write};
 use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 use std::sync::OnceLock;
@@ -19,6 +20,8 @@ pub enum Error {
     TooLong,
     /// The session could not start: the diagnostics.
     Start(String),
+    /// The protocol's pipes ([`serve`]).
+    Io(io::Error),
 }
 
 impl fmt::Display for Error {
@@ -28,11 +31,18 @@ impl fmt::Display for Error {
             Error::OtherThread => write!(f, "the engine is used from another thread"),
             Error::TooLong => write!(f, "the cell is too long"),
             Error::Start(d) => write!(f, "the session did not start: {d}"),
+            Error::Io(e) => write!(f, "{e}"),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Error {
+        Error::Io(e)
+    }
+}
 
 /// The engine is not thread safe (LLVM is built without threads): only the
 /// first thread that uses it may.
@@ -85,15 +95,6 @@ where
     Ok(unsafe { sys::sc_main(argv.argc(), argv.ptrs.as_mut_ptr()) })
 }
 
-/// What [`Session::cell`] does with the cell (`enum sc_cell_mode`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    /// Compile and link: [`Reply::so`] and [`Reply::syms`].
-    So,
-    /// Parse and generate IR only, as in a replay: [`Reply::syms`].
-    Replay,
-}
-
 /// A REPL session: each cell is compiled on top of the ones before.
 pub struct Session {
     raw: NonNull<sys::sc_session>,
@@ -131,12 +132,8 @@ impl Session {
     pub fn cell(&mut self, src: impl AsRef<[u8]>, mode: Mode) -> Result<Reply<'_>, Error> {
         let src = src.as_ref();
         let len = u32::try_from(src.len()).map_err(|_| Error::TooLong)?;
-        let mode = match mode {
-            Mode::So => sys::sc_cell_mode::SC_CELL_SO,
-            Mode::Replay => sys::sc_cell_mode::SC_CELL_REPLAY,
-        };
         // the engine copies src[0, len)
-        let st = unsafe { sys::sc_session_cell(self.raw.as_ptr(), src.as_ptr().cast(), len, mode as c_int) };
+        let st = unsafe { sys::sc_session_cell(self.raw.as_ptr(), src.as_ptr().cast(), len, mode.to_raw() as c_int) };
         Ok(self.reply(st))
     }
 
@@ -201,6 +198,15 @@ impl<'s> Reply<'s> {
     }
 }
 
+impl Reply<'_> {
+    /// The reply as a message of the protocol.
+    fn write(&self, output: &mut impl Write) -> io::Result<()> {
+        let s = self.session;
+        let parts = [sys::sc_part::SC_DIAGS, sys::sc_part::SC_SO, sys::sc_part::SC_SYMS].map(|p| s.part(p));
+        wire::write(output, msg::SC_MSG_REPLY, self.status.to_raw(), parts)
+    }
+}
+
 impl fmt::Debug for Reply<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Reply")
@@ -209,4 +215,42 @@ impl fmt::Debug for Reply<'_> {
             .field("so", &self.so().len())
             .finish()
     }
+}
+
+/// The child's side of the protocol (`engine/sc.h`, [`crate::Child`]): one
+/// session at a time, until the end of `input`.
+pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error> {
+    claim()?;
+    let mut session: Option<Session> = None;
+    let reply = |output: &mut _, st: Status, diags: &[u8]| wire::write(output, msg::SC_MSG_REPLY, st.to_raw(), [diags, b"", b""]);
+    while let Some(m) = wire::read(input)? {
+        match (m.kind, &mut session) {
+            (msg::SC_MSG_NEW, _) => {
+                session = None;
+                let text = String::from_utf8_lossy(&m.parts[0]);
+                let args: Vec<&str> = text.split_terminator('\0').collect();
+                match Session::new(args) {
+                    Ok(s) => {
+                        session = Some(s);
+                        reply(output, Status::Ok, b"")?
+                    }
+                    Err(e) => reply(output, Status::Error, format!("sc: {e}\n").as_bytes())?,
+                }
+            }
+            (msg::SC_MSG_CELL, Some(s)) => {
+                let Some(mode) = Mode::from_raw(m.status) else {
+                    reply(output, Status::Error, b"sc: unknown cell mode\n")?;
+                    continue;
+                };
+                match s.cell(&m.parts[0], mode) {
+                    Ok(r) => r.write(output)?,
+                    Err(e) => reply(output, Status::Error, format!("sc: {e}\n").as_bytes())?,
+                }
+            }
+            (msg::SC_MSG_UNDO, Some(s)) => s.undo().write(output)?,
+            (msg::SC_MSG_CELL | msg::SC_MSG_UNDO, None) => reply(output, Status::Error, b"sc: no session\n")?,
+            _ => reply(output, Status::Error, b"sc: unknown message\n")?,
+        }
+    }
+    Ok(())
 }

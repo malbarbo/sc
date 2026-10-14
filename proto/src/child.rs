@@ -1,0 +1,217 @@
+//! The REPL's side: the engine in a child process ([`Child`]), and the log
+//! that recreates the session after it is lost ([`Repl`], PLANO-REPL.md §3.6).
+use crate::{msg, sys, wire, Mode, Status};
+use std::fmt;
+use std::io::{self, BufReader, BufWriter};
+use std::path::{Path, PathBuf};
+use std::process::{self, ChildStdin, ChildStdout, Command, Stdio};
+
+/// The answer to a request, owned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Answer {
+    pub status: Status,
+    /// The diagnostics, as clang and wasm-ld print them.
+    pub diags: String,
+    /// The cell as a wasm shared object.
+    pub so: Vec<u8>,
+    /// The names the cell exports.
+    pub syms: Vec<String>,
+}
+
+impl Answer {
+    fn from_msg(m: wire::Msg) -> Answer {
+        let [diags, so, syms] = m.parts;
+        Answer {
+            status: Status::from_raw(m.status),
+            diags: String::from_utf8_lossy(&diags).into_owned(),
+            so,
+            syms: String::from_utf8_lossy(&syms).lines().map(String::from).collect(),
+        }
+    }
+}
+
+/// The engine in a child process (`sc-engine session`). Its stderr is the
+/// parent's: what the engine writes there directly (a crash, "LLVM ERROR").
+/// An `Err` is a child that ended or does not follow the protocol.
+pub struct Child {
+    proc: process::Child,
+    to: BufWriter<ChildStdin>,
+    from: BufReader<ChildStdout>,
+}
+
+impl Child {
+    /// Starts `program args...`, which speaks the protocol on stdin and stdout.
+    pub fn spawn(program: &Path, args: &[&str]) -> io::Result<Child> {
+        let mut proc = Command::new(program).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+        let to = BufWriter::new(proc.stdin.take().unwrap());
+        let from = BufReader::new(proc.stdout.take().unwrap());
+        Ok(Child { proc, to, from })
+    }
+
+    fn call(&mut self, kind: u32, status: u32, part: &[u8]) -> io::Result<Answer> {
+        let res = wire::write(&mut self.to, kind, status, [part, b"", b""]).and_then(|_| wire::read(&mut self.from));
+        match res {
+            Ok(Some(m)) if m.kind == msg::SC_MSG_REPLY => Ok(Answer::from_msg(m)),
+            Ok(_) => Err(self.ended()),
+            Err(e) if matches!(e.kind(), io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof) => Err(self.ended()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The child is gone: how it ended.
+    fn ended(&mut self) -> io::Error {
+        let _ = self.proc.kill();
+        let how = self.proc.wait().map(|s| s.to_string()).unwrap_or_else(|e| e.to_string());
+        io::Error::new(io::ErrorKind::BrokenPipe, format!("the engine ended ({how})"))
+    }
+
+    /// A session (it replaces the one before): see [`crate::sys::sc_session_new`].
+    pub fn new_session<S: AsRef<str>>(&mut self, args: &[S]) -> io::Result<Answer> {
+        let mut part = vec![];
+        for a in args {
+            part.extend(a.as_ref().as_bytes());
+            part.push(0);
+        }
+        self.call(msg::SC_MSG_NEW, 0, &part)
+    }
+
+    pub fn cell(&mut self, src: &[u8], mode: Mode) -> io::Result<Answer> {
+        self.call(msg::SC_MSG_CELL, mode.to_raw(), src)
+    }
+
+    pub fn undo(&mut self) -> io::Result<Answer> {
+        self.call(msg::SC_MSG_UNDO, 0, b"")
+    }
+}
+
+impl Drop for Child {
+    fn drop(&mut self) {
+        // the end of its input ends the child; a lost one is killed
+        if matches!(self.proc.try_wait(), Ok(None)) {
+            let _ = self.proc.kill();
+        }
+        let _ = self.proc.wait();
+    }
+}
+
+/// Why a [`Repl`] cannot go on.
+#[derive(Debug)]
+pub enum ReplError {
+    Io(io::Error),
+    /// The session did not start: the diagnostics.
+    Start(String),
+    /// The replay of the cell at this index of the log did not give what it
+    /// gave the first time: the student must restart the session.
+    Diverged(usize),
+}
+
+impl fmt::Display for ReplError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ReplError::Io(e) => write!(f, "{e}"),
+            ReplError::Start(d) => write!(f, "the session did not start: {d}"),
+            ReplError::Diverged(i) => write!(f, "the replay of cell {} diverged", i + 1),
+        }
+    }
+}
+
+impl std::error::Error for ReplError {}
+
+impl From<io::Error> for ReplError {
+    fn from(e: io::Error) -> ReplError {
+        ReplError::Io(e)
+    }
+}
+
+/// A cell of the log: its source and, if accepted, the names it exported.
+struct Entry {
+    src: Vec<u8>,
+    syms: Option<Vec<String>>,
+}
+
+/// A session in a child, with the log of its cells. When the session is
+/// lost (a crash, a failed link, an undo), a new child replays the log
+/// without the backend, and each accepted cell must export the same names
+/// (§3.6). Failed cells are replayed too, so the session goes through the
+/// same states.
+pub struct Repl {
+    program: PathBuf,
+    child_args: Vec<String>,
+    args: Vec<String>,
+    child: Child,
+    log: Vec<Entry>,
+}
+
+impl Repl {
+    /// A child `program child_args...` with a session of `args`.
+    pub fn new(program: PathBuf, child_args: Vec<String>, args: Vec<String>) -> Result<Repl, ReplError> {
+        let child = Repl::start(&program, &child_args, &args)?;
+        Ok(Repl { program, child_args, args, child, log: vec![] })
+    }
+
+    fn start(program: &Path, child_args: &[String], args: &[String]) -> Result<Child, ReplError> {
+        let ca: Vec<&str> = child_args.iter().map(String::as_str).collect();
+        let mut child = Child::spawn(program, &ca)?;
+        let a = child.new_session(args)?;
+        if a.status != Status::Ok {
+            return Err(ReplError::Start(a.diags));
+        }
+        Ok(child)
+    }
+
+    /// A new child replays the log.
+    fn restart(&mut self) -> Result<(), ReplError> {
+        self.child = Repl::start(&self.program, &self.child_args, &self.args)?;
+        for (i, e) in self.log.iter().enumerate() {
+            let a = self.child.cell(&e.src, Mode::Replay)?;
+            let same = match &e.syms {
+                Some(syms) => a.status == Status::Ok && a.syms == *syms,
+                None => a.status == Status::Error,
+            };
+            if !same {
+                return Err(ReplError::Diverged(i));
+            }
+        }
+        Ok(())
+    }
+
+    /// The cells of the log.
+    pub fn len(&self) -> usize {
+        self.log.len()
+    }
+
+    /// Compiles a cell. [`Status::Lost`]: the cell ended the session (its
+    /// diagnostics, or how the child ended), which is back as before it.
+    pub fn cell(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
+        let a = match self.child.cell(src, Mode::So) {
+            Ok(a) => a,
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => lost(e),
+            Err(e) => return Err(e.into()),
+        };
+        match a.status {
+            Status::Ok => self.log.push(Entry { src: src.to_vec(), syms: Some(a.syms.clone()) }),
+            Status::Error => self.log.push(Entry { src: src.to_vec(), syms: None }),
+            Status::Lost => self.restart()?,
+        }
+        Ok(a)
+    }
+
+    /// Undoes the last accepted cell: [`Status::Ok`] once the session is
+    /// back without it, [`Status::Error`] if there is none.
+    pub fn undo(&mut self) -> Result<Answer, ReplError> {
+        let Some(i) = self.log.iter().rposition(|e| e.syms.is_some()) else {
+            return Ok(Answer { status: Status::Error, diags: "sc: no cell to undo\n".into(), so: vec![], syms: vec![] });
+        };
+        // the generated code cannot be undone in the session (§3.3)
+        self.log.remove(i);
+        self.restart()?;
+        Ok(Answer { status: Status::Ok, diags: String::new(), so: vec![], syms: vec![] })
+    }
+}
+
+fn lost(e: io::Error) -> Answer {
+    Answer { status: Status::Lost, diags: format!("sc: {e}\n"), so: vec![], syms: vec![] }
+}
+
+// Answer::from_msg takes the parts in this order
+const _: () = assert!(sys::sc_part::SC_DIAGS == 0 && sys::sc_part::SC_SO == 1 && sys::sc_part::SC_SYMS == 2);

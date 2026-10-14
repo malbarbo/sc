@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace llvm { class Module; class raw_ostream; }
+namespace clang { class Decl; }
 
 // What a cell left: SC_OK with the object, SC_ERROR (the session is back to
 // before the cell) or SC_LOST (the session must be recreated and replayed).
@@ -19,9 +20,11 @@ enum ScStatus { ScOk = 0, ScError = 1, ScLost = 2 };
 // copy. A definition of a name an earlier cell exports (Known: a promoted
 // copy re-emitted, or, from a PCH, a variable of an earlier cell) becomes a
 // declaration, and the dynamic initializers that wrote only those are
-// emptied. IsDecl tells whether an internal name stands for a declaration.
+// emptied. A declaration of an internal name a later cell defines takes the
+// name of the promoted definition. DeclOf: the declaration a name of the
+// module stands for, if any.
 void scPromoteInternals(llvm::Module &M, const std::set<std::string> &Known,
-                        const std::function<bool(llvm::StringRef)> &IsDecl);
+                        const std::function<const clang::Decl *(llvm::StringRef)> &DeclOf);
 
 // The names a cell's object defines for the cells after it.
 std::vector<std::string> scExports(const llvm::Module &M);

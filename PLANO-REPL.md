@@ -63,10 +63,11 @@ sinais, e compilar dentro do processo do REPL não é seguro:
   - `sc -cc1 ...` e `sc ld ...` são o engine one-shot de hoje, que o corpus
     usa para testar o binário entregue.
 - **O filho.** Ele conversa por pipes com mensagens prefixadas pelo tamanho.
-  Nesse modo o wasmtime nem é iniciado: o `main` do Rust chama
-  `sc_main(argc, argv)`, e o laço do protocolo é escrito em C++
-  (`engine/sc_entry.cpp`). Com a API segura da fase 1 (`sc_proto::Session`),
-  o laço pode ficar em Rust; a escolha fica para a fase 2.
+  Nesse modo o wasmtime nem é iniciado. **Decidido na fase 2: o laço é em
+  Rust**, sobre a API segura (`sc_proto::serve`), e o lado do pai também
+  (`sc_proto::Child` e `Repl`, com o log e o repasse do §3.6). Assim o laço
+  não é escrito duas vezes: o `sc --engine` da fase 6b usa o mesmo código
+  que o `build/sc-engine-full` de hoje.
 - **Nomes no build:**
   - o crate do `loader/` passa a gerar o `sc`, que deixa de se chamar
     `scload`;
@@ -306,9 +307,18 @@ Feito na fase 1 (2026-10-13; ANALISE.md §23). Em relação ao rascunho:
 a libc e os builtins.
 
 - **Entradas do engine:**
-  - o `main` dos executáveis é `engine/sc_entry.cpp`, que chama `sc_main`
-    (`-cc1`/`ld`); o laço do protocolo para `session` entra na fase 2;
+  - o `main` dos executáveis só de C++ é `engine/sc_entry.cpp`, que chama
+    `sc_main` (`-cc1`/`ld`);
+  - o `build/sc-engine-full` (fase 2) é Rust (`proto/src/bin/sc-engine.rs`):
+    `-cc1`/`ld` vão para o `sc_main`, `session` é o filho e `repl` é o
+    teste do lado do pai;
   - no wasm, o `_start` chama o mesmo `sc_main`.
+- **O protocolo** (comentário do `sc.h`): o cabeçalho na ordem de bytes do
+  host e as três partes. `SC_MSG_NEW` leva os argumentos separados por NUL,
+  `SC_MSG_CELL` a fonte (o modo vai em `status`), e cada pedido recebe um
+  `SC_MSG_REPLY` com as partes na ordem do `enum sc_part`. O filho acaba no
+  fim da entrada e escreve o protocolo numa cópia do stdout; o fd 1 passa a
+  ser o stderr, para que nada do engine quebre uma mensagem.
 - **Diagnósticos:**
   - a sessão usa um `TextDiagnosticPrinter` sobre uma string;
   - o que vai direto para o fd 2 (`sc_cut_called`, "LLVM ERROR", lld em
@@ -317,6 +327,15 @@ a libc e os builtins.
     viram o nome que o REPL dá à célula, por um mapeamento no printer (C-M1).
 
 ## 3. A sessão (candidata A)
+
+**Fase 2 (2026-10-14; ANALISE.md §24).** O `split-` (`make test-split`)
+iguala o `pic-` em 1.941 dos 1.947 programas do corpus. Os 6 restantes são
+limites conhecidos (`KNOWN` no `test/split.py`). Para chegar lá, a sessão
+ganhou quatro correções (§3.8) e o loader, as referências para a frente.
+Ainda faltam o §3.4 (o aviso de não usado só na célula que define, o erro
+de "falta `;`", a nota da redefinição), as combinações incrementais no
+`checkinv` (§3.5) e os dois bugs abertos do §3.7 (`return` no topo e
+`#include` depois de uma célula que falhou).
 
 ### 3.1 Montagem (C-B3, C-m1, C-m3)
 
@@ -473,6 +492,37 @@ traz três correções de que a sessão precisa:
 A cópia do `IncrementalParser` (§3.1) é feita a partir do 23.1.3, não do pin
 atual.
 
+### 3.8 O que o `split-` achou (fase 2)
+
+- **C: o escopo de bloco vazava** (bug do upstream). No modo incremental,
+  `Sema::ActOnPopScope` não tira nome nenhum do `IdResolver` em C, de
+  nenhum escopo. A intenção é manter os nomes do topo entre as PTUs, mas
+  parâmetros, locais e rótulos também ficavam. `int f(int f)` dava
+  "redefinition", e um rótulo ou um nome repetido em blocos diferentes
+  dava erro. O `llvm/incremental-c-scopes.patch` limita isso ao escopo do
+  TU, o único sem pai.
+- **Função sem protótipo** (C antes do C23). A chamada declara a função
+  como variádica. No TU inteiro a definição troca essa declaração; na
+  célula seguinte não. O pós-passo dá à declaração o tipo LLVM da definição
+  de uma célula anterior.
+- **`static` usado antes da definição.** A declaração usa o nome promovido
+  (`f.sc`), e a célula que define a função a emite mesmo sem uso nela, como
+  o uso no TU inteiro faria.
+- **`inline` com `always_inline`** (`available_externally`). O backend
+  descarta essa definição, então ela não é exportada. Depois de cada célula
+  ela volta para os adiados do CodeGen, para ser emitida de novo onde outra
+  célula a usar.
+- **Os erros do backend** (`__builtin_return_address`) vão para os
+  diagnósticos da sessão, como no one-shot, e a célula dá `SC_LOST`.
+- **No loader**, uma célula pode usar o que uma célula posterior define,
+  como uma declaração antes da definição num arquivo:
+  - a entrada `GOT.mem` é preenchida quando o símbolo chega;
+  - uma função ainda sem definição ganha na hora uma entrada da tabela, que
+    a definição preenche (o mesmo endereço para todos os módulos);
+  - uma chamada direta passa por um stub em wasm com `call_indirect` para
+    essa entrada. Os trampolins do host acabavam com a pilha nativa numa
+    recursão entre células.
+
 ## 4. Memória e estado global
 
 - **Nativo:** a memória da sessão é do filho. Uma válvula (RSS acima de um
@@ -507,7 +557,7 @@ só entra na fase 4, depois do aprendizado.
 | E+N. exceções e padrões | §1.5 e §1.6 completos, no fluxo one-shot de hoje (antes da sessão, porque mudam os cortes e as bases). Pode começar antes da P, mas o `learn` é refeito depois dela | `make test`, `test-warn`, `test-native` e `checkinv` 0 diferenças contra as bases novas; programas com exceções e `setjmp` rodando pelo `scload` (wasmtime) e no V8; tamanho registrado no ANALISE |
 | 0. spike | as candidatas A e B (§1.3) mínimas sobre o `sc-host-full`; programas de `test/cxx` e `test/samples` cortados automaticamente em uma célula por declaração do topo, ligados e rodados pelo `scload`; uma célula fatal → repasse → célula seguinte | A: saída igual à do `pic-`; símbolos da célula após o repasse iguais aos sem crash. B: saída igual, sem reemitir inicializadores. Escolha registrada no ANALISE.md (tempo por célula, complexidade, memória) |
 | 1. API | `sc.h`, `sc_entry.cpp`, `sc_main`; `sc_api.cpp` (a sessão da API sobre o spike A) e o crate `sc-proto` com a API segura em Rust (`make test-proto`) | `make test`, `test-native`, `test-warn` e `checkinv` sem diferença; `test-proto` verde |
-| 2. sessão | §3 completo no `sc-host-full`; `build/sc-engine session` (laço do protocolo); um modo de teste `build/sc-engine repl <células...>` que grava os `.so` | `split-` (abaixo) igual ao `pic-` no engine sem cortes |
+| 2. sessão | §3 completo no `sc-host-full`; `build/sc-engine-full session` (laço do protocolo, em Rust); um modo de teste `build/sc-engine-full repl <dir> <células...> -- <args>` que grava os `.so` e faz o repasse | `split-` (`make test-split`) igual ao `pic-` no engine sem cortes, fora os `KNOWN` |
 | 3. testes | as fatias `ses-`, `split-`, `seq-`, `crash-` e `mem-` no `corpus.py` (§6) | todas verdes no engine sem cortes |
 | 4. cortes | `make learn` e `learn-native` dirigindo o `build/sc-engine repl` com as fatias novas; `test-warn` delas | `make test` 0 diferenças com as fatias novas; tempo do learn medido; tamanho dentro do orçamento (§5.1) |
 | 5. reactor | `sc.wasm` reactor + `_start`; as exports | antes de trocar, congelar `res/base/summary.json`; depois, o `sc-full.wasm` novo reproduz a base hash por hash (T-B2) |

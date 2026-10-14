@@ -2,8 +2,9 @@
 //! error, the replay, undo, the one-shot engine and the thread rule. The
 //! shared objects run in the loader (build/loader/release/scload).
 //!
-//! One test: the engine stays on the first thread that uses it.
-use sc_proto::{main, Error, Mode, Session, Status};
+//! One test of the engine in this process: it stays on the first thread that
+//! uses it. The REPL's side (Repl) goes through children (sc-engine session).
+use sc_proto::{main, Error, Mode, Repl, Session, Status};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::{fs, io::Write};
@@ -137,4 +138,39 @@ fn session() {
     // the engine stays on this thread
     let other = std::thread::spawn(|| matches!(Session::new(args(false)), Err(Error::OtherThread)));
     assert!(other.join().unwrap());
+}
+
+#[test]
+fn repl() {
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(false)).unwrap();
+    let mut sos = vec![];
+    fn cell(r: &mut Repl, sos: &mut Vec<Vec<u8>>, src: &str) -> sc_proto::Answer {
+        let a = r.cell(src.as_bytes()).unwrap();
+        if a.status == Status::Ok {
+            sos.push(a.so.clone());
+        }
+        a
+    }
+    for src in &C[..3] {
+        assert_eq!(cell(&mut r, &mut sos, src).status, Status::Ok);
+    }
+    assert_eq!(cell(&mut r, &mut sos, "int y = ;").status, Status::Error);
+    // a crash ends the child; the log is replayed in a new one
+    let a = cell(&mut r, &mut sos, "#pragma clang __debug crash");
+    assert_eq!(a.status, Status::Lost);
+    assert!(a.diags.contains("the engine ended"), "{a:?}");
+    assert_eq!(r.len(), 4);
+    // undo replays the log without the last accepted cell
+    assert_eq!(cell(&mut r, &mut sos, "int bad(void) { return 1; }").status, Status::Ok);
+    assert_eq!(r.undo().unwrap().status, Status::Ok);
+    sos.pop();
+    assert_eq!(r.len(), 4);
+    // the static of the first child is the one of the cells after the crash
+    assert_eq!(cell(&mut r, &mut sos, C[4]).status, Status::Ok);
+    assert_eq!(run("repl", &sos), "2\n");
+    drop(r);
+
+    // nothing to undo
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(false)).unwrap();
+    assert_eq!(r.undo().unwrap().status, Status::Error);
 }

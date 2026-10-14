@@ -1,8 +1,13 @@
 //! The engine's API (`engine/sc.h`, PLANO-REPL.md §2) for Rust.
 //!
 //! [`sys`] is what bindgen generates from the header: the protocol's types
-//! and the raw functions. With the `engine` feature the engine is linked, and
-//! [`Session`] and [`main`] are a safe API over the raw functions:
+//! and the raw functions. [`wire`] reads and writes the protocol's messages,
+//! and [`Child`] and [`Repl`] are the REPL's side of it: the engine in a
+//! child process and the log that replays a lost session.
+//!
+//! With the `engine` feature the engine is linked, and [`Session`] and
+//! [`main`] are a safe API over the raw functions, and [`serve`] the child's
+//! side of the protocol:
 //!
 //! - a [`Reply`] borrows its session, so the engine's buffers it points to
 //!   cannot be used after the next call, which replaces them;
@@ -54,6 +59,36 @@ impl Status {
         }
     }
 }
+
+/// What a cell does (`enum sc_cell_mode`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Compile and link: the shared object and the exported names.
+    So,
+    /// Parse and generate IR only, as in a replay: the exported names.
+    Replay,
+}
+
+impl Mode {
+    pub fn from_raw(m: u32) -> Option<Mode> {
+        match m {
+            sys::sc_cell_mode::SC_CELL_SO => Some(Mode::So),
+            sys::sc_cell_mode::SC_CELL_REPLAY => Some(Mode::Replay),
+            _ => None,
+        }
+    }
+
+    pub fn to_raw(self) -> u32 {
+        match self {
+            Mode::So => sys::sc_cell_mode::SC_CELL_SO,
+            Mode::Replay => sys::sc_cell_mode::SC_CELL_REPLAY,
+        }
+    }
+}
+
+pub mod wire;
+mod child;
+pub use child::{Answer, Child, Repl, ReplError};
 
 #[cfg(feature = "engine")]
 mod engine;

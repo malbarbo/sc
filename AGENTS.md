@@ -20,6 +20,7 @@ make test-native # the corpus on build/sc against the uncut native engine
 make learn-native # after make learn: what only the native engine calls
 make spike       # PLANO-REPL.md phase 0: REPL cells through build/sc-spike
 make test-proto  # proto/, the Rust API over engine/sc.h, after changing either
+make test-split  # the corpus as REPL cells, after changing the session or the loader
 ```
 
 The cuts keep the code of every warning: `make learn` runs the corpus with

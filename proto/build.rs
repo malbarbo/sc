@@ -20,8 +20,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SC_LINK_ARGS");
     let file = env::var("SC_LINK_ARGS").expect("SC_LINK_ARGS: the file of scripts/link.py --emit-link");
     println!("cargo:rerun-if-changed={file}");
-    // rustc-link-arg reaches only this crate's tests and examples; a program
-    // that depends on the crate passes DEP_SC_LINK_ARGS on in its build.rs
+    // rustc-link-arg reaches only this crate's own programs, tests and
+    // examples; a program in another crate passes DEP_SC_LINK_ARGS on in its
+    // build.rs
     println!("cargo:link_args={file}");
     for arg in fs::read_to_string(&file).unwrap().lines().chain(["-lstdc++"]) {
         println!("cargo:rustc-link-arg={arg}");

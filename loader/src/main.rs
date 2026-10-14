@@ -16,13 +16,20 @@
 //! All modules share one memory, one function table and the stack pointer.
 //! Memory for the first group comes from a bump allocator below the heap;
 //! for the entries, from libc's `aligned_alloc`. A function import is bound
-//! to the definition visible when its group is loaded, or to a host
-//! trampoline when there is none yet (a library that calls one of its own
-//! preemptible symbols, a weak undefined symbol). GOT imports are mutable
-//! globals set once the group is loaded. An exception tag is one for all
+//! to the definition visible when its group is loaded, or, when there is
+//! none yet (a library that calls one of its own preemptible symbols, a weak
+//! undefined symbol, a function a later entry defines), to a stub that calls
+//! through the symbol's table slot. GOT imports are mutable globals set once
+//! the group is loaded. An exception tag is one for all
 //! modules: the first module that defines it, or the loader when a module
 //! imports it first, so a C++ exception or a longjmp crosses modules. WASI calls go through a shim module
 //! that exports the memory, because wasmtime-wasi reads it from the caller.
+//!
+//! An entry may refer to what a later entry defines, as a declaration before
+//! its definition in one file: a GOT.mem import is set when the symbol comes,
+//! and a GOT.func import or a stub gets a table slot at once, which the
+//! function fills when it comes (the same slot for all modules). Until then
+//! a GOT.mem import is 0 and a call through the slot traps.
 
 use wasmtime::error::Context;
 use wasmtime::{bail, format_err, Result};
@@ -46,7 +53,6 @@ enum Sym {
 struct Host {
     wasi: WasiP1Ctx,
     syms: HashMap<String, (Sym, Option<u32>)>, // the symbol and its table slot
-    tramps: Vec<(String, Option<Func>)>,        // the target of each trampoline
 }
 
 /// What the `dylink.0` section says.
@@ -78,6 +84,8 @@ struct Loader {
     libdirs: Vec<PathBuf>,
     loaded: HashSet<String>,
     bump: Option<u32>, // the next free address, until the heap is set up
+    later: Vec<(String, Global)>, // GOT.mem imports of symbols not defined yet
+    slots: HashMap<String, u32>,  // table slots of functions not defined yet
 }
 
 fn dylink(bytes: &[u8]) -> Result<Dylink> {
@@ -124,7 +132,7 @@ impl Loader {
             config.cache(Some(c));
         }
         let engine = Engine::new(&config)?;
-        let mut store = Store::new(&engine, Host { wasi, syms: HashMap::new(), tramps: Vec::new() });
+        let mut store = Store::new(&engine, Host { wasi, syms: HashMap::new() });
         let memory = Memory::new(&mut store, MemoryType::new(stack.div_ceil(PAGE), None))?;
         let table = Table::new(&mut store, TableType::new(RefType::FUNCREF, 1, None), Ref::Func(None))?;
         let sp = Global::new(&mut store, GlobalType::new(ValType::I32, Mutability::Var), Val::I32(stack as i32))?;
@@ -132,7 +140,7 @@ impl Loader {
         p1::add_to_linker_sync(&mut linker, |h: &mut Host| &mut h.wasi)?;
         linker.define(&mut store, "env", "memory", memory)?;
         let mut l = Loader { engine, store, linker, memory, table, sp, wasi: HashMap::new(), libdirs,
-                             loaded: HashSet::new(), bump: Some(stack) };
+                             loaded: HashSet::new(), bump: Some(stack), later: Vec::new(), slots: HashMap::new() };
         l.define("__stack_low", Sym::Data(16), false);
         l.define("__stack_high", Sym::Data(stack), false);
         Ok(l)
@@ -240,20 +248,53 @@ impl Loader {
         Ok(())
     }
 
-    fn trampoline(&mut self, name: &str, ft: FuncType) -> Func {
-        let idx = self.store.data().tramps.len();
-        self.store.data_mut().tramps.push((name.to_string(), None));
-        Func::new(&mut self.store, ft, move |mut caller, params, results| {
-            let h = caller.data();
-            let f = match h.tramps[idx] {
-                (_, Some(f)) => f,
-                (ref n, None) => match h.syms.get(n) {
-                    Some((Sym::Func(f), _)) => *f,
-                    _ => bail!("undefined symbol: {n}"),
-                },
-            };
-            f.call(&mut caller, params, results)
-        })
+    /// The table slot reserved for a function not defined yet.
+    fn reserve_slot(&mut self, name: &str, ft: Option<&FuncType>) -> Result<u32> {
+        if let Some(&s) = self.slots.get(name) {
+            return Ok(s);
+        }
+        // until the function comes, a call says which one is missing
+        let init = ft.map(|ft| {
+            let n = name.to_string();
+            Func::new(&mut self.store, ft.clone(), move |_, _, _| bail!("undefined symbol: {n}"))
+        });
+        let s = self.table.grow(&mut self.store, 1, Ref::Func(init))? as u32;
+        self.slots.insert(name.to_string(), s);
+        Ok(s)
+    }
+
+    /// Stubs for the function imports of `module` with no definition yet:
+    /// each calls through the symbol's table slot.
+    fn stubs(&mut self, module: &Module) -> Result<HashMap<String, Func>> {
+        let need: Vec<(String, FuncType)> = module.imports()
+            .filter_map(|i| match (i.module(), i.ty()) {
+                ("env", ExternType::Func(ft)) if !matches!(self.store.data().syms.get(i.name()), Some((Sym::Func(_), _))) =>
+                    Some((i.name().to_string(), ft)),
+                _ => None,
+            })
+            .collect();
+        if need.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ty = |t: ValType| match t {
+            ValType::I32 => "i32", ValType::I64 => "i64", ValType::F32 => "f32", ValType::F64 => "f64", _ => "externref",
+        };
+        let mut wat = String::from("(module (import \"env\" \"__indirect_function_table\" (table 0 funcref))\n");
+        for (k, (n, ft)) in need.iter().enumerate() {
+            let slot = self.reserve_slot(n, Some(ft))?;
+            let sig = format!("(param {}) (result {})", ft.params().map(ty).collect::<Vec<_>>().join(" "),
+                              ft.results().map(ty).collect::<Vec<_>>().join(" "));
+            let args: String = (0..ft.params().len()).map(|i| format!("local.get {i} ")).collect();
+            wat += &format!("(type $t{k} (func {sig})) (func (export \"s{k}\") (type $t{k}) {args} i32.const {slot} call_indirect (type $t{k}))\n");
+        }
+        wat += ")";
+        let m = Module::new(&self.engine, &wat)?;
+        let inst = Instance::new(&mut self.store, &m, &[self.table.into()])?;
+        let mut out = HashMap::new();
+        for (k, (n, _)) in need.into_iter().enumerate() {
+            out.insert(n, inst.get_func(&mut self.store, &format!("s{k}")).unwrap());
+        }
+        Ok(out)
     }
 
     /// The table slot of a function symbol, the same for every module.
@@ -268,6 +309,26 @@ impl Loader {
         Ok(s)
     }
 
+    /// What the modules before referred to and the group just loaded defines.
+    fn forward(&mut self) -> Result<()> {
+        let syms = &self.store.data().syms;
+        let slots: Vec<(String, u32, Func)> = self.slots.iter()
+            .filter_map(|(n, &s)| match syms.get(n) { Some((Sym::Func(f), None)) => Some((n.clone(), s, *f)), _ => None })
+            .collect();
+        for (n, s, f) in slots {
+            self.table.set(&mut self.store, s as u64, Ref::Func(Some(f)))?;
+            self.store.data_mut().syms.get_mut(&n).unwrap().1 = Some(s);
+            self.slots.remove(&n);
+        }
+        for (n, g) in std::mem::take(&mut self.later) {
+            match self.store.data().syms.get(&n).copied() {
+                Some((Sym::Data(a), _)) => g.set(&mut self.store, Val::I32(a as i32))?,
+                _ => self.later.push((n, g)),
+            }
+        }
+        Ok(())
+    }
+
     /// Loads `path` and what it needs. `shadow`: its definitions replace the
     /// older ones (a REPL entry); otherwise the first definition wins.
     fn load(&mut self, path: &Path, shadow: bool) -> Result<()> {
@@ -276,7 +337,6 @@ impl Loader {
         self.collect(path, &name, &mut HashSet::new(), &mut group)?;
         self.wasi_shim(&group)?;
         let mut got: Vec<(String, Global, bool, bool)> = Vec::new(); // name, global, func?, weak?
-        let tramp0 = self.store.data().tramps.len();
         let mut insts = Vec::new();
         for p in &group {
             let shadow = shadow && p.name == name;
@@ -285,6 +345,7 @@ impl Loader {
             let table_base = align(size, 1 << p.info.table_align);
             self.table.grow(&mut self.store, (table_base + p.info.table_size - size) as u64, Ref::Func(None))?;
             let konst = GlobalType::new(ValType::I32, Mutability::Const);
+            let stubs = self.stubs(&p.module)?;
             let mut imports: Vec<Extern> = Vec::new();
             for i in p.module.imports() {
                 let (m, n) = (i.module(), i.name());
@@ -301,9 +362,9 @@ impl Loader {
                         g.into()
                     }
                     ("wasi_snapshot_preview1", _, _) => self.wasi[n].into(),
-                    ("env", _, ExternType::Func(ft)) => match self.store.data().syms.get(n) {
+                    ("env", _, ExternType::Func(_)) => match self.store.data().syms.get(n) {
                         Some((Sym::Func(f), _)) => (*f).into(),
-                        _ => self.trampoline(n, ft).into(),
+                        _ => stubs[n].into(),
                     },
                     ("env", _, ExternType::Tag(tt)) => match self.store.data().syms.get(n) {
                         Some((Sym::Tag(t), _)) => (*t).into(),
@@ -338,6 +399,7 @@ impl Loader {
             }
             insts.push(inst);
         }
+        self.forward()?;
         if let Some(b) = self.bump.take() {
             // the heap starts after the first group and has the rest of its page
             let base = align(b, 16);
@@ -352,15 +414,13 @@ impl Loader {
                 Some((Sym::Func(_), _)) if func => self.slot(&n)?,
                 Some(_) => bail!("{n}: GOT.{} of a {}", if func { "func" } else { "mem" }, if func { "data" } else { "function" }),
                 None if weak => 0,
-                None => bail!("undefined symbol: {n}"),
+                None if func => self.reserve_slot(&n, None)?,
+                None => {
+                    self.later.push((n.clone(), g));
+                    0
+                }
             };
             g.set(&mut self.store, Val::I32(v as i32))?;
-        }
-        let h = self.store.data_mut();
-        for k in tramp0..h.tramps.len() {
-            if let Some((Sym::Func(f), _)) = h.syms.get(&h.tramps[k].0) {
-                h.tramps[k].1 = Some(*f);
-            }
         }
         for (p, inst) in group.iter().zip(insts) {
             self.loaded.insert(p.name.clone());

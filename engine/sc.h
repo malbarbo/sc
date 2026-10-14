@@ -52,7 +52,16 @@ unsigned sc_result_len(sc_session *s, int part);
 /* The one-shot engine: sc -cc1 ..., sc ld ... (argv[0] is the program). */
 int sc_main(int argc, const char **argv);
 
-/* The protocol of the native child, the header of each message on the pipes. */
+/* The protocol of the native child (sc-engine session, proto/): each message
+   is the header, in the host's byte order, then len[0], len[1] and len[2]
+   bytes. The child answers each request with one SC_MSG_REPLY: its status,
+   and the parts in the order of enum sc_part. It ends at the end of its
+   input.
+     SC_MSG_NEW   a session (it replaces the one before): the arguments of
+                  sc_session_new, each followed by a NUL, in the first part
+     SC_MSG_CELL  sc_session_cell: the source in the first part, the mode in
+                  status
+     SC_MSG_UNDO  sc_session_undo */
 enum sc_msg { SC_MSG_NEW = 1, SC_MSG_CELL = 2, SC_MSG_UNDO = 3, SC_MSG_REPLY = 4 };
 struct sc_msg_header {
   unsigned kind, status, len[3];

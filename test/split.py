@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Phase 2 of PLANO-REPL.md: the programs of the corpus as REPL cells, through
+build/sc-engine-full (the uncut native engine with the protocol's loop).
+
+usage: split.py [<outdir>]   (build/res/split)
+ONLY=<name>,... runs only those programs; JOBS sets the parallelism (48)
+
+Each program the corpus runs (test/samples, c-testsuite, gcc torture
+execute/, test/cxx, test/mod) is cut into one cell per top-level declaration
+(test/spike.py), the cells go through `sc-engine-full repl`, which compiles
+them in one child session and links each as a shared object, and the loader
+runs the shared objects. The output must be the one of the program compiled
+whole as a shared object (pic-, in the native base, build/res/native-base);
+a program that does not compile whole must not compile as cells either.
+KNOWN lists the programs that cannot, with the reason.
+
+Writes <outdir>/<name>.txt (the cells' statuses and diagnostics, then the
+run) and <outdir>/report.txt, and lists the programs that differ.
+"""
+import glob, os, re, shutil, subprocess, sys
+from concurrent.futures import ThreadPoolExecutor
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from corpuslib import norm_hash
+from spike import split
+
+R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+B = f'{R}/build'
+ENG = f'{B}/sc-engine-full'
+SR = f'{B}/sysroot'
+RES = f'{B}/wasi-sdk-29.0-x86_64-linux/lib/clang/21'
+LIB = f'{SR}/lib/wasm32-wasip1'
+SCLOAD = f'{B}/loader/release/scload'
+BASE = f'{B}/res/native-base'
+OUT = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else f'{B}/res/split')
+SKIP = ('warn-date-time', 'SOURCE_DATE_EPOCH', 'pr133574', 'builtin_redef')  # as corpus.py
+G = 'gcc-ts_gcc_testsuite_gcc.c-torture_execute_'
+# where cells cannot be the program (ANALISE.md §24)
+KNOWN = {
+    'ct-00152': '#line in one cell does not reach the next: each cell is a file',
+    G + '20050215-1': 'a directive inside a declaration: the splitter cuts the declaration',
+    G + 'alias-2': 'an alias names a definition of an earlier cell',
+    G + 'alias-4': 'an alias names a definition of an earlier cell',
+    G + 'pr98304-2': "#include \"../../gcc.dg/...\": the -I of the cells finds it, the whole compile does not",
+    G + '20090711-1': "div, with another signature than libc's: the next cell links against libc.so's",
+}
+
+
+def flags(cxx, gnu17, mod):
+    fl = subprocess.check_output([f'{R}/test/corpus.py', '--flags'] + ['c++'] * cxx + ['gnu17'] * gnu17 + ['pic'] +
+                                 ['mod'] * mod, text=True).split()
+    fl = [x.replace('/sysroot', SR).replace('/res/', RES + '/').replace('/m/std.pcm', f'{OUT}/std.pcm') for x in fl]
+    return fl + ['-x', 'c++' if cxx else 'c', '--', f'-L{LIB}'] + ['-lc++', '-lc++abi'] * cxx + [
+        '-lsetjmp', '-lc', f'{RES}/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a']
+
+
+def programs():
+    """(path, name of its pic- result) of each program the corpus runs"""
+    ps = [(p, os.path.splitext(os.path.basename(p))[0]) for p in sorted(glob.glob(f'{R}/test/samples/*.c'))]
+    ps += [(p, 'ct-' + os.path.basename(p)[:-2]) for p in sorted(glob.glob(f'{B}/c-testsuite/tests/single-exec/*.c'))]
+    ps += [(p, os.path.splitext(os.path.relpath(p, B))[0].replace('/', '_'))
+           for p in sorted(glob.glob(f'{B}/gcc-ts/gcc/testsuite/gcc.c-torture/execute/*.c'))]
+    ps += [(p, 'cxx-' + os.path.basename(p)[:-4]) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp'))]
+    ps += [(p, 'mod-' + os.path.basename(p)[:-4]) for p in sorted(glob.glob(f'{R}/test/mod/*.cpp'))]
+    return [(p, n[-200:]) for p, n in ps if not p.endswith(tuple(x + '.c' for x in SKIP))]
+
+
+def expected(name):
+    """the run of the program compiled whole (pic-), None if it does not compile"""
+    txt = open(f'{BASE}/pic-{name}.txt').read()
+    m = re.search(r'^so [0-9a-f]{32}\n', txt, re.M)
+    return txt[m.end():] if m else None
+
+
+def run(sos):
+    try:
+        x = subprocess.run([SCLOAD, '-L', LIB] + sos, input=b'linha1\nlinha2\n', capture_output=True, timeout=20)
+    except subprocess.TimeoutExpired as e:
+        x = subprocess.CompletedProcess(e.cmd, 'timeout', e.stdout or b'', e.stderr or b'')
+    return x.stdout.decode(errors='replace') + x.stderr.decode(errors='replace') + f'run exit={x.returncode}\n'
+
+
+def one(prog):
+    p, name = prog
+    cxx, mod = p.endswith('.cpp'), '/test/mod/' in p
+    gnu17 = p.startswith((f'{B}/c-testsuite/', f'{B}/gcc-ts/'))
+    d = f'{OUT}/{name}'
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    ext = os.path.splitext(p)[1]
+    files = []
+    for i, c in enumerate(split(open(p, errors='surrogateescape').read())):
+        f = f'{d}/c{i + 1:03}{ext}'
+        open(f, 'w', errors='surrogateescape').write(c)
+        files.append(f)
+    try:
+        # -I: the program's own includes, which the cells' directory does not have
+        r = subprocess.run([ENG, 'repl', d] + files + ['--', '-I', os.path.dirname(p)] + flags(cxx, gnu17, mod),
+                           capture_output=True, timeout=300)
+        txt = r.stdout.decode(errors='replace') + r.stderr.decode(errors='replace') + f'repl exit={r.returncode}\n'
+        ok = r.returncode == 0 and not re.search(r'^== \S+ (error|lost)$', txt, re.M)
+    except subprocess.TimeoutExpired:
+        txt, ok = 'repl TIMEOUT\n', False
+    exp = expected(name)
+    if ok:
+        out = run(sorted(glob.glob(f'{d}/*.so')))
+        txt += out
+        same = exp is not None and norm_hash(out) == norm_hash(exp)
+    else:
+        same = exp is None
+    txt = txt.replace(OUT + '/', 'OUT/')
+    open(f'{OUT}/{name}.txt', 'w').write(txt)
+    shutil.rmtree(d)
+    return name, len(files), same, ok, exp is not None
+
+
+def main():
+    os.makedirs(OUT, exist_ok=True)
+    progs = programs()
+    if os.environ.get('ONLY'):
+        only = os.environ['ONLY'].split(',')
+        progs = [x for x in progs if x[1] in only]
+    if any('/test/mod/' in p for p, _ in progs):  # the std module, as corpus.py builds it
+        src = [l for l in open(f'{SR}/share/libc++/v1/std.cppm') if 'csignal' not in l]
+        open(f'{OUT}/std.cppm', 'w').writelines(src)
+        fl = [{'-emit-obj': '-emit-module-interface'}.get(x, x) for x in flags(True, False, False)]
+        subprocess.check_call([ENG, '-cc1'] + fl[:fl.index('-x')] + ['-fmodules-reduced-bmi', '-I', f'{SR}/share/libc++/v1',
+                               '-Wno-reserved-module-identifier', '-o', f'{OUT}/std.pcm', f'{OUT}/std.cppm'])
+    with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
+        rs = list(ex.map(one, progs))
+    bad = [r for r in rs if not r[2] and r[0] not in KNOWN]
+    lines = [f'{n:60} {c:4} cells  {"ok" if s else "known" if n in KNOWN else "DIFF"}  {"" if ok else "cells fail"}'
+             f'{"" if e else " (whole fails)"}' for n, c, s, ok, e in rs]
+    open(f'{OUT}/report.txt', 'w').write('\n'.join(lines) + '\n')
+    for n, c, s, ok, e in bad:
+        print('DIFF', n, '' if ok else '(cells fail)')
+    print(f'{len(rs)} programs, {sum(r[1] for r in rs)} cells, {len(bad)} differ from pic-'
+          f' ({sum(not r[2] and r[0] in KNOWN for r in rs)} known)')
+    sys.exit(1 if bad else 0)
+
+
+if __name__ == '__main__':
+    main()

@@ -50,6 +50,12 @@ def flags(cxx, mod):
 
 # --- one cell per top-level declaration
 
+# a struct, union or enum with attributes, whose '{' is not a function body
+TAG = re.compile(r'\s*(typedef\s+)?(struct|union|enum)\b(\s*__attribute__\s*\(\(.*?\)\))*\s*\w*\s*\{$', re.S)
+# the head of a K&R definition, up to a declaration of its parameters
+KR = re.compile(r'\s*[\w\s*]*?\b\w+\s*\(\s*(?!void\s*\))\w+(\s*,\s*\w+)*\s*\)\s*(?!__attribute__|asm\b|__asm)[A-Za-z_]')
+
+
 def split(src):
     """the top-level declarations of a C or C++ source, each with the
     comments and blank lines before it"""
@@ -116,8 +122,8 @@ def split(src):
             depth -= 1
         elif c == '{':
             if depth == 0:
-                head = re.sub(r'//.*|/\*.*?\*/', '', cur, flags=re.S)
-                body = ')' in head or re.match(r'\s*(namespace\b|extern\s*"C")', head) is not None
+                head = re.sub(r'//[^\n]*|/\*.*?\*/', '', cur, flags=re.S)
+                body = ')' in head and not re.match(TAG, head) or re.match(r'\s*(namespace\b|extern\s*"C")', head) is not None
             depth += 1
         elif c == '}':
             depth -= 1
@@ -129,13 +135,13 @@ def split(src):
                     cur += src[i:k + 1]
                     i = k + 1
                 end()
-        elif c == ';' and depth == 0:
+        elif c == ';' and depth == 0 and not re.match(KR, re.sub(r'//[^\n]*|/\*.*?\*/', '', cur, flags=re.S)):
             end()
     cells.append(cur)
     # comments and blank lines go with the next declaration
     out, pend = [], ''
     for c in cells:
-        if re.sub(r'//.*|/\*.*?\*/', '', c, flags=re.S).strip() == '':
+        if re.sub(r'//[^\n]*|/\*.*?\*/', '', c, flags=re.S).strip() == '':
             pend += c
         else:
             out.append(pend + c)

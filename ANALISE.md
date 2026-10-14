@@ -1312,9 +1312,10 @@ occur zero or one times". No one-shot ele roda uma vez só, como antes.
     mesmos objetos e arquivos do engine, sem o `sc_entry.o`, mais os stubs e
     as flags de link (`-fuse-ld=lld`, `--gc-sections`, `--icf=safe`);
   - o `build.rs` soma `-lstdc++`;
-  - o `rustc-link-arg` só alcança os testes e exemplos do próprio crate.
-    Para o binário `sc` da fase 6b, o crate declara `links = "sc"` e passa o
-    arquivo adiante como `DEP_SC_LINK_ARGS`.
+  - o `rustc-link-arg` só alcança os programas, testes e exemplos do
+    próprio crate. Para o binário `sc` da fase 6b, que fica em outro crate,
+    o crate declara `links = "sc"` e passa o arquivo adiante como
+    `DEP_SC_LINK_ARGS`.
 - **API segura:**
   - `Session::new`, `cell` e `undo` devolvem um `Reply`, que empresta a
     sessão. Os buffers do engine que ele expõe (`diags`, `so`, `syms`) não
@@ -1345,3 +1346,132 @@ occur zero or one times". No one-shot ele roda uma vez só, como antes.
 - `make spike`: igual ao §22 (A 29/29, B 26/29, repasse 23/23).
 - Tamanho: o `sc.wasm` fica com 5.552.196 bytes zstd (−775 bytes) e o
   `build/sc` com 7,80 MB zstd. A sessão ainda não está neles.
+
+## 24. Fase 2 do REPL: o laço do filho e o corpus em células
+
+Data: 2026-10-14.
+
+**O laço é em Rust** (decisão do §1.1 do plano). O `sc-proto` ganhou:
+
+- `wire`: o cabeçalho do `sc.h` e as três partes, na ordem de bytes do host;
+- `serve`, com a feature `engine`: o lado do filho, uma sessão por vez, até
+  o fim da entrada;
+- `Child`: o lado do pai. O filho que morre (crash, `SIGILL` do
+  `__debug crash`) vira um erro de E/S, com o status de saída;
+- `Repl`: o log das células, inclusive as que falharam. Quando a sessão se
+  perde, um filho novo repassa o log sem backend, e cada célula aceita tem
+  que exportar os mesmos nomes (§3.6 do plano). O `undo` tira do log a
+  última célula aceita e repassa o resto.
+
+O `build/sc-engine-full` (`proto/src/bin/sc-engine.rs`) é o engine sem cortes
+com esse laço: `-cc1`/`ld` vão para o `sc_main`, `session` é o filho e
+`repl <dir> <células...> -- <args>` é um teste do lado do pai, que grava o
+`.so` de cada célula aceita. O filho escreve o protocolo numa cópia do
+stdout e põe o stderr no fd 1, para que nada do engine quebre uma mensagem.
+Oito células com um crash e um `undo` (três filhos, dois repasses) levam
+0,12 s.
+
+**O `split-` (`test/split.py`, `make test-split`).** Os 1.947 programas que
+o corpus executa (samples, c-testsuite, gcc torture `execute/`, `test/cxx` e
+`test/mod`) são cortados em células, uma por declaração do topo (o corte do
+`spike.py`). As células passam pelo `sc-engine-full repl`, e o `scload` roda
+os `.so`. A saída tem que ser a do programa inteiro (`pic-` da base nativa).
+São 10.541 células, e a rodada leva 29 s em 48 núcleos.
+
+As rodadas, com as diferenças que sobraram depois de cada correção:
+
+| rodada | correção | diferenças |
+| --- | --- | --- |
+| 1 | — | 213 (91 com célula que falha) |
+| 2 | o corte (definições K&R, `typedef struct __attribute__((...)) {`, `-I` do diretório do programa) e o escopo de bloco em C | 135 |
+| 3 | o tipo das declarações de funções sem protótipo | 23 |
+| 4 | no loader, o GOT de um símbolo que uma célula posterior define; o `static` usado antes da célula que o define; o `always_inline` | 13 |
+| 5 | o tratador de diagnósticos do backend; os stubs do loader; um `//` dentro de `/* */` no corte | 7, dos quais 6 conhecidos |
+| 6 | as bases refeitas com o loader novo | só os 6 conhecidos |
+
+**O escopo de bloco em C** é um bug do upstream. Em
+`Sema::ActOnPopScope`, com o modo incremental em C, nenhum nome sai do
+`IdResolver`. O comentário diz que é para os nomes do topo valerem nas PTUs
+seguintes, mas a condição vale para todo escopo, então parâmetros, locais e
+rótulos ficam visíveis depois do bloco. `int f(int f) { return f; }` numa
+sessão dava "redefinition of 'f' as different kind of symbol". O patch
+acrescenta `|| S->getParent()`, para que só o escopo do TU guarde os nomes.
+Um corte não resolve isso. Fora do modo incremental a condição não muda, e os
+engines one-shot dão o mesmo resultado.
+
+**O pós-passo da sessão** (`sc_session.cpp`) ganhou três coisas:
+
+- **Declarações retipadas.** A sessão guarda o tipo LLVM de cada função que
+  uma célula exporta (as células dividem o `LLVMContext`). Uma declaração
+  com outro tipo é refeita com o da definição, e o `FixFunctionBitcasts` do
+  backend ajusta as chamadas, como no TU inteiro.
+- **`static` antes da definição.** A declaração de um nome interno vira o
+  nome promovido (`f.sc`). A sessão guarda esses nomes ainda sem definição.
+  Antes de a célula que os define fechar o módulo, ela pede ao CodeGen o
+  endereço deles, e isso os tira dos adiados. Sem isso, o CodeGen só os
+  emitiria se a própria célula os usasse.
+- **`available_externally`.** O `scExports` não lista mais essas definições:
+  o backend as descarta, então elas não são exportadas. Uma célula
+  posterior que precisasse do corpo para inlinar ganhava só uma
+  declaração. Depois de cada célula elas voltam aos adiados
+  (`HandleTopLevelDecl`), como o CodeGen já faz em modo incremental para as
+  internas e as `linkonce` (`addEmittedDeferredDecl`).
+
+**O tratador de diagnósticos.** No one-shot, o `BackendConsumer` do
+`CodeGenAction` instala um tratador no `LLVMContext`. A sessão não tem
+`CodeGenAction`, e o tratador padrão do LLVM imprimia o erro do backend sem
+que o clang o visse: a célula dava `SC_OK` com um objeto ruim. Agora erros e
+avisos do backend vão para os diagnósticos da sessão
+(`err_fe_backend_unsupported`), e a célula dá `SC_LOST`, porque o código já
+foi gerado.
+
+**O loader** (`loader/src/main.rs`):
+
+- **Referências para a frente:**
+  - um `GOT.mem` sem definição fica pendente e é preenchido quando o
+    símbolo chega;
+  - um `GOT.func` ganha na hora uma entrada da tabela, preenchida quando a
+    função chega. O ponteiro é o mesmo para todos os módulos.
+- **Chamadas para uma função ainda sem definição.** Antes, iam por um
+  trampolim do host (`Func::new`). Cada chamada passava pela pilha nativa,
+  e uma recursão de 500 níveis entre células (`nestfunc-4`) estourava a
+  pilha. Agora vão por stubs em wasm, um `call_indirect` para a mesma
+  entrada da tabela. Antes de a definição chegar, a entrada tem uma função
+  do host que dá "undefined symbol: X".
+- Isso também muda o `pic-` e o `repl-` de um programa inteiro com um
+  símbolo indefinido: o erro passa do carregamento para a primeira chamada
+  (`bcp-1`). As bases foram refeitas, e a diferença entre as bases antigas
+  e as novas está abaixo.
+
+**Limites conhecidos** (`KNOWN` no `split.py`; 6 programas):
+
+- um `#line` não passa de uma célula para a seguinte;
+- uma diretiva no meio de uma declaração (o corte a parte);
+- um `alias` para um nome de outra célula;
+- um `#include "../../gcc.dg/..."` que o `-I` das células acha e a
+  compilação inteira (no bwrap) não;
+- **uma função com o nome de uma da libc e outra assinatura** (`div` em
+  `20090711-1`). O link da célula seguinte resolve o nome pela `libc.so` e
+  dá "function signature mismatch". O loader já esconde a da libc atrás da
+  célula. Corrigir no link exigiria passar os `.so` das células anteriores
+  ao wasm-ld, e eles não existem num filho que acabou de repassar o log.
+  Fica para depois.
+
+Avisos que as células dão e o TU inteiro não, como "unused function" a
+cada célula e "has internal linkage but is not defined" para um `static`
+usado antes da definição, são o §3.4 do plano e ainda não foram filtrados.
+
+**Regressões.**
+
+- `make test`, `make test-native` e `make test-warn`: 13.819 arquivos, 0
+  diferenças, contra as bases refeitas.
+- As quatro bases, antigas contra novas: só o `pic-bcp-1` muda (o loader).
+- `make checkinv`: SAME ×8.
+- `make test-proto`: verde, com o teste novo do `Repl` (crash, repasse,
+  `undo`).
+- `make test-split`: 1.947 programas, 0 diferenças fora os 6 conhecidos.
+- `make spike`: A 29/29, B 26/29, repasse 24/24. O repasse cobre um
+  programa a mais (eram 23) porque o corte mudou.
+- Tamanho: `sc.wasm` 5.552.276 bytes zstd (+80, o patch) e `build/sc`
+  7.799.434 zstd. A sessão ainda não está neles.
+

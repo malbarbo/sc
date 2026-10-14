@@ -51,9 +51,13 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `PLANO-REPL.md` (`make spike`, `ANALISE.md` §22). The session is not in
   `sc.wasm` and `build/sc` yet, only in the uncut native engine that
   `proto/` links.
-- `proto/` is the `sc-proto` crate: bindgen over `engine/sc.h` and, with the
+- `proto/` is the `sc-proto` crate: bindgen over `engine/sc.h`, the
+  protocol between the REPL and its child (`wire`), the REPL's side of it
+  (`Child`, and `Repl`, which replays a lost session) and, with the
   `engine` feature, a safe Rust API over the linked engine (`Session`,
-  `main`; `ANALISE.md` §23). `make test-proto` runs its tests.
+  `main`, `serve`; `ANALISE.md` §23 and §24). `make test-proto` runs its
+  tests. `src/bin/sc-engine.rs` is `build/sc-engine-full`: the one-shot
+  engine, the child (`session`) and a test of the REPL's side (`repl`).
 - `llvm/` has the patches over the LLVM pin (`Makefile` has the commit) and the
   CMake toolchain file for wasi-sdk. `wasi-host.patch` makes LLVM build for
   WASI, from YoWASP's patch. `no-veclibs.patch` lets `scripts/trim.py` build
@@ -61,6 +65,8 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   makes wasm-ld list the weak exports of a shared object, so the loader keeps
   the first copy of an inline function, a vtable or a typeinfo.
   `libcxx-locale.patch` keeps libc++'s z/OS locale shims off WASI.
+  `incremental-c-scopes.patch` keeps a REPL cell's block scopes in C from
+  leaking names into the cells after it (`ANALISE.md` §24).
   `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the
@@ -72,12 +78,15 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `test/checkinv.cpp` checks `sc_inv.cpp` against clang's option parser.
   `test/samples/` (C), `test/cxx/` (C++) and `test/mod/` (C++ with
   `import std;`) have small student-style programs. `test/spike.py` cuts
-  them into REPL cells and runs them through `build/sc-spike`. `test/repl/` has
+  them into REPL cells and runs them through `build/sc-spike`; `test/split.py`
+  does the same with every program of the corpus through
+  `build/sc-engine-full repl`. `test/repl/` has
   sequences of REPL inputs (`c1.c`, `c2.c`...).
 - `loader/` (Rust, wasmtime) loads wasm shared objects the way the REPL will:
   `libc.so` and `libc++.so` from wasi-sdk, then each input, sharing one
   memory and one function table. A definition in an input hides an older one
-  for the inputs after it. `ANALISE.md` §18 has the design.
+  for the inputs after it, and an input may use what a later one defines.
+  `ANALISE.md` §18 has the design.
 - `bench/` times the engine in V8 (`cc.mjs`) and compares O0/O1/O2 code.
 - `build/` holds everything generated and is not tracked.
 
@@ -99,6 +108,7 @@ make native      # build/sc, the native engine (builds LLVM once more)
 make test-native # the corpus on build/sc against the uncut native engine
 make learn-native # after make learn: what only the native engine calls
 make test-proto  # the Rust API (proto/) over the uncut native engine
+make test-split  # the corpus's programs as REPL cells (build/sc-engine-full)
 ```
 
 The first `make` fetches wasi-sdk 29, the LLVM pin with the patches, and the

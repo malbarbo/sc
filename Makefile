@@ -35,7 +35,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto session test-split clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -46,7 +46,7 @@ $(B)/src/llvm/CMakeLists.txt:
 	git init -q $(B)/src && cd $(B)/src && git sparse-checkout set $(LLVM_PATHS) \
 	  && git fetch -q --depth 1 $(LLVM_REPO) $(LLVM_COMMIT) && git checkout -q FETCH_HEAD \
 	  && git apply $(CURDIR)/llvm/wasi-host.patch $(CURDIR)/llvm/no-veclibs.patch $(CURDIR)/llvm/dylink-weak.patch \
-	  $(CURDIR)/llvm/libcxx-locale.patch
+	  $(CURDIR)/llvm/libcxx-locale.patch $(CURDIR)/llvm/incremental-c-scopes.patch
 
 $(B)/c-testsuite/.git:
 	git init -q $(B)/c-testsuite && cd $(B)/c-testsuite \
@@ -196,6 +196,19 @@ test-proto: $(B)/link-session/engine.args $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc
 	SC_LINK_ARGS=$(CURDIR)/$< cargo test --locked --manifest-path proto/Cargo.toml --features engine \
 	  --target-dir $(B)/proto
 
+# the same engine with the REPL's protocol (proto/src/bin/sc-engine.rs): the
+# child (session) and the test of the REPL's side (repl), PLANO-REPL.md phase 2
+$(B)/sc-engine-full: $(B)/link-session/engine.args $(wildcard proto/*.toml proto/*.lock proto/*.rs proto/src/*.rs proto/src/bin/*.rs)
+	SC_LINK_ARGS=$(CURDIR)/$< cargo build --release --locked --manifest-path proto/Cargo.toml --features engine \
+	  --target-dir $(B)/proto --bin sc-engine
+	cp $(B)/proto/release/sc-engine $@
+
+session: $(B)/sc-engine-full
+
+# the corpus's programs as REPL cells against the programs whole (pic-)
+test-split: $(B)/sc-engine-full $(SCLOAD) $(B)/res/native-base/summary.json
+	test/split.py
+
 # --- the REPL's loader: runs the shared objects (native, wasmtime)
 SCLOAD := $(B)/loader/release/scload
 $(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/main.rs
@@ -265,4 +278,4 @@ size: $(B)/sc.wasm
 	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
 clean:
-	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/proto $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native
+	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/proto $(B)/sc-engine-full $(B)/res/split $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native

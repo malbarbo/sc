@@ -15,6 +15,8 @@
 #include "clang/AST/DeclContextInternals.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DeclVisitor.h"
+#include "clang/AST/GlobalDecl.h"
+#include "clang/Basic/DiagnosticFrontend.h"
 #include "clang/Basic/DiagnosticSema.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CodeGen/BackendUtil.h"
@@ -29,6 +31,8 @@
 #include "clang/Parse/Parser.h"
 #include "clang/Sema/Sema.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -37,6 +41,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
+#include <map>
 
 using namespace clang;
 
@@ -76,26 +81,35 @@ static void written(llvm::Function &F, llvm::SmallPtrSetImpl<llvm::GlobalValue *
   }
 }
 
+static void promote(llvm::GlobalValue &GV) {
+  GV.setName(GV.getName() + ".sc");
+  GV.setLinkage(llvm::GlobalValue::ExternalLinkage);
+  GV.setVisibility(llvm::GlobalValue::DefaultVisibility);
+  GV.setDSOLocal(false); // exported: its address goes through the GOT, as wasm-ld wants
+}
+
 void scPromoteInternals(llvm::Module &M, const std::set<std::string> &Known,
-                        const std::function<bool(llvm::StringRef)> &IsDecl) {
+                        const std::function<const clang::Decl *(llvm::StringRef)> &DeclOf) {
   llvm::SmallPtrSet<llvm::GlobalValue *, 8> Dropped;
   for (llvm::GlobalValue &GV : M.global_values()) {
-    if (GV.isDeclaration() || !GV.hasName() || llvm::isa<llvm::GlobalAlias>(GV))
+    if (!GV.hasName() || llvm::isa<llvm::GlobalAlias>(GV) || GV.getName().starts_with("llvm."))
       continue;
+    if (GV.isDeclaration()) { // a static used here and defined in a later cell
+      auto *D = llvm::dyn_cast_or_null<clang::NamedDecl>(DeclOf(GV.getName()));
+      if (D && !D->isExternallyVisible())
+        promote(GV);
+      continue;
+    }
     if (!GV.hasLocalLinkage()) {
       if (!GV.isWeakForLinker() && Known.count(GV.getName().str()))
         Dropped.insert(&GV);
       continue;
     }
     std::string Name = GV.getName().str();
-    if (Name[0] == '.' || isInitFunction(Name) || !IsDecl(Name))
+    if (Name[0] == '.' || isInitFunction(Name) || !DeclOf(Name))
       continue;
-    std::string New = Name + ".sc";
-    GV.setName(New);
-    GV.setLinkage(llvm::GlobalValue::ExternalLinkage);
-    GV.setVisibility(llvm::GlobalValue::DefaultVisibility);
-    GV.setDSOLocal(false); // exported: its address goes through the GOT, as wasm-ld wants
-    if (Known.count(New))
+    promote(GV);
+    if (Known.count(Name + ".sc"))
       Dropped.insert(&GV); // a copy of one an earlier cell defines
   }
   if (Dropped.empty())
@@ -121,11 +135,32 @@ void scPromoteInternals(llvm::Module &M, const std::set<std::string> &Known,
   }
 }
 
+// A cell's declaration of a function an earlier cell defines takes the type
+// of the definition: a call to a function without a prototype (C before C23)
+// declares it variadic, and in one translation unit the definition would
+// replace that declaration. The backend fixes the calls, as it does there.
+static void retypeDecls(llvm::Module &M, const std::map<std::string, llvm::FunctionType *> &Types) {
+  for (llvm::Function &F : llvm::make_early_inc_range(M)) {
+    if (!F.isDeclaration() || F.isIntrinsic())
+      continue;
+    auto It = Types.find(F.getName().str());
+    if (It == Types.end() || It->second == F.getFunctionType())
+      continue;
+    std::string Name = F.getName().str();
+    F.setName(Name + ".sc.old");
+    llvm::Function *New = llvm::Function::Create(It->second, F.getLinkage(), Name, M);
+    New->copyAttributesFrom(&F);
+    New->setAttributes({}); // the parameters differ
+    F.replaceAllUsesWith(New);
+    F.eraseFromParent();
+  }
+}
+
 std::vector<std::string> scExports(const llvm::Module &M) {
   std::vector<std::string> R;
   for (const llvm::GlobalValue &GV : M.global_values())
-    if (!GV.isDeclaration() && !GV.hasLocalLinkage() && !GV.hasHiddenVisibility() &&
-        !GV.getName().starts_with("llvm."))
+    if (!GV.isDeclaration() && !GV.hasLocalLinkage() && !GV.hasAvailableExternallyLinkage() &&
+        !GV.hasHiddenVisibility() && !GV.getName().starts_with("llvm."))
       R.push_back(GV.getName().str());
   std::sort(R.begin(), R.end());
   return R;
@@ -143,6 +178,7 @@ public:
   CodeGenerator *CG;
   llvm::LLVMContext &Ctx;
   unsigned InputCount = 0;
+  std::function<void()> BeforeEnd; // before the CodeGen ends the cell's module
 
   IncrementalParser(CompilerInstance &Instance, CodeGenerator *CG, llvm::LLVMContext &Ctx)
       : S(Instance.getSema()), CG(CG), Ctx(Ctx) {
@@ -207,6 +243,8 @@ public:
     LocalInstantiations.perform();
     GlobalInstantiations.perform();
 
+    if (BeforeEnd)
+      BeforeEnd();
     Consumer->HandleTranslationUnit(C);
     if (Diags.hasErrorOccurred()) { // in the instantiations or the codegen
       Fail(C.getTranslationUnitDecl());
@@ -372,6 +410,27 @@ void IncrementalParser::CleanUpPTU(TranslationUnitDecl *MostRecentTU) {
 // --- the session
 
 namespace {
+// The backend's errors and warnings (an unsupported builtin) go to clang's
+// diagnostics, as CodeGenAction's handler sends them in a one-shot compile
+class BackendDiags : public llvm::DiagnosticHandler {
+  DiagnosticsEngine &Diags;
+
+public:
+  BackendDiags(DiagnosticsEngine &Diags) : Diags(Diags) {}
+  bool handleDiagnostics(const llvm::DiagnosticInfo &DI) override {
+    if (DI.getSeverity() != llvm::DS_Error && DI.getSeverity() != llvm::DS_Warning)
+      return true;
+    std::string Msg;
+    llvm::raw_string_ostream OS(Msg);
+    llvm::DiagnosticPrinterRawOStream DP(OS);
+    DI.print(DP);
+    Diags.Report(DI.getSeverity() == llvm::DS_Error ? diag::err_fe_backend_unsupported
+                                                    : diag::warn_fe_backend_unsupported)
+        << Msg;
+    return true;
+  }
+};
+
 // IncrementalAction without the wrapped EmitLLVMOnlyAction: its consumer
 // would run the backend with Backend_EmitNothing, which sc_backend rejects
 class SessionAction : public ASTFrontendAction {
@@ -402,6 +461,8 @@ struct ScSession::Impl {
   std::unique_ptr<IncrementalParser> IP;
   std::unique_ptr<llvm::Module> Initial; // the CodeGen keeps references to it
   std::set<std::string> Known; // what the cells so far export
+  std::map<std::string, llvm::FunctionType *> Types; // the functions among them
+  std::set<std::string> Wanted; // internal names used before a cell defines them
   unsigned N = 0;
 };
 
@@ -432,10 +493,24 @@ std::unique_ptr<ScSession> ScSession::create(ScOptions O, llvm::raw_ostream *Dia
   I.CI = std::make_unique<CompilerInstance>(std::move(Inv));
   I.CI->createVirtualFileSystem(llvm::vfs::getRealFileSystem());
   I.CI->createDiagnostics(Diags ? new TextDiagnosticPrinter(*Diags, I.CI->getDiagnosticOpts()) : nullptr);
+  I.Ctx.setDiagnosticHandler(std::make_unique<BackendDiags>(I.CI->getDiagnostics()));
   I.Act = std::make_unique<SessionAction>(I.Ctx);
   if (!I.CI->ExecuteAction(*I.Act) || I.CI->getDiagnostics().hasErrorOccurred())
     return nullptr;
   I.IP = std::make_unique<IncrementalParser>(*I.CI, I.Act->CG, I.Ctx);
+  // a static used in an earlier cell is emitted where it is defined: in one
+  // translation unit the use would take it out of the CodeGen's deferred ones
+  I.IP->BeforeEnd = [&I] {
+    CodeGenerator *CG = I.Act->CG;
+    for (const std::string &N : I.Wanted) {
+      const Decl *D = CG->GetDeclForMangledName(N);
+      if (auto *F = llvm::dyn_cast_or_null<FunctionDecl>(D); F && F->isDefined() && !llvm::isa<CXXConstructorDecl>(F) &&
+                                                             !llvm::isa<CXXDestructorDecl>(F))
+        CG->GetAddrOfGlobal(GlobalDecl(F), false);
+      else if (auto *V = llvm::dyn_cast_or_null<VarDecl>(D); V && V->hasDefinition() == VarDecl::Definition)
+        CG->GetAddrOfGlobal(GlobalDecl(V), false);
+    }
+  };
   I.Initial = I.Act->CG->ReleaseModule();
   I.Act->CG->StartModule("sc_cell_1", I.Ctx);
   // as clang-repl: value printing would leave unused expressions
@@ -458,9 +533,27 @@ ScStatus ScSession::cell(llvm::StringRef Src, bool Backend, std::string &Obj,
   CG->StartModule("sc_cell_" + std::to_string(++I.N + 1), I.Ctx);
   if (!M)
     return ScLost;
+  retypeDecls(*M, I.Types);
   scPromoteInternals(*M, I.Known, [&](llvm::StringRef Name) { return CG->GetDeclForMangledName(Name); });
   Syms = scExports(*M);
   I.Known.insert(Syms.begin(), Syms.end());
+  for (const std::string &N : Syms)
+    if (llvm::Function *F = M->getFunction(N))
+      I.Types.emplace(N, F->getFunctionType());
+  // an always_inline definition the backend drops (available_externally) is
+  // emitted again where a later cell uses it, as in one translation unit
+  for (llvm::Function &F : *M)
+    if (F.hasAvailableExternallyLinkage())
+      if (const Decl *D = CG->GetDeclForMangledName(F.getName()))
+        CG->HandleTopLevelDecl(DeclGroupRef(const_cast<Decl *>(D)));
+  for (llvm::GlobalValue &GV : M->global_values())
+    if (GV.getName().ends_with(".sc")) {
+      std::string N = GV.getName().drop_back(3).str();
+      if (!GV.isDeclaration())
+        I.Wanted.erase(N);
+      else if (!I.Known.count(GV.getName().str()))
+        I.Wanted.insert(N);
+    }
   if (!Backend)
     return ScOk;
   llvm::SmallString<0> Buf;
