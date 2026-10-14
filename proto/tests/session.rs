@@ -13,30 +13,16 @@ fn build() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build").canonicalize().unwrap()
 }
 
-/// The session's flags: cc1 for -fPIC (test/corpus.py --flags), then the link.
+/// The session's arguments: cc1 for -fPIC, then the link (scripts/flags.py).
 fn args(cxx: bool) -> Vec<String> {
     let b = build();
-    let sr = b.join("sysroot").display().to_string();
-    let res = b.join("wasi-sdk-29.0-x86_64-linux/lib/clang/21").display().to_string();
-    let mut cmd = Command::new(b.join("../test/corpus.py"));
-    cmd.arg("--flags");
-    if cxx {
-        cmd.arg("c++");
-    }
-    let out = cmd.arg("pic").output().unwrap();
+    let out = Command::new(b.join("../scripts/flags.py"))
+        .args(["--session", if cxx { "c++" } else { "c" }])
+        .arg(&b)
+        .output()
+        .unwrap();
     assert!(out.status.success());
-    let mut a: Vec<String> = String::from_utf8(out.stdout)
-        .unwrap()
-        .split_whitespace()
-        .map(|x| x.replace("/sysroot", &sr).replace("/res/", &format!("{res}/")))
-        .collect();
-    a.extend(["-x", if cxx { "c++" } else { "c" }, "--", &format!("-L{sr}/lib/wasm32-wasip1")].map(String::from));
-    if cxx {
-        a.extend(["-lc++", "-lc++abi"].map(String::from));
-    }
-    a.extend(["-lsetjmp", "-lc"].map(String::from));
-    a.push(format!("{res}/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a"));
-    a
+    String::from_utf8(out.stdout).unwrap().lines().map(String::from).collect()
 }
 
 /// Runs the shared objects in the loader; its output.
@@ -142,7 +128,7 @@ fn session() {
 
 #[test]
 fn repl() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(false)).unwrap();
     let mut sos = vec![];
     fn cell(r: &mut Repl, sos: &mut Vec<Vec<u8>>, src: &str) -> sc_proto::Answer {
         let a = r.cell(src.as_bytes()).unwrap();
@@ -177,7 +163,7 @@ fn repl() {
     drop(r);
 
     // nothing to undo
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(false)).unwrap();
     assert_eq!(r.undo().unwrap().status, Status::Error);
 }
 
@@ -185,7 +171,7 @@ fn repl() {
 /// leaves nothing; the depth comes from the lexer.
 #[test]
 fn whole() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(false)).unwrap();
     let mut st = |src: &str| r.cell_if_whole(src.as_bytes()).unwrap().status;
     for src in [
         "int main(void)",
@@ -233,7 +219,7 @@ fn whole() {
 
 #[test]
 fn show() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(false)).unwrap();
     let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
     let has = |so: &[u8], s: &str| so.windows(s.len()).any(|w| w == s.as_bytes());
     assert_eq!(cell("int x = 3; struct p { int a; } q;").status, Status::Ok);
@@ -259,7 +245,7 @@ fn show() {
     assert!(a.diags.contains("must be directly called"), "{}", a.diags);
 
     // C++: the temporaries die after the call
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(true)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(true)).unwrap();
     let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
     assert_eq!(cell("struct T { ~T() {} int n() { return 1; } }; T t;").status, Status::Ok);
     let a = cell("T().n()");

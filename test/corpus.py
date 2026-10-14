@@ -23,56 +23,18 @@ from corpuslib import norm_hash, diff
 import hashlib, re, json, os, subprocess, sys, glob
 from concurrent.futures import ThreadPoolExecutor
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, f'{R}/scripts')
+from flags import FLAGS, CXXFLAGS, MODFILE, iface, gnu17, pic, solibs, res  # the engine's flags
 B = os.environ.get('SC_BUILD', f'{R}/build')
-W = f'{B}/wasi-sdk-29.0-x86_64-linux'; RES = f'{W}/lib/clang/21'
+RES = res(B)
 SR = f'{B}/sysroot'  # wasi-sdk's libc with libc++, libc++abi and libunwind built from the pin with exceptions
-FLAGS = ['-cc1', '-triple', 'wasm32-unknown-wasip1', '-emit-obj', '-Wall', '-Wextra',
-         '-disable-free', '-clear-ast-before-backend', '-disable-llvm-verifier', '-discard-value-names',
-         '-mrelocation-model', 'static', '-mframe-pointer=none', '-ffp-contract=on', '-fno-rounding-math',
-         '-target-cpu', 'generic', '-fvisibility=hidden', '-ferror-limit', '19', '-fgnuc-version=4.2.1',
-         '-isysroot', '/sysroot', '-internal-isystem', '/res/include',
-         '-internal-externc-isystem', '/sysroot/include/wasm32-wasip1', '-internal-externc-isystem', '/sysroot/include',
-         # -fwasm-exceptions with -mllvm -wasm-enable-sjlj, in the standard form (exnref)
-         '-target-feature', '+exception-handling', '-target-feature', '+multivalue', '-target-feature', '+reference-types',
-         '-exception-model=wasm', '-mllvm', '-wasm-enable-sjlj', '-mllvm', '-wasm-use-legacy-eh=false', '-std=gnu23']
-# C++ as the driver sets it for wasm32-wasip1, with libc++ first in the search path
-CXXFLAGS = FLAGS[:FLAGS.index('/res/include') - 1] + [
-    '-internal-isystem', '/sysroot/include/wasm32-wasip1/c++/v1', '-internal-isystem', '/sysroot/include/c++/v1'] + \
-    FLAGS[FLAGS.index('/res/include') - 1:-1] + ['-std=gnu++26', '-mconstructor-aliases', '-fdeprecated-macro', '-fno-implicit-modules',
-    '-fskip-odr-check-in-gmf', '-fcxx-exceptions', '-fexceptions', '-mllvm', '-wasm-enable-eh']
 CXXEXT = ('.cpp', '.cc', '.cxx')
 SCLOAD = f'{B}/loader/release/scload'  # the REPL's loader (loader/)
 LIB = f'{SR}/lib/wasm32-wasip1'  # libc.so, libc++.so...
 W_EXTRA = os.environ.get('WFLAGS', '').split()  # e.g. WFLAGS=-Weverything
+STD_CPPM = f'{SR}/share/libc++/v1/std.cppm'  # libc++'s std module
 
 
-# libc++'s std module, built as the driver does for --precompile, and its use
-STD_CPPM = f'{SR}/share/libc++/v1/std.cppm'
-MODFILE = ['-fmodule-file=std=/m/std.pcm']
-
-
-def iface(fl):
-    return [{'-emit-obj': '-emit-module-interface'}.get(x, x) for x in fl] + [
-        '-fmodules-reduced-bmi', '-I', '/sysroot/share/libc++/v1', '-Wno-reserved-module-identifier']
-
-
-def gnu17(fl):
-    """the C of c-testsuite and the gcc torture tests: K&R definitions and implicit
-    int, which C23 rejects; without them these tests would stop in the frontend"""
-    return [{'-std=gnu23': '-std=gnu17'}.get(x, x) for x in fl]
-
-
-def pic(fl):
-    """the flags for a shared object, as the driver sets them for -fPIC -fvisibility=default"""
-    fl = [{'static': 'pic', '-fvisibility=hidden': '-fvisibility=default'}.get(x, x) for x in fl]
-    return fl + ['-pic-level', '2', '-target-feature', '+mutable-globals']
-
-
-if sys.argv[1] == '--flags':  # the cc1 flags, for test/checkinv: --flags [c++] [pic] [pcm|mod]
-    fl = CXXFLAGS if 'c++' in sys.argv else gnu17(FLAGS) if 'gnu17' in sys.argv else FLAGS
-    fl = pic(fl) if 'pic' in sys.argv else fl
-    fl = iface(fl) if 'pcm' in sys.argv else fl + MODFILE if 'mod' in sys.argv else fl
-    sys.exit(print(' '.join(fl[1:])))
 eng, out = os.path.realpath(sys.argv[1]), sys.argv[2]
 # objects and programs go to a directory of their own: it stays small, so
 # looking for the temporary a failed write leaves is cheap
@@ -145,9 +107,8 @@ def cc1(d, f, n, fl, mod):
 def ld_so(n, cxx):
     """links tmp/n.o as a shared object, as the REPL does with each input"""
     l = subprocess.run(engine({tmp: '/o', SR: '/sysroot', RES: '/res'}, [
-                        'ld', '-shared', '--experimental-pic', '--unresolved-symbols=import-dynamic', f'/o/{n}.o',
-                        '-L/sysroot/lib/wasm32-wasip1'] + (['-lc++', '-lc++abi'] if cxx else []) +
-                       ['-lsetjmp', '-lc', '/res/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a', '-o', f'/o/{n}.so']),
+                        'ld', '-shared', '--experimental-pic', '--unresolved-symbols=import-dynamic', f'/o/{n}.o'] +
+                       solibs(cxx) + ['-o', f'/o/{n}.so']),
                        capture_output=True, text=True, timeout=300)
     so = f'{tmp}/{n}.so'
     txt = l.stderr + f'ld exit={l.returncode}\n'

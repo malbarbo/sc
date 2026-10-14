@@ -120,6 +120,18 @@ fn align(x: u32, a: u32) -> u32 {
     (x + a - 1) & !(a - 1)
 }
 
+/// The WAT `(param ..) (result ..)` of `ft`, and the `local.get`s that pass
+/// its parameters on.
+fn wat_sig(ft: &FuncType) -> (String, String) {
+    let ty = |t: ValType| match t {
+        ValType::I32 => "i32", ValType::I64 => "i64", ValType::F32 => "f32", ValType::F64 => "f64", _ => "externref",
+    };
+    let sig = format!("(param {}) (result {})", ft.params().map(ty).collect::<Vec<_>>().join(" "),
+                      ft.results().map(ty).collect::<Vec<_>>().join(" "));
+    let args = (0..ft.params().len()).map(|i| format!("local.get {i} ")).collect();
+    (sig, args)
+}
+
 // symbols of the loading protocol, which stay out of the symbol table
 const INTERNAL: &[&str] = &["__wasm_call_ctors", "__wasm_apply_data_relocs", "_initialize", "__wasm_init_memory"];
 
@@ -167,6 +179,9 @@ impl Loader {
         }
         let info = dylink(bytes).with_context(|| name.to_string())?;
         for n in &info.needed {
+            if self.loaded.contains(n) || seen.contains(n) {
+                continue;
+            }
             let p = self.find(n)?;
             let lib = std::fs::read(&p).with_context(|| format!("{}", p.display()))?;
             self.collect(n, &lib, seen, out)?;
@@ -228,15 +243,9 @@ impl Loader {
         if need.is_empty() {
             return Ok(());
         }
-        let ty = |t: &ValType| match t {
-            ValType::I32 => "i32", ValType::I64 => "i64", ValType::F32 => "f32", ValType::F64 => "f64", _ => "?",
-        };
         let (mut wat, mut funcs) = (String::from("(module (import \"env\" \"memory\" (memory 0)) (export \"memory\" (memory 0))\n"), String::new());
         for (k, (n, ft)) in need.iter().enumerate() {
-            let sig = format!("(param {}) (result {})",
-                              ft.params().map(|t| ty(&t)).collect::<Vec<_>>().join(" "),
-                              ft.results().map(|t| ty(&t)).collect::<Vec<_>>().join(" "));
-            let args: String = (0..ft.params().len()).map(|i| format!("local.get {i} ")).collect();
+            let (sig, args) = wat_sig(ft);
             wat += &format!("(import \"wasi_snapshot_preview1\" \"{n}\" (func $i{k} {sig}))\n");
             funcs += &format!("(func (export \"{n}\") {sig} {args} call $i{k})\n");
         }
@@ -271,7 +280,7 @@ impl Loader {
     fn stubs(&mut self, module: &Module) -> Result<HashMap<String, Func>> {
         let need: Vec<(String, FuncType)> = module.imports()
             .filter_map(|i| match (i.module(), i.ty()) {
-                ("env", ExternType::Func(ft)) if !matches!(self.store.data().syms.get(i.name()), Some((Sym::Func(_), _))) =>
+                ("env", ExternType::Func(ft)) if !self.defines(i.name()) =>
                     Some((i.name().to_string(), ft)),
                 _ => None,
             })
@@ -279,15 +288,10 @@ impl Loader {
         if need.is_empty() {
             return Ok(HashMap::new());
         }
-        let ty = |t: ValType| match t {
-            ValType::I32 => "i32", ValType::I64 => "i64", ValType::F32 => "f32", ValType::F64 => "f64", _ => "externref",
-        };
         let mut wat = String::from("(module (import \"env\" \"__indirect_function_table\" (table 0 funcref))\n");
         for (k, (n, ft)) in need.iter().enumerate() {
             let slot = self.reserve_slot(n, Some(ft))?;
-            let sig = format!("(param {}) (result {})", ft.params().map(ty).collect::<Vec<_>>().join(" "),
-                              ft.results().map(ty).collect::<Vec<_>>().join(" "));
-            let args: String = (0..ft.params().len()).map(|i| format!("local.get {i} ")).collect();
+            let (sig, args) = wat_sig(ft);
             wat += &format!("(type $t{k} (func {sig})) (func (export \"s{k}\") (type $t{k}) {args} i32.const {slot} call_indirect (type $t{k}))\n");
         }
         wat += ")";

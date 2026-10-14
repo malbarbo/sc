@@ -3,7 +3,6 @@
 build/sc-engine-full (the uncut native engine with the protocol's loop).
 
 usage: split.py [<outdir>]   (build/res/split)
-       split.py --args c|c++  the session's arguments, one per line (build/repl)
 ONLY=<name>,... runs only those programs; JOBS sets the parallelism (48)
 
 Each program the corpus runs (test/samples, c-testsuite, gcc torture
@@ -21,17 +20,15 @@ run) and <outdir>/report.txt, and lists the programs that differ.
 import glob, os, re, shutil, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from corpuslib import norm_hash
-from spike import split
+from spike import expected, same, split, std_pcm
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, f'{R}/scripts')
+from flags import session  # the engine's flags
 B = f'{R}/build'
 ENG = f'{B}/sc-engine-full'
-SR = f'{B}/sysroot'
-RES = f'{B}/wasi-sdk-29.0-x86_64-linux/lib/clang/21'
-LIB = f'{SR}/lib/wasm32-wasip1'
+LIB = f'{B}/sysroot/lib/wasm32-wasip1'
 SCLOAD = f'{B}/loader/release/scload'
-BASE = f'{B}/res/native-base'
 OUT = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else f'{B}/res/split')
 SKIP = ('warn-date-time', 'SOURCE_DATE_EPOCH', 'pr133574', 'builtin_redef')  # as corpus.py
 G = 'gcc-ts_gcc_testsuite_gcc.c-torture_execute_'
@@ -47,11 +44,7 @@ KNOWN = {
 
 
 def flags(cxx, gnu17, mod):
-    fl = subprocess.check_output([f'{R}/test/corpus.py', '--flags'] + ['c++'] * cxx + ['gnu17'] * gnu17 + ['pic'] +
-                                 ['mod'] * mod, text=True).split()
-    fl = [x.replace('/sysroot', SR).replace('/res/', RES + '/').replace('/m/std.pcm', f'{OUT}/std.pcm') for x in fl]
-    return fl + ['-x', 'c++' if cxx else 'c', '--', f'-L{LIB}'] + ['-lc++', '-lc++abi'] * cxx + [
-        '-lsetjmp', '-lc', f'{RES}/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a']
+    return session(cxx, B, gnu17, mod, f'{OUT}/std.pcm')
 
 
 def programs():
@@ -63,13 +56,6 @@ def programs():
     ps += [(p, 'cxx-' + os.path.basename(p)[:-4]) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp'))]
     ps += [(p, 'mod-' + os.path.basename(p)[:-4]) for p in sorted(glob.glob(f'{R}/test/mod/*.cpp'))]
     return [(p, n[-200:]) for p, n in ps if not p.endswith(tuple(x + '.c' for x in SKIP))]
-
-
-def expected(name):
-    """the run of the program compiled whole (pic-), None if it does not compile"""
-    txt = open(f'{BASE}/pic-{name}.txt').read()
-    m = re.search(r'^so [0-9a-f]{32}\n', txt, re.M)
-    return txt[m.end():] if m else None
 
 
 def run(sos):
@@ -102,16 +88,13 @@ def one(prog):
     except subprocess.TimeoutExpired:
         txt, ok = 'repl TIMEOUT\n', False
     exp = expected(name)
-    if ok:
-        out = run(sorted(glob.glob(f'{d}/*.so')))
-        txt += out
-        same = exp is not None and norm_hash(out) == norm_hash(exp)
-    else:
-        same = exp is None
+    out = run(sorted(glob.glob(f'{d}/*.so'))) if ok else None
+    txt += out or ''
+    eq = same(out, exp)
     txt = txt.replace(OUT + '/', 'OUT/')
     open(f'{OUT}/{name}.txt', 'w').write(txt)
     shutil.rmtree(d)
-    return name, len(files), same, ok, exp is not None
+    return name, len(files), eq, ok, exp is not None
 
 
 def main():
@@ -120,12 +103,8 @@ def main():
     if os.environ.get('ONLY'):
         only = os.environ['ONLY'].split(',')
         progs = [x for x in progs if x[1] in only]
-    if any('/test/mod/' in p for p, _ in progs):  # the std module, as corpus.py builds it
-        src = [l for l in open(f'{SR}/share/libc++/v1/std.cppm') if 'csignal' not in l]
-        open(f'{OUT}/std.cppm', 'w').writelines(src)
-        fl = [{'-emit-obj': '-emit-module-interface'}.get(x, x) for x in flags(True, False, False)]
-        subprocess.check_call([ENG, '-cc1'] + fl[:fl.index('-x')] + ['-fmodules-reduced-bmi', '-I', f'{SR}/share/libc++/v1',
-                               '-Wno-reserved-module-identifier', '-o', f'{OUT}/std.pcm', f'{OUT}/std.cppm'])
+    if any('/test/mod/' in p for p, _ in progs):
+        std_pcm(ENG, OUT)
     with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
         rs = list(ex.map(one, progs))
     bad = [r for r in rs if not r[2] and r[0] not in KNOWN]
@@ -140,6 +119,4 @@ def main():
 
 
 if __name__ == '__main__':
-    if sys.argv[1:2] == ['--args']:
-        sys.exit(print('\n'.join(flags(sys.argv[2] == 'c++', False, False))))
     main()

@@ -47,8 +47,6 @@ pub enum Outcome {
 pub struct Machine {
     repl: Repl,
     loader: Loader,
-    /// The names each accepted cell exports, for the completion.
-    names: Vec<Vec<String>>,
     /// Cells loaded, which names each module for the loader.
     loaded: usize,
     /// The input Enter compiled to know it whole, and the answer, which the
@@ -92,7 +90,7 @@ impl Machine {
         if !engine.exists() {
             return Err(format!("{}: not found (make repl)", engine.display()).into());
         }
-        let repl = Repl::new(engine, vec!["session".into()], args)?;
+        let repl = Repl::new(engine, args)?;
 
         let mut wasi = WasiCtxBuilder::new();
         wasi.inherit_stdio().inherit_env().args(&argv);
@@ -111,7 +109,7 @@ impl Machine {
             // SAFETY: the handler only bumps an atomic counter
             unsafe { libc::signal(libc::SIGINT, interrupt as *const () as libc::sighandler_t) };
         }
-        Ok(Machine { repl, loader, names: vec![], loaded: 0, pending: None, shown })
+        Ok(Machine { repl, loader, loaded: 0, pending: None, shown })
     }
 
     /// Compiles `src` without running it: whether the compiler accepted it.
@@ -169,7 +167,6 @@ impl Machine {
         if a.status != Status::Ok {
             return Ok(Outcome::Error);
         }
-        self.names.push(a.syms);
         self.loaded += 1;
         let name = format!("cell {}", self.loaded);
         Ok(self.exec(|l| l.load_bytes(&name, &a.so, true)))
@@ -180,9 +177,6 @@ impl Machine {
     pub fn undo(&mut self) -> crate::Result<bool> {
         let a = self.repl.undo()?;
         eprint!("{}", a.diags);
-        if a.status == Status::Ok {
-            self.names.pop();
-        }
         Ok(a.status == Status::Ok)
     }
 
@@ -197,7 +191,7 @@ impl Machine {
 
     /// The names the cells export.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.names.iter().flatten().map(String::as_str)
+        self.repl.names()
     }
 
     /// Runs `f` on the loader: what it printed is flushed, and a trap is

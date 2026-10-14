@@ -1550,8 +1550,11 @@ interface de linha de comando é a do sgleam e do spython:
   `scload` de antes e o `sc` (`make repl`, `build/loader/release/sc`);
 - o compilador é o filho `build/sc-engine-full session`, pelo
   `sc_proto::Repl`;
-- os argumentos da sessão são os do `test/split.py --args`, gravados em
-  `build/repl/{c,c++}.args`;
+- os argumentos da sessão são os do `scripts/flags.py --session`,
+  gravados em `build/repl/{c,c++}.args`. As flags do engine ficam só em
+  `scripts/flags.py`, de onde o `corpus.py`, o `spike.py`, o `split.py` e o
+  `checkinv` as leem: antes, o `sc` lia flags geradas por um script de
+  teste;
 - o engine ainda não está ligado ao `sc`; isso continua na fase 6b;
 - o `sc` e suas dependências ficam atrás da feature `repl` do crate. O
   `scload` (`make test`) não precisa do `sc-proto`, cujo bindgen pede a
@@ -1669,3 +1672,48 @@ diferenças), o `checkinv` deu SAME, e o `sc.wasm` cresceu 53 bytes.
 - os diagnósticos não têm cor;
 - o erro de "faltou o resto", visto quando uma linha em branco força a
   célula, aponta para `<<< inputs >>>:1:1` em vez do fim da célula.
+- `static int f(void);` numa célula e o uso em outra avisam "unused
+  function" e "has internal linkage but is not defined": cada célula
+  termina como uma unidade de tradução, mas a definição vem depois.
+
+## 27. Revisão de simplificação do REPL
+
+Uma revisão (reuso, simplificação, eficiência e altitude) das fases 2 e
+seguintes. Nada mudou de comportamento: o `test-split` dá 0 diferenças,
+o `spike` dá A 29/29, B 26/29 e repasse 24/24, o `make test` dá 0
+diferenças e o `checkinv` dá SAME.
+
+**Mudanças:**
+- **Flags do engine:** passaram para `scripts/flags.py`, que é a fonte
+  única. Antes, o `sc` lia `build/repl/*.args` gerados por
+  `test/split.py --args`, que chamava `test/corpus.py`: o produto dependia
+  do harness. Agora o `corpus.py` e o `spike.py` importam o módulo. O
+  `split.py`, os testes do `proto` e o `make repl` usam `--session`, e o
+  `checkinv` usa o mesmo script. Os argumentos gerados são idênticos aos
+  de antes.
+- **Bibliotecas:** o loader não relê do disco as bibliotecas já
+  carregadas. Antes, cada célula C++ lia cerca de 2,9 MB (libc.so,
+  libc++.so e libc++abi.so) para descartar.
+- **Resposta da célula aceita:** o filho envia a resposta antes de esperar
+  a cópia do `fork` terminar.
+
+**Experimento descartado:** emitir na hora as definições internas no modo
+incremental. Foi uma condição em `ASTContext::DeclMustBeEmitted`: com
+`IncrementalExtensions`, uma definição `GVA_Internal` é obrigatória.
+Assim, cada célula emitiria seus `static`, e o `Wanted` e o gancho
+`BeforeEnd` sairiam do `sc_session.cpp`, 28 linhas a menos. Medido no
+`test-split`:
+
+| | antes | com o patch |
+|---|---|---|
+| `.so` das células, soma | 18.324.012 B | 18.583.858 B (+1,4%) |
+| programas que crescem / diminuem | | 254 / 17 |
+| maiores aumentos | | `memclr` +118 KB (de 1 MB), `c11_ranges` +28 KB (+15%), `m2_stl` +35 KB |
+| programas que diferem | 0 | 1 (`alias-3`) |
+
+O C++ cresce porque as constantes de escopo de namespace dos headers têm
+ligação interna e passam a ser emitidas em toda célula que inclui o header.
+O `alias-3` quebra porque o alias da célula seguinte nomeia um `static` já
+emitido na anterior, o mesmo caso do `alias-2` e do `alias-4`. Antes, o
+`static` era adiado e emitido junto com o alias. Um patch no `llvm/`, mais
+tamanho e um programa a menos não pagam 28 linhas: o `Wanted` fica.

@@ -20,6 +20,11 @@ pub struct Answer {
 }
 
 impl Answer {
+    /// An answer with diagnostics alone.
+    fn bare(status: Status, diags: String) -> Answer {
+        Answer { status, diags, so: vec![], syms: vec![] }
+    }
+
     fn from_msg(m: wire::Msg) -> Answer {
         let [diags, so, syms] = m.parts;
         Answer {
@@ -155,22 +160,20 @@ struct Entry {
 /// names (§3.6).
 pub struct Repl {
     program: PathBuf,
-    child_args: Vec<String>,
     args: Vec<String>,
     child: Child,
     log: Vec<Entry>,
 }
 
 impl Repl {
-    /// A child `program child_args...` with a session of `args`.
-    pub fn new(program: PathBuf, child_args: Vec<String>, args: Vec<String>) -> Result<Repl, ReplError> {
-        let child = Repl::start(&program, &child_args, &args)?;
-        Ok(Repl { program, child_args, args, child, log: vec![] })
+    /// A child `program session` with a session of `args`.
+    pub fn new(program: PathBuf, args: Vec<String>) -> Result<Repl, ReplError> {
+        let child = Repl::start(&program, &args)?;
+        Ok(Repl { program, args, child, log: vec![] })
     }
 
-    fn start(program: &Path, child_args: &[String], args: &[String]) -> Result<Child, ReplError> {
-        let ca: Vec<&str> = child_args.iter().map(String::as_str).collect();
-        let mut child = Child::spawn(program, &ca)?;
+    fn start(program: &Path, args: &[String]) -> Result<Child, ReplError> {
+        let mut child = Child::spawn(program, &["session"])?;
         let a = child.new_session(args)?;
         if a.status != Status::Ok {
             return Err(ReplError::Start(a.diags));
@@ -180,7 +183,7 @@ impl Repl {
 
     /// A new child replays the log.
     fn restart(&mut self) -> Result<(), ReplError> {
-        self.child = Repl::start(&self.program, &self.child_args, &self.args)?;
+        self.child = Repl::start(&self.program, &self.args)?;
         for (i, e) in self.log.iter().enumerate() {
             let a = self.child.cell(&e.src, Mode::Replay)?;
             if a.status != Status::Ok || a.syms != e.syms {
@@ -193,6 +196,11 @@ impl Repl {
     /// The accepted cells.
     pub fn len(&self) -> usize {
         self.log.len()
+    }
+
+    /// The names the accepted cells export.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.log.iter().flat_map(|e| &e.syms).map(String::as_str)
     }
 
     /// Compiles a cell. [`Status::Lost`]: the cell ended the session (its
@@ -236,16 +244,16 @@ impl Repl {
     /// back without it, [`Status::Error`] if there is none.
     pub fn undo(&mut self) -> Result<Answer, ReplError> {
         if self.log.pop().is_none() {
-            return Ok(Answer { status: Status::Error, diags: "sc: no cell to undo\n".into(), so: vec![], syms: vec![] });
+            return Ok(Answer::bare(Status::Error, "sc: no cell to undo\n".into()));
         }
         // the generated code cannot be undone in the session (§3.3)
         self.restart()?;
-        Ok(Answer { status: Status::Ok, diags: String::new(), so: vec![], syms: vec![] })
+        Ok(Answer::bare(Status::Ok, String::new()))
     }
 }
 
 fn lost(e: io::Error) -> Answer {
-    Answer { status: Status::Lost, diags: format!("sc: {e}\n"), so: vec![], syms: vec![] }
+    Answer::bare(Status::Lost, format!("sc: {e}\n"))
 }
 
 // Answer::from_msg takes the parts in this order

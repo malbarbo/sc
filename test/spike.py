@@ -31,10 +31,11 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from corpuslib import norm_hash
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, f'{R}/scripts')
+from flags import FLAGS, CXXFLAGS, MODFILE, iface, pic, real, solibs  # the engine's flags
 B = f'{R}/build'
 ENG = f'{B}/sc-spike'
 SR = f'{B}/sysroot'
-RES = f'{B}/wasi-sdk-29.0-x86_64-linux/lib/clang/21'
 LIB = f'{SR}/lib/wasm32-wasip1'
 SCLOAD = f'{B}/loader/release/scload'
 BASE = f'{B}/res/native-base'
@@ -43,13 +44,19 @@ CRASH = '#pragma clang __debug crash\n'
 
 
 def flags(cxx, mod):
-    fl = subprocess.check_output([f'{R}/test/corpus.py', '--flags'] + ['c++'] * cxx + ['pic'] + ['mod'] * mod,
-                                 text=True).split()
-    return [x.replace('/sysroot', SR).replace('/res/', RES + '/').replace('/m/std.pcm', f'{OUT}/std.pcm') for x in fl]
+    return real(pic(CXXFLAGS if cxx else FLAGS)[1:] + MODFILE * mod, B, f'{OUT}/std.pcm')
+
+
+def std_pcm(eng, out):
+    """<out>/std.pcm, libc++'s std module as corpus.py builds it"""
+    src = [l for l in open(f'{SR}/share/libc++/v1/std.cppm') if 'csignal' not in l]
+    open(f'{out}/std.cppm', 'w').writelines(src)
+    subprocess.check_call([eng, '-cc1'] + real(iface(pic(CXXFLAGS))[1:], B) + ['-o', f'{out}/std.pcm', f'{out}/std.cppm'])
 
 
 # --- one cell per top-level declaration
 
+COMMENT = re.compile(r'//[^\n]*|/\*.*?\*/', re.S)
 # a struct, union or enum with attributes, whose '{' is not a function body
 TAG = re.compile(r'\s*(typedef\s+)?(struct|union|enum)\b(\s*__attribute__\s*\(\(.*?\)\))*\s*\w*\s*\{$', re.S)
 # the head of a K&R definition, up to a declaration of its parameters
@@ -122,7 +129,7 @@ def split(src):
             depth -= 1
         elif c == '{':
             if depth == 0:
-                head = re.sub(r'//[^\n]*|/\*.*?\*/', '', cur, flags=re.S)
+                head = COMMENT.sub('', cur)
                 body = ')' in head and not re.match(TAG, head) or re.match(r'\s*(namespace\b|extern\s*"C")', head) is not None
             depth += 1
         elif c == '}':
@@ -135,13 +142,13 @@ def split(src):
                     cur += src[i:k + 1]
                     i = k + 1
                 end()
-        elif c == ';' and depth == 0 and not re.match(KR, re.sub(r'//[^\n]*|/\*.*?\*/', '', cur, flags=re.S)):
+        elif c == ';' and depth == 0 and not re.match(KR, COMMENT.sub('', cur)):
             end()
     cells.append(cur)
     # comments and blank lines go with the next declaration
     out, pend = [], ''
     for c in cells:
-        if re.sub(r'//[^\n]*|/\*.*?\*/', '', c, flags=re.S).strip() == '':
+        if COMMENT.sub('', c).strip() == '':
             pend += c
         else:
             out.append(pend + c)
@@ -154,9 +161,8 @@ def split(src):
 # --- running the cells
 
 def ld(obj, so, cxx):
-    r = subprocess.run([ENG, 'ld', '-shared', '--experimental-pic', '--unresolved-symbols=import-dynamic', obj, f'-L{LIB}'] +
-                       ['-lc++', '-lc++abi'] * cxx + ['-lsetjmp', '-lc', f'{RES}/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a',
-                                                     '-o', so], capture_output=True, text=True)
+    r = subprocess.run([ENG, 'ld', '-shared', '--experimental-pic', '--unresolved-symbols=import-dynamic', obj] +
+                       real(solibs(cxx), B) + ['-o', so], capture_output=True, text=True)
     return r.returncode == 0, r.stderr
 
 
@@ -339,12 +345,8 @@ def main():
         progs += [(f'{R}/test/{sub}/{p}', pre + os.path.splitext(p)[0]) for p in sorted(os.listdir(f'{R}/test/{sub}'))]
     if os.environ.get('ONLY'):  # ONLY=p1,cxx-c3_stl
         progs = [x for x in progs if x[1] in os.environ['ONLY'].split(',')]
-    if any('/test/mod/' in p for p, _ in progs):  # the std module, as corpus.py builds it
-        src = [l for l in open(f'{SR}/share/libc++/v1/std.cppm') if 'csignal' not in l]
-        open(f'{OUT}/std.cppm', 'w').writelines(src)
-        fl = [{'-emit-obj': '-emit-module-interface'}.get(x, x) for x in flags(True, False)]
-        subprocess.check_call([ENG, '-cc1'] + fl + ['-fmodules-reduced-bmi', '-I', f'{SR}/share/libc++/v1',
-                               '-Wno-reserved-module-identifier', '-o', f'{OUT}/std.pcm', f'{OUT}/std.cppm'])
+    if any('/test/mod/' in p for p, _ in progs):
+        std_pcm(ENG, OUT)
     with ThreadPoolExecutor(int(os.environ.get('JOBS', '1'))) as ex:
         rs = list(ex.map(one, progs))
     json.dump(rs, open(f'{OUT}/report.json', 'w'), indent=1)

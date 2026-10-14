@@ -14,7 +14,7 @@ engine = []
 [build-dependencies]
 bindgen = { version = "0.72", default-features = false, features = ["runtime"] }
 
-# the engine with the protocol's loop (make sc-engine-full)
+# the engine with the protocol's loop (build/sc-engine-full, by make repl)
 [[bin]]
 name = "sc-engine"
 required-features = ["engine"]

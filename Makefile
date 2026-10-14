@@ -35,7 +35,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto session test-split repl clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto test-split repl clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -204,8 +204,6 @@ $(B)/sc-engine-full: $(B)/link-session/engine.args $(wildcard proto/*.toml proto
 	  --target-dir $(B)/proto --bin sc-engine
 	cp $(B)/proto/release/sc-engine $@
 
-session: $(B)/sc-engine-full
-
 # the corpus's programs as REPL cells against the programs whole (pic-)
 test-split: $(B)/sc-engine-full $(SCLOAD) $(B)/res/native-base/summary.json
 	test/split.py
@@ -223,10 +221,9 @@ $(SC_REPL): loader/Cargo.toml loader/Cargo.lock $(shell find loader/src -name '*
 
 loader: $(SCLOAD)
 
-$(B)/repl/c.args $(B)/repl/c++.args &: test/split.py test/corpus.py
+$(B)/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/repl
-	test/split.py --args c > $(B)/repl/c.args
-	test/split.py --args c++ > $(B)/repl/c++.args
+	scripts/flags.py --session $* $(CURDIR)/$(B) > $@
 
 repl: $(SC_REPL) $(B)/sc-engine-full $(B)/repl/c.args $(B)/repl/c++.args $(SR)/lib/wasm32-wasip1/libc++.so
 
@@ -278,14 +275,14 @@ $(B)/checkinv: test/checkinv.cpp engine/sc_inv.cpp engine/sc_inv.h | $(N)/bin/wa
 	  -Wl,--start-group $(N)/lib/libclang*.a $(N)/lib/libLLVM*.a -Wl,--end-group -lpthread
 
 checkinv: $(B)/checkinv
-	$< $$(test/corpus.py --flags) -o - /c/x.c
-	$< $$(test/corpus.py --flags gnu17) -o - /c/x.c
-	$< $$(test/corpus.py --flags c++) -o - /c/x.cpp
-	$< $$(test/corpus.py --flags pic) -o - /c/x.c
-	$< $$(test/corpus.py --flags c++ pic) -o - /c/x.cpp
-	$< $$(test/corpus.py --flags c++ pcm) -o - /c/std.cppm
-	$< $$(test/corpus.py --flags c++ mod) -o - /c/x.cpp
-	$< $$(test/corpus.py --flags c++ pic mod) -o - /c/x.cpp
+	$< $$(scripts/flags.py) -o - /c/x.c
+	$< $$(scripts/flags.py gnu17) -o - /c/x.c
+	$< $$(scripts/flags.py c++) -o - /c/x.cpp
+	$< $$(scripts/flags.py pic) -o - /c/x.c
+	$< $$(scripts/flags.py c++ pic) -o - /c/x.cpp
+	$< $$(scripts/flags.py c++ pcm) -o - /c/std.cppm
+	$< $$(scripts/flags.py c++ mod) -o - /c/x.cpp
+	$< $$(scripts/flags.py c++ pic mod) -o - /c/x.cpp
 
 size: $(B)/sc.wasm
 	@for f in $(wildcard $(B)/sc.wasm $(B)/sc); do printf '%s: %s raw, %s gzip, %s zstd\n' $$f $$(stat -c %s $$f) \

@@ -173,6 +173,7 @@ std::vector<std::string> scExports(const llvm::Module &M) {
 static const char *ShowPrelude = "void __sc_show_int(const char *, int, long long);\n"
                                  "void __sc_show_float(const char *, int, double);\n";
 
+// char, through typedefs and qualifiers
 static bool isChar(QualType T) {
   return T->isSpecificBuiltinType(BuiltinType::Char_S) || T->isSpecificBuiltinType(BuiltinType::Char_U);
 }
@@ -208,8 +209,8 @@ static Expr *show(Sema &S, Expr *E) {
   else if (D->isNullPtrType())
     Kind = SC_SHOW_NULLPTR;
   else if (D->isPointerType())
-    Kind = isChar(D->getPointeeType().getCanonicalType().getUnqualifiedType()) ? SC_SHOW_STRING : SC_SHOW_POINTER;
-  else if (D->isArrayType() && isChar(C.getAsArrayType(D)->getElementType().getCanonicalType().getUnqualifiedType()))
+    Kind = isChar(D->getPointeeType()) ? SC_SHOW_STRING : SC_SHOW_POINTER;
+  else if (D->isArrayType() && isChar(C.getAsArrayType(D)->getElementType()))
     Kind = SC_SHOW_STRING;
   else
     return nullptr;
@@ -635,7 +636,7 @@ std::unique_ptr<ScSession> ScSession::create(ScOptions O, llvm::raw_ostream *Dia
     Prelude = "extern \"C\" {\n" + Prelude + "}\n";
   if (!I.IP->Parse(Prelude, /*Prelude=*/true))
     return nullptr;
-  std::unique_ptr<llvm::Module>(I.Act->CG->ReleaseModule()); // declarations only
+  I.Act->CG->ReleaseModule(); // declarations only
   I.Act->CG->StartModule("sc_cell_1", I.Ctx);
   return S;
 }

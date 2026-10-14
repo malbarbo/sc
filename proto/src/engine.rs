@@ -2,10 +2,8 @@
 use crate::{msg, sys, wire, Mode, Status};
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, CString};
-use std::fs::File;
-use std::os::fd::FromRawFd;
 use std::fmt;
-use std::io::{self, Read, Write};
+use std::io::{self, PipeWriter, Read, Write};
 use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 use std::sync::OnceLock;
@@ -237,12 +235,13 @@ impl fmt::Debug for Reply<'_> {
 /// cell the child forks a copy of itself ([`Copy`]), which goes on in its
 /// place if the cell fails or brings the engine down. The session is then
 /// as before the cell, and the reply says [`Status::Error`].
+fn reply(output: &mut impl Write, st: Status, diags: &[u8]) -> io::Result<()> {
+    wire::write(output, msg::SC_MSG_REPLY, st.to_raw(), [diags, b"", b""])
+}
+
 pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error> {
     claim()?;
     let mut session: Option<Session> = None;
-    fn reply(output: &mut impl Write, st: Status, diags: &[u8]) -> io::Result<()> {
-        wire::write(output, msg::SC_MSG_REPLY, st.to_raw(), [diags, b"", b""])
-    }
     while let Some(m) = wire::read(input)? {
         match (m.kind, &mut session) {
             (msg::SC_MSG_NEW, _) => {
@@ -295,10 +294,15 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
                 };
                 match copy {
                     Some(c) if status != Status::Ok => c.hand_over(&answer),
-                    Some(c) => c.discard(),
-                    None => {}
+                    copy => {
+                        // the reply does not wait for the copy to end
+                        output.write_all(&answer)?;
+                        output.flush()?;
+                        if let Some(c) = copy {
+                            c.discard()
+                        }
+                    }
                 }
-                output.write_all(&answer)?;
             }
             (msg::SC_MSG_UNDO, Some(s)) => {
                 let r = s.undo();
@@ -319,7 +323,6 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
 
 extern "C" {
     fn fork() -> c_int;
-    fn pipe(fds: *mut c_int) -> c_int;
     fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int;
     fn _exit(code: c_int) -> !;
 }
@@ -331,7 +334,7 @@ extern "C" {
 /// during the cell: the copy goes on and answers with an error).
 struct Copy {
     pid: c_int,
-    to: File,
+    to: PipeWriter,
 }
 
 enum Fork {
@@ -343,25 +346,22 @@ enum Fork {
 
 impl Copy {
     fn fork() -> io::Result<Fork> {
-        let mut fds = [0; 2];
-        if unsafe { pipe(fds.as_mut_ptr()) } < 0 {
+        let Ok((mut from, to)) = io::pipe() else {
             return Ok(Fork::Original(None));
-        }
-        // the fds are new and owned here
-        let (from, to) = unsafe { (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1])) };
+        };
         match unsafe { fork() } {
             pid if pid < 0 => Ok(Fork::Original(None)),
             0 => {
                 drop(to);
                 let mut said = vec![];
-                (&from).read_to_end(&mut said)?;
+                from.read_to_end(&mut said)?;
                 match said.split_first() {
                     Some((b'd', _)) => unsafe { _exit(0) },
                     Some((b't', answer)) => Ok(Fork::Copy(answer.to_vec())),
                     _ => {
                         let diags: &[u8] = b"sc: the engine crashed on this cell; the session is as it was before it\n";
                         let mut answer = vec![];
-                        wire::write(&mut answer, msg::SC_MSG_REPLY, Status::Error.to_raw(), [diags, b"", b""])?;
+                        reply(&mut answer, Status::Error, diags)?;
                         Ok(Fork::Copy(answer))
                     }
                 }

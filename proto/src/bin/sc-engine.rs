@@ -35,7 +35,7 @@ fn session() -> Result<(), Box<dyn std::error::Error>> {
 fn repl(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let sep = args.iter().position(|a| a == "--").ok_or("repl <dir> <cell>... -- <session args>")?;
     let (dir, cells) = args[..sep].split_first().ok_or("repl <dir> <cell>... -- <session args>")?;
-    let mut r = Repl::new(std::env::current_exe()?, vec!["session".into()], args[sep + 1..].to_vec())?;
+    let mut r = Repl::new(std::env::current_exe()?, args[sep + 1..].to_vec())?;
     let mut sos: Vec<PathBuf> = vec![];
     let mut out = io::stdout().lock();
     for (k, cell) in cells.iter().enumerate() {

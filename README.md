@@ -75,9 +75,11 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
 - `scripts/link.py` links the engine from the LLVM libraries and applies the
   cuts; `--native` links `build/sc` from the host build of LLVM. `scripts/trim.py` builds the trimmed intrinsics table and
   `TargetLibraryInfo`. `attrib.py`, `cat2.py` and `o0passes.py` are for
-  measuring (see `ANALISE.md` §10).
-- `test/corpus.py` runs the corpus through an engine (`--flags [c++|gnu17]
-  [pic] [pcm|mod]` prints the cc1 flags; `WFLAGS=-Weverything` adds warnings).
+  measuring (see `ANALISE.md` §10). `scripts/flags.py` has the engine's flags:
+  `[c++|gnu17] [pic] [pcm|mod]` prints the cc1 flags, `--session c|c++
+  <build>` a REPL session's arguments.
+- `test/corpus.py` runs the corpus through an engine (`WFLAGS=-Weverything`
+  adds warnings).
   `test/checkinv.cpp` checks `sc_inv.cpp` against clang's option parser.
   `test/samples/` (C), `test/cxx/` (C++) and `test/mod/` (C++ with
   `import std;`) have small student-style programs. `test/spike.py` cuts
