@@ -1164,3 +1164,106 @@ redirecionada e nada muda.
 O pin novo custa 272 KB bruto e 73 KB zstd no `sc.wasm` (+1,3%), e 135 KB
 zstd no nativo (+1,8%). `make test`, `make test-warn` e `make test-native`
 passam nos 13.819 arquivos sem diferença; o `checkinv` dá SAME.
+
+## 22. Fase 0 do REPL: sessão com estado contra PCH encadeado
+
+A fase 0 do `PLANO-REPL.md` (§1.3) compara duas formas de compilar as
+células do REPL, cada uma levada até o loader. O spike não entra nos
+engines de sempre. `make spike` liga o `build/sc-spike`: o engine nativo
+sem cortes, com `engine/sc_session.cpp` e `engine/sc_spike.cpp`. O código
+do spike fica atrás de `SC_SPIKE`; o `sc.wasm`, o `build/sc`, o
+`sc-full.wasm` e o `sc-host-full` saem idênticos byte a byte.
+
+- **A, sessão.** Um processo vivo, uma cópia do núcleo do
+  `IncrementalParser` da 23.1.3 sem o `clangInterpreter`, com um
+  `CodeGenerator` puro e o backend do `sc_backend.cpp` sobre o módulo de
+  cada célula. As células chegam por um pipe.
+- **B, sem estado.** Cada célula é um processo: ela vira um PCH
+  encadeado no anterior (`-fpch-codegen`), e o objeto da célula sai desse
+  PCH.
+
+**Como foi medido (`test/spike.py`).**
+
+- Os 29 programas de `test/samples` (7 em C), `test/cxx` (18) e `test/mod`
+  (4, com `import std;`) foram cortados em 222 células, uma por declaração
+  do topo.
+- Cada célula é ligada como `.so`, e o `scload` roda todas.
+- A saída tem que ser a do `pic-` da base nativa, normalizada como no
+  corpus.
+- No teste de crash, uma célula fatal (`#pragma clang __debug crash`) entra
+  no meio do programa. A sessão morre, outra é criada e as células
+  anteriores são repassadas sem backend. Os nomes que cada célula exporta
+  têm que ser os da primeira vez, e as células seguintes têm que dar a
+  mesma saída.
+
+| | A | B |
+| --- | ---: | ---: |
+| programas com a saída certa | **29/29** | 26/29 (falha `import std`) |
+| crash, repasse e célula seguinte | **23/23** | sem estado |
+| 1ª célula, C++ (mediana) | **0,91 s** | 1,49 s |
+| células seguintes, C++: mediana, p90, máx. | **8 ms, 0,40 s, 3,0 s** | 164 ms, 0,59 s, 4,4 s |
+| células seguintes, C: mediana | **3 ms** | 22 ms |
+| soma das células, C++ (o programa inteiro de uma vez leva 39,1 s) | **40,5 s** | 78,4 s |
+| pico de memória | 283 MB (a sessão) | 278 MB (uma célula) |
+
+**Sessão longa (300 células pequenas).**
+
+| | A | B |
+| --- | ---: | ---: |
+| C++, células 1–50 | 3,0 ms | 122 ms |
+| C++, células 250–300 | 2,6 ms | 285 ms |
+| C, células 1–50 | 1,6 ms | 21 ms |
+| C, células 250–300 | 2,5 ms | 51 ms |
+| memória, C++ | 101 MB (pico da sessão) | 159 MB (por célula) e 28 MB de PCH em disco |
+
+Em B, cada célula carrega a cadeia inteira de PCHs, então o custo cresce
+com a sessão. Em A ele fica constante. Em A, a soma das células custa o
+mesmo que compilar o programa inteiro: a sessão não acrescenta nada.
+
+**O que B precisou, e por que não é mais simples.**
+
+- **Reemissão.** O objeto de uma célula traz de novo as variáveis e as
+  definições tentativas das células anteriores, com os inicializadores
+  dinâmicos. É o defeito do §1.3. As cópias viram declarações pelo mesmo
+  pós-passo de IR de A.
+- **`static`.** O problema é o mesmo de A (§3.2), com o mesmo pós-passo.
+- **Inline da libc++.** O `-fpch-codegen` gera as funções inline de um
+  header só no objeto da célula que incluiu o header. A libc++ marca quase
+  todas como hidden (`_LIBCPP_HIDE_FROM_ABI`), e as células seguintes não
+  as achavam. O spike as exporta (hidden vira default).
+- **`import std;`** O `import` de uma célula não fica visível nas
+  seguintes pelo PCH encadeado ("declaration of 'string' must be
+  imported").
+
+O ganho de B seria não ter estado: nada de repasse nem de `CleanUpPTU`. O
+pós-passo de IR, que é a parte delicada, B precisa do mesmo jeito.
+
+**O que o spike mostrou de A.**
+
+- **Pós-passo do §3.2.** Funciona para:
+  - `static` com inicializador dinâmico;
+  - `static` local de função `static`;
+  - namespace anônimo, com vtable;
+  - `static inline` de template;
+  - global com inicializador dinâmico usado em células depois.
+
+  Um defeito achado: o global promovido não pode ficar `dso_local`. O
+  wasm-ld não põe uma função exportada `dso_local` na tabela do `.so`, e a
+  chamada por ponteiro (o `qsort` do p1, o `std::function` do c4) dava
+  "out of bounds table access".
+- **Erro e redefinição.**
+  - Uma célula com erro seguida de uma célula boa funciona.
+  - Um `#include` depois de uma célula com erro funciona.
+  - A redefinição é rejeitada, como decidido (§3.4).
+- **`return` no topo** derruba a sessão (o bug aberto do §3.7). Volta pelo
+  repasse; a fase 2 precisa do diagnóstico antes do CodeGen.
+- **Onde o código sai.** O CodeGen adia a emissão: o código de uma função
+  sai no objeto da célula que primeiro a usa, em geral a do `main`. As
+  células de declaração saem quase vazias, e o custo vai para a célula que
+  usa.
+
+**Decisão: A.** É mais rápida desde a primeira célula, constante numa
+sessão longa e aceita `import std;`. O estado que B evitaria (repasse,
+`CleanUpPTU`) já funcionou no spike. O `engine/sc_session.cpp` é a base da
+fase 2. O `sc_spike.cpp` e o `test/spike.py` ficam até as fatias `split-`
+e `crash-` da fase 3 os substituírem.

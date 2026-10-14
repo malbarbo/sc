@@ -134,6 +134,8 @@ recovery. Cada célula é um processo ou instância curto. Por isso a fase 0
 - **B. Sem estado:** cada célula é compilada com um prefixo vindo das células
   anteriores, por PCH encadeado. As restrições do §3.4 valem para as duas.
 
+**Decidido na fase 0 (2026-10-13): A.** Ver ANALISE.md §22.
+
 ### 1.4 Runtime nativo do código do aluno: wasmtime mínimo com JIT
 
 Medido em 2026-10-01: x86-64, LTO, `opt-level=z`, strip, com um laço C de

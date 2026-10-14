@@ -18,6 +18,7 @@ make learn       # after changing cuts/ or the LLVM pin, then make test and test
 make native      # build/sc, the same engine for x86-64 Linux
 make test-native # the corpus on build/sc against the uncut native engine
 make learn-native # after make learn: what only the native engine calls
+make spike       # PLANO-REPL.md phase 0: REPL cells through build/sc-spike
 ```
 
 The cuts keep the code of every warning: `make learn` runs the corpus with

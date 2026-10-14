@@ -27,7 +27,8 @@ Two kinds of cut:
       noop:<re>     wrap with an empty body instead (void functions only)
       noopkeep:<f>  demangled names (one per line) that noop: must not touch
 
-For experiments, SC_CUTS, SC_ENGINE (dir of the engine objects), SC_LINKDIR
+For experiments, SC_CUTS, SC_ENGINE (dir of the engine objects), SC_EXTRA
+(more engine objects), SC_LINKDIR
 and SC_BASE (the corpus baseline) override the defaults.
 """
 import json, os, re, shlex, subprocess, sys
@@ -72,6 +73,7 @@ def ninja_cmd(target):
 
 # --- the link line: clang's, with the engine objects in place of the driver
 ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine{H}')}/{f}.o" for f in ('sc_main', 'sc_inv', 'sc_backend', 'sc_cuts')]
+ENGINE += os.environ.get('SC_EXTRA', '').split()  # more engine objects, for experiments
 toks = shlex.split(ninja_cmd('bin/clang-23').split(': && ', 1)[1].removesuffix(' && :'))
 flags = [t for t in toks if not t.endswith(('.a', '.obj', '.o')) and t not in ('-o', 'bin/clang-23', '-Os', '-Xlinker')
          and not t.startswith(('--dependency-file', '-Wl,--color-diagnostics', '-fdiagnostics-color'))]

@@ -43,7 +43,10 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   cc1 option parser. `sc_backend.cpp` replaces clang's `BackendUtil` with the
   O0 pipeline (the always-inliner, the coroutine lowering and codegen), so
   the optimization passes stay out. `sc_cuts.cpp`
-  replaces a few LLVM functions sc does not need.
+  replaces a few LLVM functions sc does not need. `sc_session.cpp` is the
+  REPL's session (one clang instance, each cell parsed on top of the ones
+  before) and `sc_spike.cpp` the driver of phase 0 of `PLANO-REPL.md`; both
+  go only into `build/sc-spike` for now (`make spike`, `ANALISE.md` §22).
 - `llvm/` has the patches over the LLVM pin (`Makefile` has the commit) and the
   CMake toolchain file for wasi-sdk. `wasi-host.patch` makes LLVM build for
   WASI, from YoWASP's patch. `no-veclibs.patch` lets `scripts/trim.py` build
@@ -61,7 +64,8 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   [pic] [pcm|mod]` prints the cc1 flags; `WFLAGS=-Weverything` adds warnings).
   `test/checkinv.cpp` checks `sc_inv.cpp` against clang's option parser.
   `test/samples/` (C), `test/cxx/` (C++) and `test/mod/` (C++ with
-  `import std;`) have small student-style programs. `test/repl/` has
+  `import std;`) have small student-style programs. `test/spike.py` cuts
+  them into REPL cells and runs them through `build/sc-spike`. `test/repl/` has
   sequences of REPL inputs (`c1.c`, `c2.c`...).
 - `loader/` (Rust, wasmtime) loads wasm shared objects the way the REPL will:
   `libc.so` and `libc++.so` from wasi-sdk, then each input, sharing one

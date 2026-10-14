@@ -35,7 +35,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -169,6 +169,21 @@ $(B)/sc-host-full: $(ENGINE:%=$(B)/engine-host/%.o) scripts/link.py
 
 native: $(B)/sc
 
+# --- PLANO-REPL.md phase 0: the two candidates for REPL cells (test/spike.py),
+# on the uncut native engine
+SPIKE := $(ENGINE) sc_session sc_spike
+$(B)/engine-spike/%.o: engine/%.cpp engine/sc_inv.h engine/sc_session.h | $(B)/host/lib/libclangSema.a
+	@mkdir -p $(@D)
+	clang++ $(HOST_FLAGS) -DSC_SPIKE -c $< -o $@
+
+$(B)/sc-spike: $(SPIKE:%=$(B)/engine-spike/%.o) scripts/link.py
+	SC_ENGINE=$(CURDIR)/$(B)/engine-spike SC_LINKDIR=$(CURDIR)/$(B)/link-spike \
+	  SC_EXTRA="$(CURDIR)/$(B)/engine-spike/sc_session.o $(CURDIR)/$(B)/engine-spike/sc_spike.o" \
+	  scripts/link.py --native --full $@
+
+spike: $(B)/sc-spike $(SCLOAD)
+	test/spike.py
+
 # --- the REPL's loader: runs the shared objects (native, wasmtime)
 SCLOAD := $(B)/loader/release/scload
 $(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/main.rs
@@ -238,4 +253,4 @@ size: $(B)/sc.wasm
 	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
 clean:
-	rm -rf $(B)/engine $(B)/engine-host $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native
+	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native

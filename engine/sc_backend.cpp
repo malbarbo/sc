@@ -35,6 +35,11 @@
 using namespace clang;
 using namespace llvm;
 
+#ifdef SC_SPIKE // the IR post-pass of test/spike.py's candidate B (sc_spike.cpp)
+#include <functional>
+std::function<void(llvm::Module &)> scBeforeBackend;
+#endif
+
 // The subset of BackendUtil's initTargetOptions that is not a constant for sc.
 static void initTargetOptions(const CompilerInstance &CI, llvm::TargetOptions &Options) {
   const auto &CG = CI.getCodeGenOpts();
@@ -100,6 +105,10 @@ void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
                               IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
                               std::unique_ptr<raw_pwrite_stream> OS, BackendConsumer *BC) {
   DiagnosticsEngine &Diags = CI.getDiagnostics();
+#ifdef SC_SPIKE
+  if (scBeforeBackend)
+    scBeforeBackend(*M);
+#endif
   if (Action != Backend_EmitObj) {
     Diags.Report(diag::err_fe_unable_to_interface_with_target);
     return;

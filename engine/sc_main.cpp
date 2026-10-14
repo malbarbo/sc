@@ -69,7 +69,15 @@ static int cc1(llvm::ArrayRef<const char *> Args) {
   return !Ok;
 }
 
+#ifdef SC_SPIKE // PLANO-REPL.md phase 0 (sc_spike.cpp)
+int scSpike(int argc, const char **argv);
+#endif
+
 int main(int argc, const char **argv) {
+#ifdef SC_SPIKE
+  if (argc > 1 && !strncmp(argv[1], "spike-", 6))
+    return scSpike(argc - 1, argv + 1);
+#endif
   if (argc > 1 && !strcmp(argv[1], "-cc1"))
     return cc1(llvm::ArrayRef(argv + 2, argv + argc));
   if (argc > 1 && !strcmp(argv[1], "ld")) {
