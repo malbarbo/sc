@@ -64,8 +64,9 @@ sinais, e compilar dentro do processo do REPL não é seguro:
     usa para testar o binário entregue.
 - **O filho.** Ele conversa por pipes com mensagens prefixadas pelo tamanho.
   Nesse modo o wasmtime nem é iniciado: o `main` do Rust chama
-  `sc_entry(argc, argv)`, e o laço do protocolo é escrito em C++
-  (`engine/sc_entry.cpp`).
+  `sc_main(argc, argv)`, e o laço do protocolo é escrito em C++
+  (`engine/sc_entry.cpp`). Com a API segura da fase 1 (`sc_proto::Session`),
+  o laço pode ficar em Rust; a escolha fica para a fase 2.
 - **Nomes no build:**
   - o crate do `loader/` passa a gerar o `sc`, que deixa de se chamar
     `scload`;
@@ -90,15 +91,15 @@ sinais, e compilar dentro do processo do REPL não é seguro:
   - o `make test-native` roda o corpus também pelo `build/sc` (`sc -cc1`,
     `sc ld` e a sessão pelo `sc --engine`), contra a mesma base nativa.
 
-**Bindgen.** O crate `sc-proto` roda o bindgen sobre `engine/sc.h` no build:
+**Bindgen.** O crate `sc-proto` (`proto/`) roda o bindgen sobre `engine/sc.h` no build:
 
 - Gera os tipos do protocolo: o enum de status, os códigos de mensagem e o
   cabeçalho de cada mensagem.
 - O REPL nativo e o host Rust de testes do `sc.wasm` usam esses mesmos tipos.
 - Nenhuma constante nem layout é mantido à mão.
-- As declarações das funções também saem dele: o `main` do Rust chama
-  `sc_entry` pelo binding gerado. É a única chamada FFI, e ela só acontece no
-  processo filho.
+- As declarações das funções também saem dele. Com a feature `engine`, o
+  crate liga o engine e dá uma API segura sobre elas (`Session`, `main`;
+  ANALISE.md §23). As chamadas só acontecem no processo filho.
 
 ### 1.2 Wasm: `sc.wasm` vira reactor que também exporta `_start` (R8, R9, T-B2)
 
@@ -275,17 +276,21 @@ Não há `sc_buf` alocado pelo host.
 
 ```c
 enum sc_status {
-  SC_OK = 0,    /* .so pronto */
+  SC_OK = 0,    /* pronto */
   SC_ERROR = 1, /* erro no código do aluno; a sessão volta ao estado anterior à célula */
-  SC_LOST = 2,  /* erro fatal, falha de link depois do codegen ou estado inconsistente:
+  SC_LOST = 2,  /* erro fatal, falha de link depois do codegen ou undo:
                    a sessão deve ser recriada e repassada */
 };
 enum sc_part { SC_DIAGS = 0, SC_SO = 1, SC_SYMS = 2 /* exports do .so, para o repasse */ };
+enum sc_cell_mode { SC_CELL_SO = 0, SC_CELL_REPLAY = 1 /* só IR, para o repasse */ };
 
 typedef struct sc_session sc_session;
-sc_session *sc_session_new(int argc, const char *const *argv); /* flags de sessão, §3.5 */
-int sc_session_cell(sc_session *s, const char *src, unsigned len, int codegen);
-int sc_session_undo(sc_session *s);                             /* desfaz a última célula aceita */
+/* flags de sessão (§3.5), -x c|c++, depois de "--" os argumentos do wasm-ld;
+   *out sempre recebe a sessão, também em SC_ERROR (para ler SC_DIAGS) */
+int sc_session_new(int argc, const char *const *argv, sc_session **out);
+void sc_session_free(sc_session *s);
+int sc_session_cell(sc_session *s, const char *src, unsigned len, int mode);
+int sc_session_undo(sc_session *s);                             /* SC_LOST (§3.3) */
 const unsigned char *sc_result_ptr(sc_session *s, int part);
 unsigned sc_result_len(sc_session *s, int part);
 int sc_main(int argc, const char **argv);                       /* o engine de hoje */
@@ -295,9 +300,14 @@ enum sc_msg { SC_MSG_NEW = 1, SC_MSG_CELL = 2, SC_MSG_UNDO = 3, SC_MSG_REPLY = 4
 struct sc_msg_header { unsigned kind, status, len[3]; };
 ```
 
+Feito na fase 1 (2026-10-13; ANALISE.md §23). Em relação ao rascunho:
+`sc_session_new` devolve o status, `sc_session_free` existe, o `codegen` virou
+`mode`, e o engine recebe os argumentos do link em vez de deduzir onde estão
+a libc e os builtins.
+
 - **Entradas do engine:**
-  - o `main` de `build/sc-engine` passa a ser `engine/sc_entry.cpp`, com
-    `sc_main` para `-cc1`/`ld` e o laço do protocolo para `session`;
+  - o `main` dos executáveis é `engine/sc_entry.cpp`, que chama `sc_main`
+    (`-cc1`/`ld`); o laço do protocolo para `session` entra na fase 2;
   - no wasm, o `_start` chama o mesmo `sc_main`.
 - **Diagnósticos:**
   - a sessão usa um `TextDiagnosticPrinter` sobre uma string;
@@ -496,7 +506,7 @@ só entra na fase 4, depois do aprendizado.
 | P. pin | `llvmorg-23.1.3`: rebase de `llvm/*.patch`, rebuild, `make learn`/`test`/`test-warn`/`checkinv`, tamanho no ANALISE | os critérios de sempre. As fases 0 em diante só começam depois dela |
 | E+N. exceções e padrões | §1.5 e §1.6 completos, no fluxo one-shot de hoje (antes da sessão, porque mudam os cortes e as bases). Pode começar antes da P, mas o `learn` é refeito depois dela | `make test`, `test-warn`, `test-native` e `checkinv` 0 diferenças contra as bases novas; programas com exceções e `setjmp` rodando pelo `scload` (wasmtime) e no V8; tamanho registrado no ANALISE |
 | 0. spike | as candidatas A e B (§1.3) mínimas sobre o `sc-host-full`; programas de `test/cxx` e `test/samples` cortados automaticamente em uma célula por declaração do topo, ligados e rodados pelo `scload`; uma célula fatal → repasse → célula seguinte | A: saída igual à do `pic-`; símbolos da célula após o repasse iguais aos sem crash. B: saída igual, sem reemitir inicializadores. Escolha registrada no ANALISE.md (tempo por célula, complexidade, memória) |
-| 1. API | `sc.h`, `sc_entry.cpp`, `sc_main` | `make test`, `test-native`, `test-warn` e `checkinv` sem diferença |
+| 1. API | `sc.h`, `sc_entry.cpp`, `sc_main`; `sc_api.cpp` (a sessão da API sobre o spike A) e o crate `sc-proto` com a API segura em Rust (`make test-proto`) | `make test`, `test-native`, `test-warn` e `checkinv` sem diferença; `test-proto` verde |
 | 2. sessão | §3 completo no `sc-host-full`; `build/sc-engine session` (laço do protocolo); um modo de teste `build/sc-engine repl <células...>` que grava os `.so` | `split-` (abaixo) igual ao `pic-` no engine sem cortes |
 | 3. testes | as fatias `ses-`, `split-`, `seq-`, `crash-` e `mem-` no `corpus.py` (§6) | todas verdes no engine sem cortes |
 | 4. cortes | `make learn` e `learn-native` dirigindo o `build/sc-engine repl` com as fatias novas; `test-warn` delas | `make test` 0 diferenças com as fatias novas; tempo do learn medido; tamanho dentro do orçamento (§5.1) |

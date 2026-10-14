@@ -1,0 +1,15 @@
+[package]
+name = "sc-proto"
+version = "0.1.0"
+edition = "2021"
+publish = false
+# build.rs passes the engine's link arguments on as DEP_SC_LINK_ARGS
+links = "sc"
+
+[features]
+# link the engine (Session, main): SC_LINK_ARGS names the file that
+# scripts/link.py --emit-link writes (make test-proto)
+engine = []
+
+[build-dependencies]
+bindgen = { version = "0.72", default-features = false, features = ["runtime"] }

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace llvm { class Module; }
+namespace llvm { class Module; class raw_ostream; }
 
 // What a cell left: SC_OK with the object, SC_ERROR (the session is back to
 // before the cell) or SC_LOST (the session must be recreated and replayed).
@@ -30,8 +30,9 @@ std::vector<std::string> scExports(const llvm::Module &M);
 // (clang-repl's IncrementalParser, without clangInterpreter).
 class ScSession {
 public:
-  // O: the flags of a one-shot compile, without an input file
-  static std::unique_ptr<ScSession> create(ScOptions O);
+  // O: the flags of a one-shot compile, without an input file. Diags: where
+  // the diagnostics go (stderr if null); null if the session cannot start
+  static std::unique_ptr<ScSession> create(ScOptions O, llvm::raw_ostream *Diags = nullptr);
   ~ScSession();
   // Backend: false parses and generates IR only (the replay)
   ScStatus cell(llvm::StringRef Src, bool Backend, std::string &Obj, std::vector<std::string> &Syms);

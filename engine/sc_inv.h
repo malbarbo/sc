@@ -19,5 +19,7 @@ struct ScOptions {
 bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O);
 void scBuildInvocation(clang::CompilerInvocation &Inv, const ScOptions &O);
 // sets the backend options the invocation lists (FrontendOptions::LLVMArgs, the
-// driver's -mllvm), as cc1 does, but without the command line parser
+// driver's -mllvm), as cc1 does, but without the command line parser. Those
+// already given are left alone: a session sets them again before each
+// backend, since wasm-ld resets every option (cl::ResetAllOptionOccurrences)
 void scSetLLVMArgs(const clang::CompilerInvocation &Inv);

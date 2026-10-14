@@ -180,13 +180,14 @@ void scSetLLVMArgs(const CompilerInvocation &Inv) {
   auto &Opts = llvm::cl::getRegisteredOptions();
   for (llvm::StringRef A : Inv.getFrontendOpts().LLVMArgs) {
     auto [Name, Value] = A.drop_front().split('=');
-    if (llvm::cl::Option *Opt = Opts.lookup(Name))
+    if (llvm::cl::Option *Opt = Opts.lookup(Name); Opt && !Opt->getNumOccurrences())
       Opt->addOccurrence(1, Name, Value);
   }
 }
 
 // Accepts the subset of cc1 flags the engine passes; everything else is fixed.
 bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
+  bool Lang = false; // -x: the language, else the extension of the input
   for (size_t i = 0; i < Args.size(); ++i) {
     llvm::StringRef A = Args[i];
     auto Next = [&]() -> const char * { return i + 1 < Args.size() ? Args[++i] : ""; };
@@ -199,6 +200,10 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
     else if (A == "-fvisibility=default") O.VisibilityDefault = true;
     else if (A == "-emit-module-interface" || A == "-fmodules-reduced-bmi") O.ModuleInterface = true;
     else if (A == "-I") O.Include.push_back(Next());
+    else if (A == "-x") {
+      O.CXX = llvm::StringRef(Next()) == "c++";
+      Lang = true;
+    }
     else if (A.consume_front("-std=")) O.Std = A.str();
     else if (A.consume_front("-fmodule-file=")) {
       auto [Name, File] = A.split('=');
@@ -211,7 +216,8 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
       O.Warnings.push_back(A.drop_front(2).str());
     else if (!A.starts_with("-")) {
       O.Input = A.str();
-      O.CXX = A.ends_with(".cpp") || A.ends_with(".cc") || A.ends_with(".cxx") || A.ends_with(".cppm");
+      if (!Lang)
+        O.CXX = A.ends_with(".cpp") || A.ends_with(".cc") || A.ends_with(".cxx") || A.ends_with(".cppm");
     }
   }
   return !O.Input.empty();

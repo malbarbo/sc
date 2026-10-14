@@ -27,7 +27,7 @@ WASM_OPTS := -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/$(B)/Toolchain-WASI-LLVM.cmake -DL
   -DCLANG_INCLUDE_TESTS=OFF -DCLANG_BUILD_TOOLS=OFF -DCLANG_BUILD_EXAMPLES=OFF -DCLANG_INCLUDE_DOCS=OFF \
   -DLLD_BUILD_TOOLS=OFF -DDEFAULT_SYSROOT=/usr -DCLANG_RESOURCE_DIR=/usr
 
-ENGINE := sc_main sc_inv sc_backend sc_cuts
+ENGINE := sc_entry sc_main sc_inv sc_backend sc_cuts
 ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI_EMULATED_MMAN \
   -DLLVM_BUILD_STATIC -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS \
   -I$(B)/src/clang/include -I$(B)/wasm/tools/clang/include -I$(B)/wasm/include -I$(B)/src/llvm/include \
@@ -35,7 +35,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -112,7 +112,7 @@ $(SR)/lib/wasm32-wasip1/libc++.so: $(B)/Toolchain-runtimes.cmake | $(B)/native/b
 sysroot: $(SR)/lib/wasm32-wasip1/libc++.so
 
 # --- the engine
-$(B)/engine/%.o: engine/%.cpp engine/sc_inv.h | $(B)/wasm/lib/libclangSema.a
+$(B)/engine/%.o: engine/%.cpp engine/sc.h engine/sc_inv.h | $(B)/wasm/lib/libclangSema.a
 	@mkdir -p $(@D)
 	$(W)/bin/clang++ $(ENGINE_FLAGS) -c $< -o $@
 
@@ -150,7 +150,7 @@ $(B)/host/lib/libclangSema.a: | $(B)/native/bin/wasm-ld
 	cmake -G Ninja -S $(B)/src/llvm -B $(B)/host $(HOST_OPTS)
 	ninja -C $(B)/host clang lld
 
-$(B)/engine-host/%.o: engine/%.cpp engine/sc_inv.h | $(B)/host/lib/libclangSema.a
+$(B)/engine-host/%.o: engine/%.cpp engine/sc.h engine/sc_inv.h engine/sc_session.h | $(B)/host/lib/libclangSema.a
 	@mkdir -p $(@D)
 	clang++ $(HOST_FLAGS) -c $< -o $@
 
@@ -172,7 +172,7 @@ native: $(B)/sc
 # --- PLANO-REPL.md phase 0: the two candidates for REPL cells (test/spike.py),
 # on the uncut native engine
 SPIKE := $(ENGINE) sc_session sc_spike
-$(B)/engine-spike/%.o: engine/%.cpp engine/sc_inv.h engine/sc_session.h | $(B)/host/lib/libclangSema.a
+$(B)/engine-spike/%.o: engine/%.cpp engine/sc.h engine/sc_inv.h engine/sc_session.h | $(B)/host/lib/libclangSema.a
 	@mkdir -p $(@D)
 	clang++ $(HOST_FLAGS) -DSC_SPIKE -c $< -o $@
 
@@ -183,6 +183,18 @@ $(B)/sc-spike: $(SPIKE:%=$(B)/engine-spike/%.o) scripts/link.py
 
 spike: $(B)/sc-spike $(SCLOAD)
 	test/spike.py
+
+# --- the engine's API for Rust (proto/, the sc-proto crate): the uncut native
+# engine with the session (sc.h), as the link arguments for proto/build.rs
+SESSION := $(ENGINE) sc_session sc_api
+$(B)/link-session/engine.args: $(SESSION:%=$(B)/engine-host/%.o) scripts/link.py
+	SC_LINKDIR=$(CURDIR)/$(B)/link-session \
+	  SC_EXTRA="$(CURDIR)/$(B)/engine-host/sc_session.o $(CURDIR)/$(B)/engine-host/sc_api.o" \
+	  scripts/link.py --native --full --emit-link $@ $(B)/link-session/engine
+
+test-proto: $(B)/link-session/engine.args $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+	SC_LINK_ARGS=$(CURDIR)/$< cargo test --locked --manifest-path proto/Cargo.toml --features engine \
+	  --target-dir $(B)/proto
 
 # --- the REPL's loader: runs the shared objects (native, wasmtime)
 SCLOAD := $(B)/loader/release/scload
@@ -253,4 +265,4 @@ size: $(B)/sc.wasm
 	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
 clean:
-	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native
+	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/proto $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native

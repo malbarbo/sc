@@ -1,8 +1,10 @@
 // sc compiler core, v2: clang frontend (invocation built in code, see
 // sc_inv.cpp), our own O0 backend (sc_backend.cpp) and wasm-ld in one module.
+// sc_main is the one-shot engine (sc.h); sc_entry.cpp is the executable's main.
 //   sc.wasm -cc1 <cc1 args...>   compile one TU (only the flags sc_inv knows), or
 //                                build a module's .pcm with -emit-module-interface
 //   sc.wasm ld <wasm-ld args...> link
+#include "sc.h"
 #include "sc_inv.h"
 #include "clang/Basic/DiagnosticFrontend.h"
 #include "clang/CodeGen/CodeGenAction.h"
@@ -73,7 +75,7 @@ static int cc1(llvm::ArrayRef<const char *> Args) {
 int scSpike(int argc, const char **argv);
 #endif
 
-int main(int argc, const char **argv) {
+int sc_main(int argc, const char **argv) {
 #ifdef SC_SPIKE
   if (argc > 1 && !strncmp(argv[1], "spike-", 6))
     return scSpike(argc - 1, argv + 1);

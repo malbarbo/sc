@@ -38,15 +38,22 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
 
 ## Layout
 
-- `engine/` is the code of the engine. `sc_main.cpp` dispatches `-cc1` and
-  `ld`. `sc_inv.cpp` builds clang's invocation in code rather than through the
+- `engine/` is the code of the engine. `sc.h` is its C API (`PLANO-REPL.md`
+  §2). `sc_main.cpp` dispatches `-cc1` and `ld` (`sc_main`), and
+  `sc_entry.cpp` is the executables' `main`. `sc_inv.cpp` builds clang's invocation in code rather than through the
   cc1 option parser. `sc_backend.cpp` replaces clang's `BackendUtil` with the
   O0 pipeline (the always-inliner, the coroutine lowering and codegen), so
   the optimization passes stay out. `sc_cuts.cpp`
   replaces a few LLVM functions sc does not need. `sc_session.cpp` is the
   REPL's session (one clang instance, each cell parsed on top of the ones
-  before) and `sc_spike.cpp` the driver of phase 0 of `PLANO-REPL.md`; both
-  go only into `build/sc-spike` for now (`make spike`, `ANALISE.md` §22).
+  before), `sc_api.cpp` the session part of `sc.h` over it (each cell linked
+  into a shared object) and `sc_spike.cpp` the driver of phase 0 of
+  `PLANO-REPL.md` (`make spike`, `ANALISE.md` §22). The session is not in
+  `sc.wasm` and `build/sc` yet, only in the uncut native engine that
+  `proto/` links.
+- `proto/` is the `sc-proto` crate: bindgen over `engine/sc.h` and, with the
+  `engine` feature, a safe Rust API over the linked engine (`Session`,
+  `main`; `ANALISE.md` §23). `make test-proto` runs its tests.
 - `llvm/` has the patches over the LLVM pin (`Makefile` has the commit) and the
   CMake toolchain file for wasi-sdk. `wasi-host.patch` makes LLVM build for
   WASI, from YoWASP's patch. `no-veclibs.patch` lets `scripts/trim.py` build
@@ -91,6 +98,7 @@ make learn       # rebuild what the cuts keep, from the corpus
 make native      # build/sc, the native engine (builds LLVM once more)
 make test-native # the corpus on build/sc against the uncut native engine
 make learn-native # after make learn: what only the native engine calls
+make test-proto  # the Rust API (proto/) over the uncut native engine
 ```
 
 The first `make` fetches wasi-sdk 29, the LLVM pin with the patches, and the

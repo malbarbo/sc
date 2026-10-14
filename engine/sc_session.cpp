@@ -22,6 +22,7 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/FrontendAction.h"
+#include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/PreprocessorOptions.h"
@@ -406,7 +407,7 @@ struct ScSession::Impl {
 
 static constexpr const char *MainFile = "<<< inputs >>>";
 
-std::unique_ptr<ScSession> ScSession::create(ScOptions O) {
+std::unique_ptr<ScSession> ScSession::create(ScOptions O, llvm::raw_ostream *Diags) {
   LLVMInitializeWebAssemblyTargetInfo();
   LLVMInitializeWebAssemblyTarget();
   LLVMInitializeWebAssemblyTargetMC();
@@ -430,7 +431,7 @@ std::unique_ptr<ScSession> ScSession::create(ScOptions O) {
   Impl &I = *S->I;
   I.CI = std::make_unique<CompilerInstance>(std::move(Inv));
   I.CI->createVirtualFileSystem(llvm::vfs::getRealFileSystem());
-  I.CI->createDiagnostics();
+  I.CI->createDiagnostics(Diags ? new TextDiagnosticPrinter(*Diags, I.CI->getDiagnosticOpts()) : nullptr);
   I.Act = std::make_unique<SessionAction>(I.Ctx);
   if (!I.CI->ExecuteAction(*I.Act) || I.CI->getDiagnostics().hasErrorOccurred())
     return nullptr;
@@ -463,6 +464,7 @@ ScStatus ScSession::cell(llvm::StringRef Src, bool Backend, std::string &Obj,
   if (!Backend)
     return ScOk;
   llvm::SmallString<0> Buf;
+  scSetLLVMArgs(CI.getInvocation()); // after a link, which resets them
   emitBackendOutput(CI, CI.getCodeGenOpts(), CI.getTarget().getDataLayoutString(), M.get(),
                     Backend_EmitObj, CI.getVirtualFileSystemPtr(),
                     std::make_unique<llvm::raw_svector_ostream>(Buf));

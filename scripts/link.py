@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Link the sc engine from the LLVM wasm build, applying the cuts in cuts/.
 
-usage: link.py [--native] [--full | --learn] <out>
+usage: link.py [--native] [--full | --learn] [--emit-link <file>] <out>
   (default)  cut link: deterministic, from cuts/objects.txt, cuts/symbols.txt
              and cuts/symbols.used
   --full     no cuts and no trims: the reference engine for the corpus
@@ -11,6 +11,10 @@ usage: link.py [--native] [--full | --learn] <out>
   --native   the native engine (x86-64 ELF) from the host LLVM build
              (build/host), with the same cuts; a cut function prints its
              name and aborts
+  --emit-link  also write to <file>, one per line, the arguments that link
+             the same engine into another program (proto/build.rs): the
+             objects without sc_entry.o (main), the archives, the stubs and
+             the linker flags (native)
 
 Two kinds of cut:
   * objects (cuts/objects.txt, one regex per line over member paths such as
@@ -44,6 +48,8 @@ args = sys.argv[1:]
 NATIVE = bool(args) and args[0] == '--native'
 args = args[NATIVE:]
 mode = args.pop(0)[2:] if args and args[0] in ('--full', '--learn') else 'cut'
+EMIT = os.path.realpath(args[1]) if args and args[0] == '--emit-link' else None
+args = args[2 * bool(EMIT):]
 out = os.path.realpath(args[0])
 WB = f'{B}/host' if NATIVE else f'{B}/wasm'
 H = '-host' if NATIVE else ''  # the native build keeps its files apart
@@ -72,7 +78,7 @@ def ninja_cmd(target):
 
 
 # --- the link line: clang's, with the engine objects in place of the driver
-ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine{H}')}/{f}.o" for f in ('sc_main', 'sc_inv', 'sc_backend', 'sc_cuts')]
+ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine{H}')}/{f}.o" for f in ('sc_entry', 'sc_main', 'sc_inv', 'sc_backend', 'sc_cuts')]
 ENGINE += os.environ.get('SC_EXTRA', '').split()  # more engine objects, for experiments
 toks = shlex.split(ninja_cmd('bin/clang-23').split(': && ', 1)[1].removesuffix(' && :'))
 flags = [t for t in toks if not t.endswith(('.a', '.obj', '.o')) and t not in ('-o', 'bin/clang-23', '-Os', '-Xlinker')
@@ -197,11 +203,22 @@ def undefined(cmd, prefix=''):
     return sigs
 
 
+def finish():
+    """the engine linked to <out>, and the link arguments to the --emit-link file"""
+    os.replace(ENG, out)
+    if EMIT:
+        keep = [t for t in shlex.split(last) if not t.endswith('/sc_entry.o') and (
+            t.startswith(('-l', '-fuse-ld=')) or t.startswith('-Wl,') and 'rpath' not in t or t.endswith(('.o', '.a')))]
+        open(EMIT, 'w').write(''.join(t + '\n' for t in keep))
+
+
 def link_with_stubs(base, extra, out_, name):
     """link; functions still undefined become trapping stubs <name>.o"""
+    global last
     stubs = undefined(f'{base} {extra}')
     o = trap_stubs(name, stubs)
-    cmd = f'{base} {extra} {o} -Wl,--warn-unresolved-symbols -Wl,-Map={d}/engine.map -o {out_}'
+    last = f'{base} {extra} {o} -Wl,--warn-unresolved-symbols'
+    cmd = f'{last} -Wl,-Map={d}/engine.map -o {out_}'
     open(f'{d}/link.sh', 'w').write(f'cd {WB} && {cmd}\n')
     sh(cmd)
     return o, len(stubs)
@@ -262,7 +279,7 @@ else:
     say(f'objects: removed={ngone} stubs={n}')
 
 if mode == 'full':
-    os.replace(ENG, out)
+    finish()
     sys.exit()
 
 # --- stage 2: function cuts over what stage 1 linked
@@ -424,4 +441,4 @@ for it in range(100):
     used |= frames
     host |= frames
     write_used()
-os.replace(ENG, out)
+finish()

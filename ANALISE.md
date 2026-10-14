@@ -1267,3 +1267,81 @@ sessão longa e aceita `import std;`. O estado que B evitaria (repasse,
 `CleanUpPTU`) já funcionou no spike. O `engine/sc_session.cpp` é a base da
 fase 2. O `sc_spike.cpp` e o `test/spike.py` ficam até as fatias `split-`
 e `crash-` da fase 3 os substituírem.
+
+## 23. Fase 1 do REPL: a API em C e a API segura em Rust
+
+Data: 2026-10-13.
+
+**O que entrou.**
+
+- `engine/sc.h`, a API em C do plano (§2), com quatro diferenças do
+  rascunho:
+  - `sc_session_new` devolve o status e sempre entrega a sessão, para que os
+    diagnósticos de uma sessão que não começou possam ser lidos;
+  - `sc_session_free`;
+  - o `codegen` da célula virou `mode` (`SC_CELL_SO` ou `SC_CELL_REPLAY`);
+  - os argumentos do wasm-ld (`-L`, as bibliotecas, os builtins) vêm depois
+    de `--`. O engine não precisa saber onde ficam a libc e os builtins.
+- `main` virou `sc_main`, e `engine/sc_entry.cpp` é o `main` dos
+  executáveis (`sc.wasm`, `build/sc`, os engines sem cortes).
+- `engine/sc_api.cpp`, a sessão da API sobre o `ScSession` do spike:
+  - os diagnósticos vão para uma string;
+  - o objeto de cada célula é ligado pelo `lldMain` num diretório
+    temporário da sessão, e o `.so` é lido de volta (§3.1 do plano);
+  - uma falha de link depois do codegen dá `SC_LOST`, e o `undo` também
+    (§3.3).
+- A sessão entra só no engine nativo sem cortes que o Rust liga. O
+  `sc.wasm` e o `build/sc` ficam como estavam até as fases 4 e 5.
+
+**O link reinicia as opções do LLVM.** O driver do wasm-ld chama
+`cl::ResetAllOptionOccurrences` a cada link. Na sessão, a primeira célula
+ligava e a segunda perdia `-wasm-enable-sjlj` e `-wasm-enable-eh`, e o
+backend abortava com "-exception-model=wasm only allowed with at least one
+of -wasm-enable-eh or -wasm-enable-sjlj". O spike não via isso porque ligava
+cada célula em outro processo. Agora o `scSetLLVMArgs` roda antes de cada
+backend da sessão e pula as opções já dadas, o que evita o aviso "may only
+occur zero or one times". No one-shot ele roda uma vez só, como antes.
+
+**O crate `sc-proto` (`proto/`).**
+
+- **bindgen** sobre `engine/sc.h`: os enums viram módulos de constantes, e
+  o `sc_msg_header` vem com a checagem de layout. Nenhuma constante é
+  escrita à mão.
+- **Ligação** com a feature `engine`:
+  - o `build.rs` lê o arquivo do `link.py --native --full --emit-link`: os
+    mesmos objetos e arquivos do engine, sem o `sc_entry.o`, mais os stubs e
+    as flags de link (`-fuse-ld=lld`, `--gc-sections`, `--icf=safe`);
+  - o `build.rs` soma `-lstdc++`;
+  - o `rustc-link-arg` só alcança os testes e exemplos do próprio crate.
+    Para o binário `sc` da fase 6b, o crate declara `links = "sc"` e passa o
+    arquivo adiante como `DEP_SC_LINK_ARGS`.
+- **API segura:**
+  - `Session::new`, `cell` e `undo` devolvem um `Reply`, que empresta a
+    sessão. Os buffers do engine que ele expõe (`diags`, `so`, `syms`) não
+    sobrevivem à chamada seguinte, porque ela pede `&mut`;
+  - o engine não é thread safe (LLVM sem threads). Só a primeira thread que
+    o usa pode usá-lo, e as outras recebem `Error::OtherThread`.
+    `Session` não é `Send` nem `Sync`;
+  - um NUL nos argumentos e uma célula de 4 GiB ou mais são recusados antes
+    da chamada;
+  - `main` embrulha o `sc_main`.
+- **O que o Rust não garante:** um erro fatal ou um crash do compilador
+  ainda encerra o processo (o `return` no topo, §22). Por isso o REPL
+  nativo continua com o filho (§1.1 do plano).
+- **Teste (`make test-proto`):**
+  - uma sessão C com `static` compartilhado e uma célula com erro;
+  - o repasse, que dá os mesmos símbolos;
+  - o `undo`;
+  - uma sessão C++ com exceção e libc++, rodada no `scload`;
+  - o `main` e a regra de thread.
+
+  Leva 2,1 s.
+
+**Regressões.**
+
+- `make test`, `make test-native` e `make test-warn`: 13.819 arquivos, 0
+  diferenças.
+- `make checkinv`: SAME.
+- `make spike`: igual ao §22 (A 29/29, B 26/29, repasse 23/23).
+- Tamanho: o `sc.wasm` fica com 5.552.196 bytes zstd (−775 bytes) e o
+  `build/sc` com 7,80 MB zstd. A sessão ainda não está neles.

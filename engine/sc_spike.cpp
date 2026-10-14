@@ -43,24 +43,9 @@ void LLVMInitializeWebAssemblyAsmParser();
 // sc_backend.cpp calls it, if set, before the backend (SC_SPIKE only)
 extern std::function<void(llvm::Module &)> scBeforeBackend;
 
-static std::vector<const char *> takeX(llvm::ArrayRef<const char *> Args, bool &CXX) {
-  std::vector<const char *> R;
-  for (size_t i = 0; i < Args.size(); ++i) {
-    if (llvm::StringRef(Args[i]) == "-x" && i + 1 < Args.size()) {
-      CXX = llvm::StringRef(Args[++i]) == "c++";
-      continue;
-    }
-    R.push_back(Args[i]);
-  }
-  return R;
-}
-
 static int spikeA(llvm::ArrayRef<const char *> Args) {
   ScOptions O;
-  auto Rest = takeX(Args, O.CXX);
-  bool CXX = O.CXX;
-  scParseArgs(Rest, O);
-  O.CXX = CXX;
+  scParseArgs(Args, O);
   auto S = ScSession::create(O);
   if (!S) {
     std::cout << "lost" << std::endl;
