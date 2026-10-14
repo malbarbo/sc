@@ -82,23 +82,35 @@ void sc_session_free(sc_session *s) { delete s; }
 
 int sc_session_cell(sc_session *s, const char *src, unsigned len, int mode) {
   s->clear();
+  if (mode != SC_CELL_SO && mode != SC_CELL_REPLAY && mode != SC_CELL_WHOLE) {
+    s->DiagOS << "sc: unknown cell mode\n";
+    return SC_ERROR;
+  }
   if (s->Lost || !s->S) {
     s->DiagOS << "sc: the session is lost\n";
     return SC_LOST;
   }
   std::string Obj;
   std::vector<std::string> Syms;
-  ScStatus St = s->S->cell(llvm::StringRef(src, len), mode == SC_CELL_SO, Obj, Syms);
+  ScStatus St = s->S->cell(llvm::StringRef(src, len), mode != SC_CELL_REPLAY, Obj, Syms, mode == SC_CELL_WHOLE);
+  if (St == ScIncomplete) {
+    s->Diags.clear(); // what the parser says of a cell that stops short
+    return SC_INCOMPLETE;
+  }
   if (St == ScOk) {
     s->Accepted = true;
     for (auto &N : Syms)
       s->Syms += N + "\n";
-    if (mode == SC_CELL_SO && !s->link(Obj))
+    if (mode != SC_CELL_REPLAY && !s->link(Obj))
       St = ScLost; // the code is generated, the session cannot go back
   }
   if (St == ScLost)
     s->Lost = true;
   return St;
+}
+
+int sc_session_depth(sc_session *s, const char *src, unsigned len) {
+  return s->S ? s->S->depth(llvm::StringRef(src, len)) : 0;
 }
 
 int sc_session_undo(sc_session *s) {

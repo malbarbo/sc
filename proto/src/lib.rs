@@ -41,6 +41,10 @@ pub enum Status {
     Error,
     /// The session must be recreated and its log replayed.
     Lost,
+    /// [`Mode::Whole`]: the cell stops short, where the parser wanted more.
+    /// It is an [`Status::Error`] without the diagnostics, and so is what
+    /// the session keeps of it.
+    Incomplete,
 }
 
 impl Status {
@@ -49,6 +53,7 @@ impl Status {
         match s {
             sys::sc_status::SC_OK => Status::Ok,
             sys::sc_status::SC_ERROR => Status::Error,
+            sys::sc_status::SC_INCOMPLETE => Status::Incomplete,
             _ => Status::Lost,
         }
     }
@@ -58,6 +63,7 @@ impl Status {
             Status::Ok => sys::sc_status::SC_OK,
             Status::Error => sys::sc_status::SC_ERROR,
             Status::Lost => sys::sc_status::SC_LOST,
+            Status::Incomplete => sys::sc_status::SC_INCOMPLETE,
         }
     }
 }
@@ -69,6 +75,10 @@ pub enum Mode {
     So,
     /// Parse and generate IR only, as in a replay: the exported names.
     Replay,
+    /// [`Mode::So`], or [`Status::Incomplete`] if the cell stops short: its
+    /// first error is at its end (a declaration without its `;`, a header
+    /// without its body). The REPL asks so on Enter.
+    Whole,
 }
 
 impl Mode {
@@ -76,6 +86,7 @@ impl Mode {
         match m {
             sys::sc_cell_mode::SC_CELL_SO => Some(Mode::So),
             sys::sc_cell_mode::SC_CELL_REPLAY => Some(Mode::Replay),
+            sys::sc_cell_mode::SC_CELL_WHOLE => Some(Mode::Whole),
             _ => None,
         }
     }
@@ -84,6 +95,7 @@ impl Mode {
         match self {
             Mode::So => sys::sc_cell_mode::SC_CELL_SO,
             Mode::Replay => sys::sc_cell_mode::SC_CELL_REPLAY,
+            Mode::Whole => sys::sc_cell_mode::SC_CELL_WHOLE,
         }
     }
 }

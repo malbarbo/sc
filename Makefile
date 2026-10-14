@@ -35,7 +35,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto session test-split clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto session test-split repl clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -46,7 +46,8 @@ $(B)/src/llvm/CMakeLists.txt:
 	git init -q $(B)/src && cd $(B)/src && git sparse-checkout set $(LLVM_PATHS) \
 	  && git fetch -q --depth 1 $(LLVM_REPO) $(LLVM_COMMIT) && git checkout -q FETCH_HEAD \
 	  && git apply $(CURDIR)/llvm/wasi-host.patch $(CURDIR)/llvm/no-veclibs.patch $(CURDIR)/llvm/dylink-weak.patch \
-	  $(CURDIR)/llvm/libcxx-locale.patch $(CURDIR)/llvm/incremental-c-scopes.patch
+	  $(CURDIR)/llvm/libcxx-locale.patch $(CURDIR)/llvm/incremental-c-scopes.patch \
+	  $(CURDIR)/llvm/incremental-stmts.patch
 
 $(B)/c-testsuite/.git:
 	git init -q $(B)/c-testsuite && cd $(B)/c-testsuite \
@@ -209,12 +210,25 @@ session: $(B)/sc-engine-full
 test-split: $(B)/sc-engine-full $(SCLOAD) $(B)/res/native-base/summary.json
 	test/split.py
 
-# --- the REPL's loader: runs the shared objects (native, wasmtime)
+# --- the REPL's loader: runs the shared objects (native, wasmtime). The same
+# crate has sc, the REPL (a prototype of phase 6b: its compiler is the child
+# sc-engine-full session, with the arguments in build/repl)
 SCLOAD := $(B)/loader/release/scload
-$(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/main.rs
-	cargo build --release --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader
+SC_REPL := $(B)/loader/release/sc
+$(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/lib.rs loader/src/main.rs
+	cargo build --release --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --bin scload
+$(SC_REPL): loader/Cargo.toml loader/Cargo.lock $(shell find loader/src -name '*.rs') \
+            $(wildcard proto/*.toml proto/*.rs proto/src/*.rs) engine/sc.h
+	cargo build --release --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --features repl --bin sc
 
 loader: $(SCLOAD)
+
+$(B)/repl/c.args $(B)/repl/c++.args &: test/split.py test/corpus.py
+	mkdir -p $(B)/repl
+	test/split.py --args c > $(B)/repl/c.args
+	test/split.py --args c++ > $(B)/repl/c++.args
+
+repl: $(SC_REPL) $(B)/sc-engine-full $(B)/repl/c.args $(B)/repl/c++.args $(SR)/lib/wasm32-wasip1/libc++.so
 
 # --- tests: the corpus against the uncut engine
 $(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so

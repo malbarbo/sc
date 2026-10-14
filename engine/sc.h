@@ -20,6 +20,8 @@ enum sc_status {
                    goes on from a copy taken before it */
   SC_LOST = 2,  /* after a fatal error, a failed link or an undo: the session must be
                    recreated and the log replayed (§3.6) */
+  SC_INCOMPLETE = 3, /* SC_CELL_WHOLE: the cell stops short, as a failed cell
+                        (SC_ERROR) without its diagnostics */
 };
 
 enum sc_part {
@@ -31,6 +33,31 @@ enum sc_part {
 enum sc_cell_mode {
   SC_CELL_SO = 0,     /* compile and link the cell: SC_SO and SC_SYMS */
   SC_CELL_REPLAY = 1, /* parse and generate IR only, as in a replay: SC_SYMS */
+  SC_CELL_WHOLE = 2,  /* SC_CELL_SO, or SC_INCOMPLETE if the cell stops short:
+                         its first error is at its end, where the parser wanted
+                         more (a declaration without its `;`, a function's
+                         header without its body, an `if` without its
+                         statement). The REPL asks so on Enter */
+};
+
+/* A cell that ends in an expression without its `;` shows its value, if the
+   value is a number, a character, a bool or a pointer: the expression
+   becomes a call to
+     void __sc_show_int(const char *type, int kind, long long value);
+     void __sc_show_float(const char *type, int kind, double value);
+   which the host that loads the cells defines. type is the expression's type
+   as clang writes it; kind is one of these. A string is the address of its
+   first char. Any other value is not shown. */
+enum sc_show {
+  SC_SHOW_SIGNED = 0,
+  SC_SHOW_UNSIGNED = 1,
+  SC_SHOW_BOOL = 2,
+  SC_SHOW_CHAR = 3,
+  SC_SHOW_POINTER = 4,
+  SC_SHOW_STRING = 5,  /* a char * or a char array */
+  SC_SHOW_NULLPTR = 6, /* nullptr_t */
+  SC_SHOW_DOUBLE = 7,  /* __sc_show_float: double, long double */
+  SC_SHOW_FLOAT = 8,   /* __sc_show_float: float */
 };
 
 typedef struct sc_session sc_session;
@@ -47,6 +74,10 @@ int sc_session_cell(sc_session *s, const char *src, unsigned len, int mode);
    SC_LOST: the host replays the log without it (§3.3). SC_ERROR if no cell
    was accepted. */
 int sc_session_undo(sc_session *s);
+/* The brackets src[0, len) leaves open, by the session's lexer, one more if
+   it ends inside a comment or with a `\` that joins the next line: how far
+   in the REPL starts the line Enter opens. It does not touch the session. */
+int sc_session_depth(sc_session *s, const char *src, unsigned len);
 /* A part of the result of the last call (enum sc_part). */
 const unsigned char *sc_result_ptr(sc_session *s, int part);
 unsigned sc_result_len(sc_session *s, int part);
@@ -62,12 +93,14 @@ int sc_main(int argc, const char **argv);
      SC_MSG_NEW   a session (it replaces the one before): the arguments of
                   sc_session_new, each followed by a NUL, in the first part
      SC_MSG_CELL  sc_session_cell: the source in the first part, the mode in
-                  status. In SC_CELL_SO the child forks a copy of itself
+                  status. In SC_CELL_SO and SC_CELL_WHOLE the child forks a copy of itself
                   first; if the cell fails or ends the process, the copy
-                  answers SC_ERROR and goes on, so the session is as before
+                  answers SC_ERROR (or SC_INCOMPLETE) and goes on, so the session is as before
                   the cell
-     SC_MSG_UNDO  sc_session_undo */
-enum sc_msg { SC_MSG_NEW = 1, SC_MSG_CELL = 2, SC_MSG_UNDO = 3, SC_MSG_REPLY = 4 };
+     SC_MSG_UNDO  sc_session_undo
+     SC_MSG_DEPTH sc_session_depth: the source in the first part; the reply's
+                  status is the depth */
+enum sc_msg { SC_MSG_NEW = 1, SC_MSG_CELL = 2, SC_MSG_UNDO = 3, SC_MSG_REPLY = 4, SC_MSG_DEPTH = 5 };
 struct sc_msg_header {
   unsigned kind, status, len[3];
 };

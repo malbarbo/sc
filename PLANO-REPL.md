@@ -334,8 +334,8 @@ a libc e os builtins.
 iguala o `pic-` em 1.941 dos 1.947 programas do corpus. Os 6 restantes são
 limites conhecidos (`KNOWN` no `test/split.py`). Para chegar lá, a sessão
 ganhou quatro correções (§3.8) e o loader, as referências para a frente.
-Ainda faltam o §3.4 (o aviso de não usado só na célula que define, o erro
-de "falta `;`", a nota da redefinição), as combinações incrementais no
+Ainda faltam o §3.4 (o aviso de não usado só na célula que define e a nota
+da redefinição), as combinações incrementais no
 `checkinv` (§3.5) e o `return` no topo (§3.7). O `#include` depois de uma
 célula que falhou foi resolvido pelo snapshot por `fork` (§3.3).
 
@@ -430,15 +430,22 @@ Testes: os casos `cnt`, `nx` (`static` local de função `static`) e `an`
   fortes, e o loader esconde a primeira.
 - `UnusedFileScopedDecls` não é limpo: um `static` não usado é avisado de
   novo em toda célula.
-- Uma expressão final sem `;` é aceita em silêncio.
+- Uma expressão final sem `;` é aceita em silêncio, como um valor descartado.
 
 **Decisões para a v1:**
 
 - O aviso de não usado só sai na célula que define a declaração. Isso é
   filtrado no printer, pela PTU de origem.
-- `warn_unused_expr` fica ignorado, como no `Interpreter::Parse`.
-- Uma expressão sem `;` dá um erro do sc: "falta `;`". A impressão de valor
-  fica fora da v1.
+- ~~`warn_unused_expr` fica ignorado; uma expressão sem `;` dá "falta
+  `;`" e a impressão de valor fica fora da v1.~~ Mudou no protótipo
+  (ANALISE.md §26): a expressão sem `;` mostra o valor, se for escalar, e
+  não é mais um valor descartado (`llvm/incremental-stmts.patch`), então
+  o `warn_unused_expr` voltou.
+- Fica para depois mostrar struct, union, array e enum pelo nome. O motor
+  passa a descrição do tipo (campos, offsets, tamanhos, enumeradores) e o
+  endereço de uma temporária, e o `sc` lê a memória do wasm, sem gerar
+  código na célula. Os tipos da biblioteca do C++ (`std::string`,
+  `vector`) ficam fora: o formato deles é da libc++.
 
 **Redefinição (C-M3, T-M7).**
 
@@ -623,3 +630,6 @@ O front end do REPL:
 
 Eles afetam a premissa de que "o estado do aluno vive no loader" e precisam
 de um plano próprio antes da fase 6.
+
+O protótipo `sc` (ANALISE.md §26) tomou uma decisão provisória para cada
+um deles, para que o REPL possa ser usado antes da fase 6b.

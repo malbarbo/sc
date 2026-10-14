@@ -139,6 +139,15 @@ impl Session {
         Ok(self.reply(st))
     }
 
+    /// The brackets `src` leaves open, one more if it ends inside a comment
+    /// or with a `\` that joins the next line. It does not touch the session.
+    pub fn depth(&mut self, src: impl AsRef<[u8]>) -> Result<u32, Error> {
+        let src = src.as_ref();
+        let len = u32::try_from(src.len()).map_err(|_| Error::TooLong)?;
+        // the engine copies src[0, len)
+        Ok(unsafe { sys::sc_session_depth(self.raw.as_ptr(), src.as_ptr().cast(), len) } as u32)
+    }
+
     /// Undoes the last accepted cell. Its code is already generated, so the
     /// session is lost and the host replays the log without it; an error if
     /// no cell was accepted.
@@ -256,7 +265,7 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
                 // a replayed cell is one that was accepted
                 output.flush()?;
                 let copy = match mode {
-                    Mode::So => match Copy::fork()? {
+                    Mode::So | Mode::Whole => match Copy::fork()? {
                         Fork::Original(c) => c,
                         Fork::Copy(answer) => {
                             output.write_all(&answer)?;
@@ -272,8 +281,9 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
                         // without a copy, a failed cell loses the session
                         let st = match (r.status(), mode, &copy) {
                             (Status::Ok, _, _) | (_, Mode::Replay, _) => r.status(),
-                            (_, Mode::So, Some(_)) => Status::Error,
-                            (_, Mode::So, None) => Status::Lost,
+                            (Status::Incomplete, _, Some(_)) => Status::Incomplete,
+                            (_, _, Some(_)) => Status::Error,
+                            (_, _, None) => Status::Lost,
                         };
                         r.write(&mut answer, st)?;
                         st
@@ -293,6 +303,11 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
             (msg::SC_MSG_UNDO, Some(s)) => {
                 let r = s.undo();
                 r.write(output, r.status())?
+            }
+            (msg::SC_MSG_DEPTH, s) => {
+                // the reply's status is the depth: with no session, nothing is open
+                let d = s.as_mut().and_then(|s| s.depth(&m.parts[0]).ok()).unwrap_or(0);
+                wire::write(output, msg::SC_MSG_REPLY, d, [b"", b"", b""])?
             }
             (msg::SC_MSG_CELL | msg::SC_MSG_UNDO, None) => reply(output, Status::Error, b"sc: no session\n")?,
             _ => reply(output, Status::Error, b"sc: unknown message\n")?,

@@ -8,6 +8,21 @@ publish = false
 wasmparser = "0.239"
 wasmtime = "48.0.3"
 wasmtime-wasi = "48.0.3"
+# sc, the REPL: the engine's child protocol (bindgen, so libclang), the
+# command line, the prompt. scload builds without them
+sc-proto = { path = "../proto", optional = true }
+bpaf = { version = "0.9", features = ["derive", "bright-color"], optional = true }
+rustyline = { version = "18", features = ["derive", "custom-bindings"], optional = true }
+dirs = { version = "6", optional = true }
+libc = { version = "0.2", optional = true }
+
+[features]
+repl = ["dep:sc-proto", "dep:bpaf", "dep:rustyline", "dep:dirs", "dep:libc"]
+
+[[bin]]
+name = "sc"
+path = "src/bin/sc/main.rs"
+required-features = ["repl"]
 
 [profile.release]
 debug = false

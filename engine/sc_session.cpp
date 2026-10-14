@@ -9,6 +9,7 @@
 // unmerger ASTDeclUnmerger, because the AST lets them reach its private
 // state. clangInterpreter is not linked.
 #include "sc_session.h"
+#include "sc.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
@@ -17,7 +18,6 @@
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/GlobalDecl.h"
 #include "clang/Basic/DiagnosticFrontend.h"
-#include "clang/Basic/DiagnosticSema.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CodeGen/BackendUtil.h"
 #include "clang/CodeGen/ModuleBuilder.h"
@@ -26,9 +26,11 @@
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Lex/HeaderSearch.h"
+#include "clang/Lex/Lexer.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Parse/Parser.h"
+#include "clang/Sema/Lookup.h"
 #include "clang/Sema/Sema.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DiagnosticInfo.h"
@@ -166,6 +168,85 @@ std::vector<std::string> scExports(const llvm::Module &M) {
   return R;
 }
 
+// --- the value of a cell that ends in an expression without its `;` (sc.h)
+
+static const char *ShowPrelude = "void __sc_show_int(const char *, int, long long);\n"
+                                 "void __sc_show_float(const char *, int, double);\n";
+
+static bool isChar(QualType T) {
+  return T->isSpecificBuiltinType(BuiltinType::Char_S) || T->isSpecificBuiltinType(BuiltinType::Char_U);
+}
+
+// T without a class's member typedefs (std::string::size_type), which say
+// little outside the class
+static QualType plain(ASTContext &C, QualType T) {
+  SplitQualType Q = T.split();
+  if (auto *TT = dyn_cast<TypedefType>(Q.Ty); TT && TT->getDecl()->getDeclContext()->isRecord())
+    return plain(C, C.getQualifiedType(TT->desugar(), Q.Quals));
+  if (auto *P = dyn_cast<PointerType>(Q.Ty))
+    return C.getQualifiedType(C.getPointerType(plain(C, P->getPointeeType())), Q.Quals);
+  return T;
+}
+
+// The call that shows the value of E, or null if E is not shown.
+static Expr *show(Sema &S, Expr *E) {
+  ASTContext &C = S.getASTContext();
+  auto *EWC = dyn_cast<ExprWithCleanups>(E); // the temporaries, put back on the call
+  if (EWC)
+    E = EWC->getSubExpr();
+  QualType T = E->IgnoreImpCasts()->getType().getUnqualifiedType();
+  QualType D = T.getCanonicalType().getUnqualifiedType();
+  int Kind;
+  if (D->isBooleanType())
+    Kind = SC_SHOW_BOOL;
+  else if (isChar(D))
+    Kind = SC_SHOW_CHAR;
+  else if (D->isIntegralOrEnumerationType() && C.getTypeSize(D) <= 64)
+    Kind = D->isSignedIntegerOrEnumerationType() ? SC_SHOW_SIGNED : SC_SHOW_UNSIGNED;
+  else if (D->isRealFloatingType())
+    Kind = D->isSpecificBuiltinType(BuiltinType::Float) ? SC_SHOW_FLOAT : SC_SHOW_DOUBLE;
+  else if (D->isNullPtrType())
+    Kind = SC_SHOW_NULLPTR;
+  else if (D->isPointerType())
+    Kind = isChar(D->getPointeeType().getCanonicalType().getUnqualifiedType()) ? SC_SHOW_STRING : SC_SHOW_POINTER;
+  else if (D->isArrayType() && isChar(C.getAsArrayType(D)->getElementType().getCanonicalType().getUnqualifiedType()))
+    Kind = SC_SHOW_STRING;
+  else
+    return nullptr;
+  bool Float = Kind == SC_SHOW_FLOAT || Kind == SC_SHOW_DOUBLE;
+
+  LookupResult R(S, &C.Idents.get(Float ? "__sc_show_float" : "__sc_show_int"), SourceLocation(),
+                 Sema::LookupOrdinaryName);
+  S.LookupQualifiedName(R, C.getTranslationUnitDecl());
+  if (!R.isSingleResult())
+    return nullptr;
+  CXXScopeSpec SS;
+  ExprResult Fn = S.BuildDeclarationNameExpr(SS, R, /*NeedsADL=*/false);
+  SourceLocation Loc = E->getBeginLoc();
+  std::string Name = plain(C, T).getAsString(S.getPrintingPolicy());
+  if (isa<PredefinedSugarType>(T)) // the type of sizeof, __size_t, is size_t
+    Name = llvm::StringRef(Name).drop_while([](char c) { return c == '_'; }).str();
+  Expr *Type = StringLiteral::Create(C, Name, StringLiteralKind::Ordinary, false,
+                                     C.getStringLiteralArrayType(C.CharTy, Name.size()), Loc);
+  Expr *KindE = IntegerLiteral::Create(C, llvm::APInt(C.getIntWidth(C.IntTy), Kind), C.IntTy, Loc);
+  // nullptr does not convert to an integer in C
+  ExprResult V = Kind == SC_SHOW_NULLPTR
+                     ? IntegerLiteral::Create(C, llvm::APInt(C.getIntWidth(C.LongLongTy), 0), C.LongLongTy, Loc)
+                     : S.BuildCStyleCastExpr(Loc, C.getTrivialTypeSourceInfo(Float ? C.DoubleTy : C.LongLongTy, Loc),
+                                             Loc, E);
+  if (Fn.isInvalid() || V.isInvalid())
+    return nullptr;
+  Expr *Args[] = {Type, KindE, V.get()};
+  ExprResult Call = S.ActOnCallExpr(nullptr, Fn.get(), Loc, Args, E->getEndLoc());
+  if (!Call.isInvalid())
+    Call = S.ActOnFinishFullExpr(Call.get(), /*DiscardedValue=*/false);
+  if (Call.isInvalid())
+    return nullptr;
+  if (EWC && !isa<ExprWithCleanups>(Call.get()))
+    return ExprWithCleanups::Create(C, Call.get(), EWC->cleanupsHaveSideEffects(), EWC->getObjects());
+  return Call.get();
+}
+
 // --- the copy of clang-repl's IncrementalParser (llvmorg-23.1.3)
 
 namespace clang {
@@ -178,6 +259,7 @@ public:
   CodeGenerator *CG;
   llvm::LLVMContext &Ctx;
   unsigned InputCount = 0;
+  FileID LastFID; // the last cell's
   std::function<void()> BeforeEnd; // before the CodeGen ends the cell's module
 
   IncrementalParser(CompilerInstance &Instance, CodeGenerator *CG, llvm::LLVMContext &Ctx)
@@ -223,6 +305,12 @@ public:
     Sema::ModuleImportState ImportState;
     for (bool AtEOF = P->ParseFirstTopLevelDecl(ADecl, ImportState); !AtEOF;
          AtEOF = P->ParseTopLevelDecl(ADecl, ImportState)) {
+      if (ADecl && !S.getDiagnostics().hasErrorOccurred())
+        for (Decl *D : ADecl.get())
+          if (auto *TLSD = dyn_cast<TopLevelStmtDecl>(D); TLSD && TLSD->isSemiMissing())
+            if (auto *E = dyn_cast_or_null<Expr>(TLSD->getStmt()))
+              if (Expr *Call = show(S, E))
+                TLSD->setStmt(Call);
       if (ADecl && !Consumer->HandleTopLevelDecl(ADecl.get()))
         break;
     }
@@ -253,9 +341,10 @@ public:
     return C.getTranslationUnitDecl();
   }
 
-  TranslationUnitDecl *Parse(llvm::StringRef Input) {
+  // Prelude: declarations of sc's own, which no diagnostic shows
+  TranslationUnitDecl *Parse(llvm::StringRef Input, bool Prelude = false) {
     Preprocessor &PP = S.getPreprocessor();
-    std::string SourceName = "cell_" + std::to_string(++InputCount);
+    std::string SourceName = Prelude ? "<sc prelude>" : "cell_" + std::to_string(++InputCount);
 
     // Create an uninitialized memory buffer, copy code in and append "\n"
     size_t InputSize = Input.size();
@@ -270,7 +359,8 @@ public:
     FileEntryRef FE = SM.getFileManager().getVirtualFileRef(SourceName, InputSize, 0);
     SM.overrideFileContents(FE, std::move(MB));
     PP.getHeaderSearchInfo().getFileInfo(FE);
-    FileID FID = SM.createFileID(FE, NewLoc, SrcMgr::C_User);
+    FileID FID = SM.createFileID(FE, NewLoc, Prelude ? SrcMgr::C_System : SrcMgr::C_User);
+    LastFID = FID;
     if (PP.EnterSourceFile(FID, /*DirLookup=*/nullptr, NewLoc))
       return nullptr;
 
@@ -431,6 +521,31 @@ public:
   }
 };
 
+// The diagnostics go on to the printer, and the first error of a cell is
+// kept: one at the cell's end says the cell stops short (ScSession::cell)
+class FirstError : public DiagnosticConsumer {
+  std::unique_ptr<DiagnosticConsumer> Printer;
+
+public:
+  bool Seen = false;
+  SourceLocation Loc;
+  FirstError(DiagnosticConsumer *Printer) : Printer(Printer) {}
+  void BeginSourceFile(const LangOptions &LO, const Preprocessor *PP) override { Printer->BeginSourceFile(LO, PP); }
+  void EndSourceFile() override { Printer->EndSourceFile(); }
+  void clear() override {
+    DiagnosticConsumer::clear();
+    Printer->clear();
+  }
+  void HandleDiagnostic(DiagnosticsEngine::Level L, const Diagnostic &Info) override {
+    DiagnosticConsumer::HandleDiagnostic(L, Info);
+    if (L >= DiagnosticsEngine::Error && !Seen) {
+      Seen = true;
+      Loc = Info.getLocation();
+    }
+    Printer->HandleDiagnostic(L, Info);
+  }
+};
+
 // IncrementalAction without the wrapped EmitLLVMOnlyAction: its consumer
 // would run the backend with Backend_EmitNothing, which sc_backend rejects
 class SessionAction : public ASTFrontendAction {
@@ -463,6 +578,7 @@ struct ScSession::Impl {
   std::set<std::string> Known; // what the cells so far export
   std::map<std::string, llvm::FunctionType *> Types; // the functions among them
   std::set<std::string> Wanted; // internal names used before a cell defines them
+  FirstError *First = nullptr;  // the diagnostics' client
   unsigned N = 0;
 };
 
@@ -492,7 +608,8 @@ std::unique_ptr<ScSession> ScSession::create(ScOptions O, llvm::raw_ostream *Dia
   Impl &I = *S->I;
   I.CI = std::make_unique<CompilerInstance>(std::move(Inv));
   I.CI->createVirtualFileSystem(llvm::vfs::getRealFileSystem());
-  I.CI->createDiagnostics(Diags ? new TextDiagnosticPrinter(*Diags, I.CI->getDiagnosticOpts()) : nullptr);
+  I.First = new FirstError(new TextDiagnosticPrinter(Diags ? *Diags : llvm::errs(), I.CI->getDiagnosticOpts()));
+  I.CI->createDiagnostics(I.First);
   I.Ctx.setDiagnosticHandler(std::make_unique<BackendDiags>(I.CI->getDiagnostics()));
   I.Act = std::make_unique<SessionAction>(I.Ctx);
   if (!I.CI->ExecuteAction(*I.Act) || I.CI->getDiagnostics().hasErrorOccurred())
@@ -513,21 +630,45 @@ std::unique_ptr<ScSession> ScSession::create(ScOptions O, llvm::raw_ostream *Dia
   };
   I.Initial = I.Act->CG->ReleaseModule();
   I.Act->CG->StartModule("sc_cell_1", I.Ctx);
-  // as clang-repl: value printing would leave unused expressions
-  I.CI->getDiagnostics().setSeverity(diag::warn_unused_expr, diag::Severity::Ignored, SourceLocation());
+  std::string Prelude = ShowPrelude;
+  if (I.CI->getLangOpts().CPlusPlus)
+    Prelude = "extern \"C\" {\n" + Prelude + "}\n";
+  if (!I.IP->Parse(Prelude, /*Prelude=*/true))
+    return nullptr;
+  std::unique_ptr<llvm::Module>(I.Act->CG->ReleaseModule()); // declarations only
+  I.Act->CG->StartModule("sc_cell_1", I.Ctx);
   return S;
 }
 
 ScSession::~ScSession() = default;
 
+// No token in Src after its byte Off.
+static bool onlySpaceAfter(llvm::StringRef Src, unsigned Off, const LangOptions &LO) {
+  std::string Rest = Src.substr(std::min<size_t>(Off, Src.size())).str(); // the lexer reads its NUL
+  Lexer L(SourceLocation(), LO, Rest.data(), Rest.data(), Rest.data() + Rest.size());
+  Token T;
+  L.LexFromRawLexer(T);
+  return T.is(tok::eof);
+}
+
 ScStatus ScSession::cell(llvm::StringRef Src, bool Backend, std::string &Obj,
-                         std::vector<std::string> &Syms) {
+                         std::vector<std::string> &Syms, bool Whole) {
   Impl &I = *this->I;
   CompilerInstance &CI = *I.CI;
   Obj.clear();
   Syms.clear();
-  if (!I.IP->Parse(Src))
+  I.First->Seen = false;
+  if (!I.IP->Parse(Src)) {
+    // the parser wanted more where the cell ends: after its last token, or
+    // at the end of the input, a token of the main file, which is empty
+    SourceManager &SM = CI.getSourceManager();
+    if (Whole && I.First->Seen && I.First->Loc.isValid()) {
+      auto [FID, Off] = SM.getDecomposedLoc(SM.getFileLoc(I.First->Loc));
+      if (FID == SM.getMainFileID() || (FID == I.IP->LastFID && onlySpaceAfter(Src, Off, CI.getLangOpts())))
+        return ScIncomplete;
+    }
     return ScError;
+  }
   CodeGenerator *CG = I.Act->CG;
   std::unique_ptr<llvm::Module> M = CG->ReleaseModule();
   CG->StartModule("sc_cell_" + std::to_string(++I.N + 1), I.Ctx);
@@ -565,4 +706,29 @@ ScStatus ScSession::cell(llvm::StringRef Src, bool Backend, std::string &Obj,
     return ScLost;
   Obj.assign(Buf.begin(), Buf.end());
   return ScOk;
+}
+
+unsigned ScSession::depth(llvm::StringRef Src) {
+  std::string Buf = Src.str(); // the lexer reads its NUL
+  Lexer L(SourceLocation(), I->CI->getLangOpts(), Buf.data(), Buf.data(), Buf.data() + Buf.size());
+  L.SetKeepWhitespaceMode(true); // an unterminated comment is a token
+  int D = 0;
+  bool Open = false;
+  Token T;
+  do {
+    L.LexFromRawLexer(T);
+    switch (T.getKind()) {
+    case tok::l_paren: case tok::l_square: case tok::l_brace: ++D; break;
+    case tok::r_paren: case tok::r_square: case tok::r_brace: D = std::max(D - 1, 0); break;
+    case tok::unknown: {
+      llvm::StringRef Text(L.getBufferLocation() - T.getLength(), T.getLength());
+      Open = Text.starts_with("/*") && (Text.size() < 4 || !Text.ends_with("*/"));
+      break;
+    }
+    case tok::eof: break;
+    default: Open = false;
+    }
+  } while (T.isNot(tok::eof));
+  Open = Open || Src.rtrim(" \t\r").ends_with("\\");
+  return D + Open;
 }

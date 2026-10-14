@@ -1,0 +1,31 @@
+diff --git a/clang/lib/Parse/ParseStmt.cpp b/clang/lib/Parse/ParseStmt.cpp
+index 44b51a985..49db7e853 100644
+--- a/clang/lib/Parse/ParseStmt.cpp
++++ b/clang/lib/Parse/ParseStmt.cpp
+@@ -590,7 +590,12 @@ StmtResult Parser::ParseExprStatement(ParsedStmtContext StmtCtx) {
+     // Otherwise, eat the semicolon.
+     ExpectAndConsumeSemi(diag::err_expected_semi_after_expr);
+ 
+-  StmtResult R = handleExprStmt(Expr, StmtCtx);
++  // Nor is its value discarded: the callback uses it. A placeholder (s.size,
++  // an overloaded name) is still an error, as for a discarded value.
++  if (CurTok && Expr.isUsable())
++    Expr = Actions.CheckPlaceholderExpr(Expr.get());
++  StmtResult R = CurTok ? Actions.ActOnExprStmt(Expr, /*DiscardedValue=*/false)
++                        : handleExprStmt(Expr, StmtCtx);
+   if (CurTok && !R.isInvalid())
+     CurTok->setAnnotationValue(R.get());
+ 
+diff --git a/clang/lib/Parse/Parser.cpp b/clang/lib/Parse/Parser.cpp
+index 5e1fd4df1..ae427e882 100644
+--- a/clang/lib/Parse/Parser.cpp
++++ b/clang/lib/Parse/Parser.cpp
+@@ -859,6 +859,8 @@ Parser::ParseExternalDeclaration(ParsedAttributes &Attrs,
+     return ParseObjCAtDirectives(Attrs, DeclSpecAttrs);
+   case tok::minus:
+   case tok::plus:
++    if (getLangOpts().IncrementalExtensions && !getLangOpts().ObjC)
++      goto dont_know; // a statement, -x
+     if (!getLangOpts().ObjC) {
+       Diag(Tok, diag::err_expected_external_declaration);
+       ConsumeToken();

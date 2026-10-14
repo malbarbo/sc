@@ -180,3 +180,92 @@ fn repl() {
     let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(false)).unwrap();
     assert_eq!(r.undo().unwrap().status, Status::Error);
 }
+
+/// Enter in the REPL: a cell whose first error is at its end stops short and
+/// leaves nothing; the depth comes from the lexer.
+#[test]
+fn whole() {
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(false)).unwrap();
+    let mut st = |src: &str| r.cell_if_whole(src.as_bytes()).unwrap().status;
+    for src in [
+        "int main(void)",
+        "int x = 5",
+        "for (int i = 0; i < 3; i++)",
+        "if (1) ; else",
+        "struct ponto",
+        "int y = 1 +",
+        "int main(void) // the body comes next",
+    ] {
+        assert_eq!(st(src), Status::Incomplete, "{src:?}");
+    }
+    for (src, want) in [
+        ("#include <stdio.h>", Status::Ok),
+        ("int x = 5;", Status::Ok),
+        ("x", Status::Ok),
+        ("x * 2", Status::Ok),
+        ("printf(\"%d\\n\", x)", Status::Ok),
+        ("y", Status::Error),
+        ("int z = );", Status::Error),
+        ("int w = 1 + nada", Status::Error),
+    ] {
+        assert_eq!(st(src), want, "{src:?}");
+    }
+    // a type the session knows: a declaration, not a product
+    assert_eq!(st("typedef int T;"), Status::Ok);
+    assert_eq!(st("T *f(T n)"), Status::Incomplete);
+    assert_eq!(st("x * f(2)"), Status::Error);
+    let a = r.cell_if_whole(b"int main(void)").unwrap();
+    assert!(a.diags.is_empty(), "{a:?}");
+    assert_eq!(r.len(), 6);
+
+    for (src, d) in [
+        ("int f(void) {", 1),
+        ("puts(\"{\"); // {", 0),
+        ("f((", 2),
+        ("/* a comment", 1),
+        ("/* a comment */ x", 0),
+        ("#define F(x) \\", 1),
+        ("char c = '{';", 0),
+    ] {
+        assert_eq!(r.depth(src.as_bytes()).unwrap(), d, "{src:?}");
+    }
+}
+
+#[test]
+fn show() {
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(false)).unwrap();
+    let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
+    let has = |so: &[u8], s: &str| so.windows(s.len()).any(|w| w == s.as_bytes());
+    assert_eq!(cell("int x = 3; struct p { int a; } q;").status, Status::Ok);
+    // an expression without its `;` calls the host with its type and value
+    for (src, call, ty) in [("x", "__sc_show_int", "int\0"), ("x / 2.0", "__sc_show_float", "double\0"),
+                            ("sizeof x", "__sc_show_int", "size_t\0"), ("-x", "__sc_show_int", "int\0")] {
+        let a = cell(src);
+        assert_eq!(a.status, Status::Ok, "{src:?}: {a:?}");
+        assert!(has(&a.so, call) && has(&a.so, ty), "{src:?}");
+        assert!(a.diags.is_empty(), "{src:?}: {}", a.diags);
+    }
+    // its value is not discarded; with the `;`, it is
+    assert!(cell("x > 2").diags.is_empty());
+    assert!(cell("x > 2;").diags.contains("-Wunused-comparison"));
+    assert!(cell("x + 1;").diags.contains("-Wunused-value"));
+    // a value that is not a scalar is not shown
+    let a = cell("q");
+    assert_eq!(a.status, Status::Ok);
+    assert!(!has(&a.so, "__sc_show"));
+    // a placeholder is an error, as with the `;`
+    let a = cell("__builtin_abs");
+    assert_eq!(a.status, Status::Error);
+    assert!(a.diags.contains("must be directly called"), "{}", a.diags);
+
+    // C++: the temporaries die after the call
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), vec!["session".into()], args(true)).unwrap();
+    let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
+    assert_eq!(cell("struct T { ~T() {} int n() { return 1; } }; T t;").status, Status::Ok);
+    let a = cell("T().n()");
+    assert_eq!(a.status, Status::Ok, "{a:?}");
+    assert!(has(&a.so, "__sc_show_int") && has(&a.so, "_ZN1TD"));
+    let a = cell("t.n");
+    assert_eq!(a.status, Status::Error);
+    assert!(a.diags.contains("must be called"), "{}", a.diags);
+}

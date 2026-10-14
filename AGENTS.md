@@ -21,6 +21,7 @@ make learn-native # after make learn: what only the native engine calls
 make spike       # PLANO-REPL.md phase 0: REPL cells through build/sc-spike
 make test-proto  # proto/, the Rust API over engine/sc.h, after changing either
 make test-split  # the corpus as REPL cells, after changing the session or the loader
+make repl        # build/loader/release/sc, the REPL (sc, sc FILE, sc help)
 ```
 
 The cuts keep the code of every warning: `make learn` runs the corpus with

@@ -67,6 +67,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `libcxx-locale.patch` keeps libc++'s z/OS locale shims off WASI.
   `incremental-c-scopes.patch` keeps a REPL cell's block scopes in C from
   leaking names into the cells after it (`ANALISE.md` §24).
+  `incremental-stmts.patch` lets a REPL cell start with `-` or `+`, and
+  keeps the value of an expression without its `;` at the end of a cell,
+  which the REPL shows, from being discarded (`ANALISE.md` §26).
   `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the

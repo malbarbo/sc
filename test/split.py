@@ -3,6 +3,7 @@
 build/sc-engine-full (the uncut native engine with the protocol's loop).
 
 usage: split.py [<outdir>]   (build/res/split)
+       split.py --args c|c++  the session's arguments, one per line (build/repl)
 ONLY=<name>,... runs only those programs; JOBS sets the parallelism (48)
 
 Each program the corpus runs (test/samples, c-testsuite, gcc torture
@@ -139,4 +140,6 @@ def main():
 
 
 if __name__ == '__main__':
+    if sys.argv[1:2] == ['--args']:
+        sys.exit(print('\n'.join(flags(sys.argv[2] == 'c++', False, False))))
     main()

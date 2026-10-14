@@ -48,6 +48,7 @@ fn repl(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             Status::Ok => "ok",
             Status::Error => "error",
             Status::Lost => "lost",
+            Status::Incomplete => "incomplete",
         };
         writeln!(out, "== {cell} {st}")?;
         out.write_all(a.diags.as_bytes())?;

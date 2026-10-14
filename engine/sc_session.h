@@ -11,9 +11,9 @@ namespace llvm { class Module; class raw_ostream; }
 namespace clang { class Decl; }
 
 // What a cell left: SC_OK with the object, SC_ERROR (an error; the session
-// keeps part of the cell, §3.3) or SC_LOST (the session must be recreated
-// and replayed).
-enum ScStatus { ScOk = 0, ScError = 1, ScLost = 2 };
+// keeps part of the cell, §3.3), SC_LOST (the session must be recreated
+// and replayed) or SC_INCOMPLETE (an error where the cell ends: SC_CELL_WHOLE).
+enum ScStatus { ScOk = 0, ScError = 1, ScLost = 2, ScIncomplete = 3 };
 
 // The internal globals of a module that stand for a declaration (a static
 // variable or function, a namespace-scope const, an anonymous namespace)
@@ -38,8 +38,13 @@ public:
   // the diagnostics go (stderr if null); null if the session cannot start
   static std::unique_ptr<ScSession> create(ScOptions O, llvm::raw_ostream *Diags = nullptr);
   ~ScSession();
-  // Backend: false parses and generates IR only (the replay)
-  ScStatus cell(llvm::StringRef Src, bool Backend, std::string &Obj, std::vector<std::string> &Syms);
+  // Backend: false parses and generates IR only (the replay). Whole: a cell
+  // whose first error is at its end is ScIncomplete
+  ScStatus cell(llvm::StringRef Src, bool Backend, std::string &Obj, std::vector<std::string> &Syms,
+                bool Whole = false);
+  // The brackets Src leaves open, one more if it ends inside a comment or
+  // with a `\` that joins the next line
+  unsigned depth(llvm::StringRef Src);
 
   struct Impl;
 private:

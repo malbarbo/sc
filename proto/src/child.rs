@@ -3,6 +3,7 @@
 use crate::{msg, sys, wire, Mode, Status};
 use std::fmt;
 use std::io::{self, BufReader, BufWriter};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, ChildStdin, ChildStdout, Command, Stdio};
 
@@ -41,17 +42,24 @@ pub struct Child {
 
 impl Child {
     /// Starts `program args...`, which speaks the protocol on stdin and stdout.
+    /// It is in a process group of its own: a Ctrl-C at the terminal is for
+    /// the student's code, which the REPL runs.
     pub fn spawn(program: &Path, args: &[&str]) -> io::Result<Child> {
-        let mut proc = Command::new(program).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+        let mut proc = Command::new(program).args(args).stdin(Stdio::piped()).stdout(Stdio::piped())
+            .process_group(0).spawn()?;
         let to = BufWriter::new(proc.stdin.take().unwrap());
         let from = BufReader::new(proc.stdout.take().unwrap());
         Ok(Child { proc, to, from })
     }
 
     fn call(&mut self, kind: u32, status: u32, part: &[u8]) -> io::Result<Answer> {
+        self.request(kind, status, part).map(Answer::from_msg)
+    }
+
+    fn request(&mut self, kind: u32, status: u32, part: &[u8]) -> io::Result<wire::Msg> {
         let res = wire::write(&mut self.to, kind, status, [part, b"", b""]).and_then(|_| wire::read(&mut self.from));
         match res {
-            Ok(Some(m)) if m.kind == msg::SC_MSG_REPLY => Ok(Answer::from_msg(m)),
+            Ok(Some(m)) if m.kind == msg::SC_MSG_REPLY => Ok(m),
             Ok(_) => Err(self.ended()),
             Err(e) if matches!(e.kind(), io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof) => Err(self.ended()),
             Err(e) => Err(e),
@@ -87,6 +95,11 @@ impl Child {
 
     pub fn undo(&mut self) -> io::Result<Answer> {
         self.call(msg::SC_MSG_UNDO, 0, b"")
+    }
+
+    /// See [`crate::sys::sc_session_depth`].
+    pub fn depth(&mut self, src: &[u8]) -> io::Result<u32> {
+        Ok(self.request(msg::SC_MSG_DEPTH, 0, src)?.status)
     }
 }
 
@@ -185,14 +198,35 @@ impl Repl {
     /// Compiles a cell. [`Status::Lost`]: the cell ended the session (its
     /// diagnostics, or how the child ended), which is back as before it.
     pub fn cell(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
-        let a = match self.child.cell(src, Mode::So) {
+        self.compile(src, Mode::So)
+    }
+
+    /// [`Repl::cell`], or [`Status::Incomplete`] if the cell stops short
+    /// ([`Mode::Whole`]): nothing of it is kept.
+    pub fn cell_if_whole(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
+        self.compile(src, Mode::Whole)
+    }
+
+    /// See [`crate::sys::sc_session_depth`].
+    pub fn depth(&mut self, src: &[u8]) -> Result<u32, ReplError> {
+        match self.child.depth(src) {
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                self.restart()?;
+                Ok(self.child.depth(src)?)
+            }
+            r => Ok(r?),
+        }
+    }
+
+    fn compile(&mut self, src: &[u8], mode: Mode) -> Result<Answer, ReplError> {
+        let a = match self.child.cell(src, mode) {
             Ok(a) => a,
             Err(e) if e.kind() == io::ErrorKind::BrokenPipe => lost(e),
             Err(e) => return Err(e.into()),
         };
         match a.status {
             Status::Ok => self.log.push(Entry { src: src.to_vec(), syms: a.syms.clone() }),
-            Status::Error => {}
+            Status::Error | Status::Incomplete => {}
             Status::Lost => self.restart()?,
         }
         Ok(a)

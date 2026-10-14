@@ -1531,3 +1531,141 @@ wasm antes da célula e restaurá-la se ela falhar. Fica para a fase 6b.
 `#include` repetido depois de uma célula com erro, e o crash agora é
 `Error` sem repasse. `make test-split`: 1.947 programas, 0 diferenças fora
 os 6 conhecidos.
+
+## 26. Protótipo do REPL interativo (`sc`)
+
+Antes da fase 6b, um `sc` interativo para usar o REPL de verdade. A
+interface de linha de comando é a do sgleam e do spython:
+- `sc` abre o REPL;
+- `sc FILE [ARG...]` roda um programa;
+- `sc repl [-q] [FILE]`, `sc run`, `sc check` e `sc help`;
+- `-x c|c++` escolhe a linguagem; sem ele, vale a extensão do arquivo e,
+  por fim, C;
+- os comandos `:help`, `:quit`, `:undo` e `:theme`;
+- o prompt usa o rustyline, com histórico em `data_dir()/sc/history` e o
+  tema em `config_dir()/sc/config`.
+
+**Montagem:**
+- o crate do `loader/` virou biblioteca (`Loader`) com dois binários, o
+  `scload` de antes e o `sc` (`make repl`, `build/loader/release/sc`);
+- o compilador é o filho `build/sc-engine-full session`, pelo
+  `sc_proto::Repl`;
+- os argumentos da sessão são os do `test/split.py --args`, gravados em
+  `build/repl/{c,c++}.args`;
+- o engine ainda não está ligado ao `sc`; isso continua na fase 6b;
+- o `sc` e suas dependências ficam atrás da feature `repl` do crate. O
+  `scload` (`make test`) não precisa do `sc-proto`, cujo bindgen pede a
+  libclang.
+
+**Decisões provisórias do front end** (PLANO-REPL.md §8):
+- **A célula:** declarações e statements do topo, que o modo incremental
+  aceita. Os statements rodam quando o `.so` da célula é carregado.
+- **O `main`:** roda só em `sc FILE`. No REPL ele é uma função como as
+  outras, e o aluno a chama numa célula.
+- **O stdin** é o do terminal: o rustyline o larga enquanto a célula roda.
+- **Trap:** a mensagem é curta (`error: wasm trap: integer divide by
+  zero`, `aborted`, `error: stack overflow`), o `__stack_pointer` volta
+  ao de antes da célula e o REPL segue. O que a célula definiu fica.
+- **Exceção C++ não capturada:** a libc++abi imprime "terminating due to
+  uncaught exception…" e a célula termina como `aborted`; o REPL segue.
+- **`exit(n)`** encerra o REPL com o status `n`.
+- **Ctrl-C:** o handler de SIGINT chama `increment_epoch` e a célula para
+  com "interrupted" (`epoch_interruption`). O filho fica num grupo de
+  processos próprio, para o Ctrl-C não matá-lo. Um Ctrl-C durante uma
+  leitura do stdin só tem efeito depois que a leitura volta. O `fflush`
+  depois da célula interrompida rearma o prazo, senão ele também pararia e
+  o que ficou no buffer sairia depois da célula seguinte. Isso vale só no
+  REPL: `sc FILE` roda sem as checagens de epoch, que custam em todo laço e
+  chamada, e o Ctrl-C mata o processo, como no `scload`.
+- **`sc check`** compila em `SC_CELL_SO`, com o backend e o link, e não
+  roda nada. O `SC_CELL_REPLAY` seria mais barato, mas perderia os erros
+  que só o backend ou o `wasm-ld` dão (um símbolo indefinido).
+- **`:undo`** desfaz as declarações no compilador; o que a célula já rodou
+  continua feito.
+- **O Enter pergunta ao clang** (ver abaixo).
+
+**Tamanho:** `sc` 28,1 MB, contra 27,2 MB do `scload` (wasmtime com as
+features padrão; o mínimo do §1.4 fica para a fase 6a). O rustyline, o
+bpaf e o `sc-proto` somam 0,9 MB.
+
+**O Enter pergunta ao clang.** Uma primeira versão decidia com uma
+heurística em Rust: contava os colchetes e adivinhava um cabeçalho de
+função pela forma da linha. Ela não sabe o que é tipo (`T * f(x)`). Agora
+quem decide é o engine, com duas coisas novas no `sc.h`:
+- `SC_CELL_WHOLE`: compila a célula como `SC_CELL_SO`, mas responde
+  `SC_INCOMPLETE`, sem diagnósticos, quando o primeiro erro está no fim da
+  célula. Isso vale para um erro depois do último token da célula e para
+  um erro no token de fim de entrada do modo incremental, que fica no
+  arquivo principal, vazio. É o parser dizendo que queria mais: uma
+  declaração sem `;`, um cabeçalho sem corpo, um `for` ou `else` sem a
+  instrução, `1 +`. Um erro no meio (`x` indefinido) é um erro de
+  verdade. O `serve` faz o `fork` como numa célula comum, então a célula
+  incompleta não deixa nada;
+- `sc_session_depth` (`SC_MSG_DEPTH`): os colchetes que a entrada deixa
+  abertos, pelo lexer do clang em modo raw. Conta um a mais se a entrada
+  termina dentro de um comentário ou com `\` no fim. Isso dá o recuo da
+  linha nova e não mexe na sessão.
+
+No Enter com o cursor no fim, o REPL faz o seguinte:
+- pede a profundidade; com colchete aberto, abre uma linha;
+- uma linha em branco roda o que houver;
+- senão, manda a célula em `SC_CELL_WHOLE` e guarda a resposta. Se ela for
+  completa, a célula usa essa resposta: a compilação do Enter é a própria
+  célula, sem trabalho em dobro.
+
+Custo medido, contando compilar, ligar e carregar: cerca de 10 ms por
+célula em C e cerca de 22 ms em C++ com `iostream`. `int x = 5` sem `;`
+espera a linha seguinte; a linha em branco mostra o erro.
+
+**O valor de uma expressão sem `;`.** O plano (§3.4) deixava a impressão
+de valor fora da v1. Ela entrou no protótipo, no formato do clang-repl:
+`x * 2` mostra `(int) 42`. Como funciona:
+- a sessão analisa um prelúdio com duas declarações, `__sc_show_int(const
+  char *type, int kind, long long)` e `__sc_show_float(..., double)`. Ele
+  é um arquivo de sistema, então não dá aviso, e não conta no `cell_N`;
+- quando a última instrução de uma célula é uma expressão sem `;`
+  (`TopLevelStmtDecl::isSemiMissing`), a sessão a troca no AST, antes do
+  CodeGen, pela chamada a uma das duas. A chamada leva o tipo como string,
+  o tipo de valor (`enum sc_show` no `sc.h`) e o valor convertido para
+  `long long` ou `double`;
+- quem define as duas funções é o host. O `Loader::host` põe uma função do
+  wasmtime na tabela de símbolos, e a célula a importa como qualquer
+  outra. O `sc` guarda o texto e o imprime depois do `fflush`, na ordem
+  certa em relação ao que a célula escreveu;
+- o host formata o valor: um `double` com os dígitos mínimos que leem de
+  volta o mesmo número (`0.30000000000000004`), um `char` entre aspas
+  simples, um `char *` ou array de `char` como string (até 1.000 bytes,
+  com escapes), um ponteiro em hexadecimal, o nulo como `NULL` em C e
+  `nullptr` em C++;
+- se a expressão tem temporários (`std::string("abc").size()`), a chamada
+  nova fica dentro do `ExprWithCleanups` da original, e eles morrem depois
+  dela;
+- só os escalares aparecem. Struct, classe, array que não é de `char`,
+  função e `void` não mostram nada, então `std::cout << x` sai como antes;
+- o nome do tipo é o do clang, com duas trocas: `__size_t` (o tipo do
+  `sizeof`) vira `size_t`, e um typedef membro de classe
+  (`std::string::size_type`) vira o tipo que ele nomeia.
+
+Dois ajustes no parser incremental, no `llvm/incremental-stmts.patch`:
+- a expressão sem `;` no fim da entrada não é mais um valor descartado.
+  Assim, `x > 2` não avisa "comparison result unused", e o
+  `warn_unused_expr`, que a sessão ignorava como o clang-repl, voltou.
+  Agora `x + 1;` avisa como no compilador de uma vez só. Como o valor não
+  é descartado, o `CheckPlaceholderExpr` não rodaria, e `s.size` (sem os
+  parênteses) ou `__builtin_abs` chegariam ao CodeGen e derrubariam o
+  engine. O patch o chama antes;
+- `-x` ou `+x` no topo era "expected external declaration": o parser
+  reservava `-` e `+` para os métodos de Objective-C. No modo incremental,
+  eles começam uma instrução.
+
+Os dois só mudam o modo incremental. O `make test` não mudou (0
+diferenças), o `checkinv` deu SAME, e o `sc.wasm` cresceu 53 bytes.
+
+**O que ficou à vista** e vai para o engine:
+- o primeiro diagnóstico de cada célula vem com "In file included from
+  <<< inputs >>>:1:";
+- a célula se chama `cell_N` nos diagnósticos (no `sc FILE` deveria ser o
+  nome do arquivo);
+- os diagnósticos não têm cor;
+- o erro de "faltou o resto", visto quando uma linha em branco força a
+  célula, aponta para `<<< inputs >>>:1:1` em vez do fim da célula.
