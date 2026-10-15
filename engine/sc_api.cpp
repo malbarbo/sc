@@ -18,6 +18,7 @@ struct sc_session {
   llvm::raw_string_ostream DiagOS{Diags};
   unsigned N = 0;                    // cells linked
   bool Accepted = false, Lost = false;
+  bool OneCell = false; // -sc-one-cell: a symbol no library defines is an error
 
   ~sc_session() {
     S.reset();
@@ -43,12 +44,18 @@ struct sc_session {
       OS << Obj;
     }
     std::vector<const char *> Args = {"wasm-ld", "-shared", "--experimental-pic",
-                                      "--unresolved-symbols=import-dynamic", O.c_str()};
+                                      OneCell ? "--unresolved-symbols=report-all" : "--unresolved-symbols=import-dynamic",
+                                      O.c_str()};
     for (auto &A : LinkArgs)
       Args.push_back(A.c_str());
     Args.push_back("-o");
     Args.push_back(SO.c_str());
-    lld::Result R = lld::lldMain(Args, DiagOS, DiagOS, {{lld::Wasm, &lld::wasm::link}});
+    std::string Out; // without the object's temporary path, which says nothing
+    llvm::raw_string_ostream OutOS(Out);
+    lld::Result R = lld::lldMain(Args, OutOS, OutOS, {{lld::Wasm, &lld::wasm::link}});
+    for (size_t P; (P = Out.find(O + ": ")) != std::string::npos;)
+      Out.erase(P, O.size() + 2);
+    DiagOS << Out;
     auto Buf = llvm::MemoryBuffer::getFile(SO);
     llvm::sys::fs::remove(O);
     llvm::sys::fs::remove(SO);
@@ -69,6 +76,7 @@ int sc_session_new(int argc, const char *const *argv, sc_session **out) {
       s->LinkArgs.push_back(A);
   ScOptions O;
   scParseArgs(llvm::ArrayRef(Args.begin(), Sep), O);
+  s->OneCell = O.OneCell;
   if (std::error_code EC = llvm::sys::fs::createUniqueDirectory("sc", s->Dir)) {
     s->Dir.clear();
     s->DiagOS << "sc: temporary directory: " << EC.message() << "\n";

@@ -116,6 +116,14 @@ fn dylink(bytes: &[u8]) -> Result<Dylink> {
     bail!("no dylink.0 section: not a shared object")
 }
 
+/// A symbol as the source names it: without the `.sc` of a static a REPL
+/// cell exports for the cells after it, and demangled.
+fn source_name(name: &str) -> String {
+    let n = name.strip_suffix(".sc").unwrap_or(name);
+    let demangled = || cpp_demangle::Symbol::new(n).ok()?.demangle().ok();
+    n.starts_with("_Z").then(demangled).flatten().unwrap_or_else(|| n.to_string())
+}
+
 fn align(x: u32, a: u32) -> u32 {
     (x + a - 1) & !(a - 1)
 }
@@ -194,7 +202,7 @@ impl Loader {
     /// Calls the function `name` the modules define.
     pub fn call(&mut self, name: &str, args: &[Val]) -> Result<Option<Val>> {
         let Some((Sym::Func(f), _)) = self.store.data().syms.get(name).copied() else {
-            bail!("undefined symbol: {name}")
+            bail!("undefined symbol: {}", source_name(name))
         };
         let mut res = vec![Val::I32(0); f.ty(&self.store).results().len()];
         f.call(&mut self.store, args, &mut res)?;
@@ -267,7 +275,7 @@ impl Loader {
         }
         // until the function comes, a call says which one is missing
         let init = ft.map(|ft| {
-            let n = name.to_string();
+            let n = source_name(name);
             Func::new(&mut self.store, ft.clone(), move |_, _, _| bail!("undefined symbol: {n}"))
         });
         let s = self.table.grow(&mut self.store, 1, Ref::Func(init))? as u32;

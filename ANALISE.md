@@ -1803,3 +1803,23 @@ Os itens que o §26 deixou à vista, resolvidos sem patch:
   (`ScOptions::OneCell`): as listas ficam, e os avisos saem como no
   compilador de uma vez só. `sc repl FILE` não passa a flag, porque as
   células seguintes podem usar e definir o que o arquivo deixou.
+
+**Símbolo indefinido.** Uma função ou variável usada e nunca definida:
+- em `sc FILE` ou `sc check`, rodava. A chamada parava com "undefined
+  symbol: h.sc" (o nome que a sessão dá a um `static`) ou `_Z1fv` (o nome
+  de C++ sem demangle). Uma variável lia o endereço 0 e o programa saía
+  com 0. Agora a sessão de uma célula faz o link com
+  `--unresolved-symbols=report-all`, não promove os `static` e não mostra
+  valores, porque nada vem depois. O `wasm-ld` recusa a célula como no
+  link de uma vez só: `wasm-ld: error: undefined symbol: f()`;
+- as mensagens do `wasm-ld` não dizem mais o caminho temporário do objeto
+  da célula (`/tmp/sc-XXXX/cell_1.o: `), que o aluno não reconhece;
+- no REPL, a função continua a ser procurada até ser chamada, porque uma
+  célula seguinte pode defini-la. O stub do loader agora diz o nome como
+  o código o escreve: sem o `.sc`, e com o demangle do `cpp_demangle`, que
+  o wasmtime já trazia, só para nomes que começam com `_Z`. Sem esse
+  filtro, `h` virava `unsigned char`.
+
+Ficou de fora: no REPL, uma variável `extern` ainda não definida lê 0, e
+uma escrita nela cai no endereço 0, sem aviso. A entrada `GOT.mem` que
+não tem definição vale 0 até a definição chegar.

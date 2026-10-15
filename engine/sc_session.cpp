@@ -274,7 +274,7 @@ public:
   SourceLocation CellEnd; // where the last cell's last token ends
   std::function<void()> BeforeEnd; // before the CodeGen ends the cell's module
   std::string *TypeOf = nullptr;   // ScSession::type: the cell's type goes here
-  bool OneCell = false;            // no cell comes after (-sc-one-cell)
+  bool OneCell = false;            // no cell comes after (-sc-one-cell): the cell is a program, and its value is not shown
 
   IncrementalParser(CompilerInstance &Instance, CodeGenerator *CG, llvm::LLVMContext &Ctx)
       : S(Instance.getSema()), CG(CG), Ctx(Ctx) {
@@ -348,7 +348,7 @@ public:
         for (Decl *D : ADecl.get())
           if (auto *TLSD = dyn_cast<TopLevelStmtDecl>(D); TLSD && TLSD->isSemiMissing())
             if (auto *E = dyn_cast_or_null<Expr>(TLSD->getStmt()))
-              if (Expr *Call = show(S, E))
+              if (Expr *Call = OneCell ? nullptr : show(S, E))
                 TLSD->setStmt(Call);
       // a later cell may use or define what this one leaves unused or
       // undefined, so the cell's end of translation unit does not say so
@@ -755,7 +755,8 @@ ScStatus ScSession::cell(llvm::StringRef Src, bool Backend, std::string &Obj,
   if (!M)
     return ScLost;
   retypeDecls(*M, I.Types);
-  scPromoteInternals(*M, I.Known, [&](llvm::StringRef Name) { return CG->GetDeclForMangledName(Name); });
+  if (!I.IP->OneCell) // for the cells after
+    scPromoteInternals(*M, I.Known, [&](llvm::StringRef Name) { return CG->GetDeclForMangledName(Name); });
   Syms = scExports(*M);
   I.Known.insert(Syms.begin(), Syms.end());
   for (const std::string &N : Syms)

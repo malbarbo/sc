@@ -1492,6 +1492,7 @@ name = "scload"
 version = "0.1.0"
 dependencies = [
  "bpaf",
+ "cpp_demangle",
  "dirs",
  "libc",
  "rustyline",

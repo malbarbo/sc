@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 wasmparser = "0.239"
+cpp_demangle = "0.5"
 wasmtime = "48.0.3"
 wasmtime-wasi = "48.0.3"
 # sc, the REPL: the engine's child protocol (bindgen, so libclang), the
