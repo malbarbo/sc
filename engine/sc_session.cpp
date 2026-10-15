@@ -271,8 +271,10 @@ public:
   llvm::LLVMContext &Ctx;
   unsigned InputCount = 0;
   FileID LastFID; // the last cell's
+  SourceLocation CellEnd; // where the last cell's last token ends
   std::function<void()> BeforeEnd; // before the CodeGen ends the cell's module
   std::string *TypeOf = nullptr;   // ScSession::type: the cell's type goes here
+  bool OneCell = false;            // no cell comes after (-sc-one-cell)
 
   IncrementalParser(CompilerInstance &Instance, CodeGenerator *CG, llvm::LLVMContext &Ctx)
       : S(Instance.getSema()), CG(CG), Ctx(Ctx) {
@@ -348,6 +350,12 @@ public:
             if (auto *E = dyn_cast_or_null<Expr>(TLSD->getStmt()))
               if (Expr *Call = show(S, E))
                 TLSD->setStmt(Call);
+      // a later cell may use or define what this one leaves unused or
+      // undefined, so the cell's end of translation unit does not say so
+      if (!OneCell) {
+        S.UnusedFileScopedDecls.erase(S.UnusedFileScopedDecls.begin(nullptr, true), S.UnusedFileScopedDecls.end());
+        S.UndefinedButUsed.clear();
+      }
       if (ADecl && !Consumer->HandleTopLevelDecl(ADecl.get()))
         break;
     }
@@ -397,6 +405,11 @@ public:
     PP.getHeaderSearchInfo().getFileInfo(FE);
     FileID FID = SM.createFileID(FE, NewLoc, Prelude ? SrcMgr::C_System : SrcMgr::C_User);
     LastFID = FID;
+    CellEnd = SM.getLocForStartOfFile(FID);
+    Lexer L(FID, SM.getBufferOrFake(FID), SM, S.getLangOpts());
+    Token T;
+    for (L.LexFromRawLexer(T); T.isNot(tok::eof); L.LexFromRawLexer(T))
+      CellEnd = T.getEndLoc();
     if (PP.EnterSourceFile(FID, /*DirLookup=*/nullptr, NewLoc))
       return nullptr;
 
@@ -557,15 +570,26 @@ public:
   }
 };
 
+static constexpr const char *MainFile = "<<< inputs >>>";
+
 // The diagnostics go on to the printer, and the first error of a cell is
-// kept: one at the cell's end says the cell stops short (ScSession::cell)
+// kept: one at the cell's end says the cell stops short (ScSession::cell).
+// Each cell is a file the empty main file includes: the printer's "In file
+// included from" the main file is left out, and the main file's one token,
+// the end of the input, stands for the end of the cell
 class FirstError : public DiagnosticConsumer {
+  std::string Buf;
+  llvm::raw_string_ostream BufOS{Buf}; // the printer's output, before OS
   std::unique_ptr<DiagnosticConsumer> Printer;
+  llvm::raw_ostream &OS;
 
 public:
+  const IncrementalParser *IP = nullptr;
   bool Seen = false;
   SourceLocation Loc;
-  FirstError(DiagnosticConsumer *Printer) : Printer(Printer) {}
+  FirstError(llvm::raw_ostream &OS, DiagnosticOptions &DO) : Printer(new TextDiagnosticPrinter(BufOS, DO)), OS(OS) {
+    BufOS.enable_colors(DO.showColors(false)); // -fcolor-diagnostics
+  }
   void BeginSourceFile(const LangOptions &LO, const Preprocessor *PP) override { Printer->BeginSourceFile(LO, PP); }
   void EndSourceFile() override { Printer->EndSourceFile(); }
   void clear() override {
@@ -573,12 +597,32 @@ public:
     Printer->clear();
   }
   void HandleDiagnostic(DiagnosticsEngine::Level L, const Diagnostic &Info) override {
+    SourceLocation At = Info.getLocation();
+    if (IP && At.isValid() && Info.hasSourceManager()) {
+      const SourceManager &SM = Info.getSourceManager();
+      if (SM.getFileID(SM.getFileLoc(At)) == SM.getMainFileID()) {
+        SmallString<100> Msg;
+        Info.FormatDiagnostic(Msg);
+        DiagnosticStorage None;
+        return handle(L, Diagnostic(Info.getDiags(), IP->CellEnd, Info.getID(), None, Msg));
+      }
+    }
+    handle(L, Info);
+  }
+
+private:
+  void handle(DiagnosticsEngine::Level L, const Diagnostic &Info) {
     DiagnosticConsumer::HandleDiagnostic(L, Info);
     if (L >= DiagnosticsEngine::Error && !Seen) {
       Seen = true;
       Loc = Info.getLocation();
     }
     Printer->HandleDiagnostic(L, Info);
+    std::string Included = "In file included from " + std::string(MainFile) + ":1:\n";
+    for (size_t P; (P = Buf.find(Included)) != std::string::npos;)
+      Buf.erase(P, Included.size());
+    OS << Buf;
+    Buf.clear();
   }
 };
 
@@ -618,8 +662,6 @@ struct ScSession::Impl {
   unsigned N = 0;
 };
 
-static constexpr const char *MainFile = "<<< inputs >>>";
-
 std::unique_ptr<ScSession> ScSession::create(ScOptions O, llvm::raw_ostream *Diags) {
   LLVMInitializeWebAssemblyTargetInfo();
   LLVMInitializeWebAssemblyTarget();
@@ -644,13 +686,15 @@ std::unique_ptr<ScSession> ScSession::create(ScOptions O, llvm::raw_ostream *Dia
   Impl &I = *S->I;
   I.CI = std::make_unique<CompilerInstance>(std::move(Inv));
   I.CI->createVirtualFileSystem(llvm::vfs::getRealFileSystem());
-  I.First = new FirstError(new TextDiagnosticPrinter(Diags ? *Diags : llvm::errs(), I.CI->getDiagnosticOpts()));
+  I.First = new FirstError(Diags ? *Diags : llvm::errs(), I.CI->getDiagnosticOpts());
   I.CI->createDiagnostics(I.First);
   I.Ctx.setDiagnosticHandler(std::make_unique<BackendDiags>(I.CI->getDiagnostics()));
   I.Act = std::make_unique<SessionAction>(I.Ctx);
   if (!I.CI->ExecuteAction(*I.Act) || I.CI->getDiagnostics().hasErrorOccurred())
     return nullptr;
   I.IP = std::make_unique<IncrementalParser>(*I.CI, I.Act->CG, I.Ctx);
+  I.First->IP = I.IP.get();
+  I.IP->OneCell = O.OneCell;
   // a static used in an earlier cell is emitted where it is defined: in one
   // translation unit the use would take it out of the CodeGen's deferred ones
   I.IP->BeforeEnd = [&I] {
@@ -696,11 +740,11 @@ ScStatus ScSession::cell(llvm::StringRef Src, bool Backend, std::string &Obj,
   I.First->Seen = false;
   if (!I.IP->Parse(Src)) {
     // the parser wanted more where the cell ends: after its last token, or
-    // at the end of the input, a token of the main file, which is empty
+    // at the end of the input, which FirstError puts there
     SourceManager &SM = CI.getSourceManager();
     if (Whole && I.First->Seen && I.First->Loc.isValid()) {
       auto [FID, Off] = SM.getDecomposedLoc(SM.getFileLoc(I.First->Loc));
-      if (FID == SM.getMainFileID() || (FID == I.IP->LastFID && onlySpaceAfter(Src, Off, CI.getLangOpts())))
+      if (FID == I.IP->LastFID && onlySpaceAfter(Src, Off, CI.getLangOpts()))
         return ScIncomplete;
     }
     return ScError;

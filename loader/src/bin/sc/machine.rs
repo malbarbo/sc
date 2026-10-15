@@ -5,6 +5,7 @@
 use sc_proto::{Answer, Repl, Status};
 use crate::show;
 use scload::{Loader, STACK};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use wasmtime::{Engine, Error, ThrownException, Trap, Val, ValType};
@@ -76,17 +77,27 @@ fn build_dir() -> std::io::Result<PathBuf> {
 }
 
 impl Machine {
-    /// A session in `lang`, whose programs see `argv`. Only an `interactive`
+    /// A session in `lang`, whose programs see `argv`. One that is not
+    /// `interactive` takes one cell, the whole program. Only an `interactive`
     /// one is stopped by Ctrl-C: the epoch checks cost in every loop and call.
     pub fn new(lang: Lang, argv: Vec<String>, interactive: bool) -> crate::Result<Machine> {
         let b = build_dir()?;
         let engine = b.join("sc-engine-full");
         let args_file = b.join("repl").join(format!("{}.args", lang.name()));
-        let args = std::fs::read_to_string(&args_file)
+        let mut args: Vec<String> = std::fs::read_to_string(&args_file)
             .map_err(|e| format!("{}: {e} (make repl)", args_file.display()))?
             .lines()
             .map(String::from)
             .collect();
+        let link = args.iter().position(|a| a == "--").unwrap_or(args.len());
+        if crate::reader::color(std::io::stderr().is_terminal()) {
+            args.insert(link, "-fcolor-diagnostics".into());
+        }
+        if !interactive {
+            // the file is the whole program: Sema judges what it leaves
+            // unused as a one-shot compile does
+            args.insert(link, "-sc-one-cell".into());
+        }
         if !engine.exists() {
             return Err(format!("{}: not found (make repl)", engine.display()).into());
         }

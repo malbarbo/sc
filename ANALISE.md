@@ -1664,7 +1664,7 @@ Dois ajustes no parser incremental, no `llvm/incremental-stmts.patch`:
 Os dois só mudam o modo incremental. O `make test` não mudou (0
 diferenças), o `checkinv` deu SAME, e o `sc.wasm` cresceu 53 bytes.
 
-**O que ficou à vista** e vai para o engine:
+**O que ficou à vista** e vai para o engine (resolvido no §29):
 - o primeiro diagnóstico de cada célula vem com "In file included from
   <<< inputs >>>:1:";
 - a célula se chama `cell_N` nos diagnósticos (no `sc FILE` deveria ser o
@@ -1760,3 +1760,46 @@ argumentos do template.
 
 A sessão só entra no `sc-engine-full`, então o `sc.wasm` não muda. No
 shell, o argumento do `:type` é colorido como código.
+
+## 29. Os diagnósticos do REPL
+
+Os itens que o §26 deixou à vista, resolvidos sem patch:
+
+- **"In file included from <<< inputs >>>:1:"** saía antes do primeiro
+  diagnóstico de cada célula. Cada célula é um arquivo que o arquivo
+  principal, vazio, inclui. O `FirstError` agora recebe a saída do
+  `TextDiagnosticPrinter` num buffer e tira essa linha. A alternativa, criar
+  a célula sem local de inclusão, mudaria o `isInMainFile` de cada
+  declaração, e o `isBeforeInTranslationUnit` entre duas células não teria
+  ancestral comum (`llvm_unreachable`). Um `#include` dentro de uma célula
+  ainda mostra a pilha até a célula.
+- **O erro de "faltou o resto"** (`1 +` forçado por uma linha em branco,
+  `:type int`) apontava para `<<< inputs >>>:1:1`: o token de fim de
+  entrada é do arquivo principal. Um diagnóstico no arquivo principal
+  agora vai para o fim do último token da célula (`CellEnd`, pelo lexer
+  raw), com a mesma mensagem. Isso também simplifica o teste de
+  `SC_INCOMPLETE`, que olhava os dois lugares.
+- **Cor:** o engine aceita `-fcolor-diagnostics` (`ScOptions::Colors`,
+  `ShowColorsKind::On`; sem ele, o padrão continua, e o `checkinv` não
+  muda). O buffer do `FirstError` é uma string, então precisa de
+  `enable_colors`. O `sc` passa a flag quando o stderr é um terminal, com
+  as mesmas regras do prompt (`NO_COLOR`, `FORCE_COLOR`).
+- **O nome do arquivo:** em `sc FILE`, `sc check FILE` e `sc repl FILE`,
+  o `sc` põe `#line 1 "FILE"` antes do código. Com o `ShowPresumedLoc`,
+  os diagnósticos e o `__FILE__` dizem o nome do arquivo. No REPL, a
+  célula continua `cell_N`.
+- **Avisos de fim de unidade de tradução:** `static int f(void);` numa
+  célula, o uso em outra e a definição numa terceira avisavam "unused
+  function" e "has internal linkage but is not defined". Pior: o "unused
+  function" de uma função `static` se repetia em toda célula seguinte, até
+  ela ser usada, porque a lista da Sema (`UnusedFileScopedDecls`) não se
+  esvaziava. A sessão agora esvazia essa lista e a `UndefinedButUsed` a
+  cada declaração que o parser devolve, então o fim de cada célula não tem
+  o que dizer. Os avisos de variável local (`-Wunused-variable` num corpo
+  de função) continuam.
+
+  Isso vale só onde vem célula depois. Em `sc FILE` e `sc check FILE`, o
+  arquivo é o programa inteiro, e o `sc` cria a sessão com `-sc-one-cell`
+  (`ScOptions::OneCell`): as listas ficam, e os avisos saem como no
+  compilador de uma vez só. `sc repl FILE` não passa a flag, porque as
+  células seguintes podem usar e definir o que o arquivo deixou.

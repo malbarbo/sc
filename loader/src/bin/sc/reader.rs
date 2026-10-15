@@ -28,7 +28,7 @@ pub struct Reader {
 
 /// Whether `stream` takes colour: <https://no-color.org>, and `FORCE_COLOR`
 /// where no terminal is watching.
-fn color(terminal: bool) -> bool {
+pub fn color(terminal: bool) -> bool {
     let set = |v| std::env::var_os(v).is_some_and(|s| !s.is_empty());
     !set("NO_COLOR") && (terminal || set("FORCE_COLOR"))
 }

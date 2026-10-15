@@ -141,6 +141,8 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   DO.ErrorLimit = 19;
   DO.ShowOptionNames = true;
   DO.ShowPresumedLoc = true;
+  if (O.Colors)
+    DO.setShowColors(ShowColorsKind::On);
   DO.ElideType = true;
 
   AnalyzerOptions &AO = Inv.getAnalyzerOpts();
@@ -199,6 +201,8 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
     else if (A == "-mrelocation-model") O.PIC = llvm::StringRef(Next()) == "pic";
     else if (A == "-fvisibility=default") O.VisibilityDefault = true;
     else if (A == "-emit-module-interface" || A == "-fmodules-reduced-bmi") O.ModuleInterface = true;
+    else if (A == "-fcolor-diagnostics") O.Colors = true;
+    else if (A == "-sc-one-cell") O.OneCell = true;
     else if (A == "-I") O.Include.push_back(Next());
     else if (A == "-x") {
       O.CXX = llvm::StringRef(Next()) == "c++";

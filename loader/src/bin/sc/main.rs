@@ -140,8 +140,11 @@ fn lang_of(lang: Option<Lang>, file: Option<&Path>) -> Lang {
     })
 }
 
+/// The source of `file`, which the diagnostics name after it (`#line`).
 fn read(file: &Path) -> Result<String> {
-    std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()).into())
+    let src = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let name = file.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
+    Ok(format!("#line 1 \"{name}\"\n{src}"))
 }
 
 fn repl(lang: Option<Lang>, quiet: bool, file: Option<&Path>) -> Result<i32> {

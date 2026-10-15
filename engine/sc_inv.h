@@ -14,6 +14,8 @@ struct ScOptions {
   bool PIC = false;            // -mrelocation-model pic -pic-level 2 (a shared object)
   bool VisibilityDefault = false; // -fvisibility=default
   bool ModuleInterface = false; // -emit-module-interface -fmodules-reduced-bmi (a .pcm)
+  bool Colors = false;         // -fcolor-diagnostics
+  bool OneCell = false;        // -sc-one-cell: a session of one cell, the whole program
 };
 
 bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O);
