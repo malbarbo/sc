@@ -234,11 +234,11 @@ test-aluno: repl
 	test/aluno.py
 
 # --- tests: the corpus against the uncut engine
-$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
 	test/corpus.py $< $(B)/res/base
 
 # the same with every warning on, so the cuts keep the code of all warnings
-$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/wev-base
 
 baseline: $(B)/res/base/summary.json
@@ -251,10 +251,10 @@ test-small: $(B)/sc.wasm $(B)/res/base/summary.json $(SCLOAD)
 
 # the native engine against the uncut native engine (sc.wasm and the native
 # engine differ where the host does: stack depth, memory, the sandbox)
-$(B)/res/native-base/summary.json: $(B)/sc-host-full test/corpus.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+$(B)/res/native-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
 	test/corpus.py $< $(B)/res/native-base
 
-$(B)/res/native-wev-base/summary.json: $(B)/sc-host-full test/corpus.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+$(B)/res/native-wev-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/native-wev-base
 
 test-native: $(B)/sc $(B)/res/native-base/summary.json $(SCLOAD)

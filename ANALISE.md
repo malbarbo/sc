@@ -1909,7 +1909,9 @@ Medido:
   `dangling-global`, não disparou em nenhum programa: fica no A.
 - `strict`: o `-Wmissing-prototypes` dispara em 16 dos 20 programas, até
   11 vezes num só. Cada função de aluno sem protótipo antes dela dispara o
-  aviso. É estilo de projeto com vários arquivos, e o lugar dele seria o N.
+  aviso. É estilo de projeto com vários arquivos: saiu do S para o N
+  (decisão do usuário). Pede `static` ou um protótipo que não acrescenta
+  nada a quem tem um arquivo só, e encobria os outros avisos do `strict`.
 - O `-Wsign-conversion` dispara em 7 programas, até 9 vezes num só (o BFS).
 
 **As células não eram o arquivo principal.** Cada célula entra como um

@@ -598,8 +598,8 @@ Cada fase fecha com o `make test` com 0 diferenças, o `test-split`, o
 - A célula passou a contar como o arquivo principal
   (`llvm/incremental-main-file.patch`). Antes disso, o `-Wunreachable-code`
   não disparava, e o `-Wheader-hygiene` dava falso positivo.
-- Pendência: o `-Wmissing-prototypes` dispara em 16 dos 20 programas
-  corretos do `test/aluno` no `strict`.
+- O `-Wmissing-prototypes` saiu do S para o N: disparava em 16 dos 20
+  programas corretos do `test/aluno` no `strict`.
 
 A F1 vem primeiro, porque é o alicerce:
 
