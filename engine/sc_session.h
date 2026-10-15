@@ -42,6 +42,10 @@ public:
   // whose first error is at its end is ScIncomplete
   ScStatus cell(llvm::StringRef Src, bool Backend, std::string &Obj, std::vector<std::string> &Syms,
                 bool Whole = false);
+  // The type of Src, an expression without its `;`, as a shown value
+  // writes it; ScError if Src is not one. Nothing is generated, but as a
+  // failed cell, Src leaves part of itself in the session
+  ScStatus type(llvm::StringRef Src, std::string &Type);
   // The brackets Src leaves open, one more if it ends inside a comment or
   // with a `\` that joins the next line
   unsigned depth(llvm::StringRef Src);

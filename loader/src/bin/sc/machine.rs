@@ -119,6 +119,17 @@ impl Machine {
         Ok(a.status == Status::Ok)
     }
 
+    /// Writes the type of `expr` without running it: whether it is one.
+    pub fn type_of(&mut self, expr: &str) -> crate::Result<bool> {
+        let a = self.repl.type_of(expr.as_bytes())?;
+        eprint!("{}", a.diags);
+        match a.syms.first() {
+            Some(t) if a.status == Status::Ok => println!("{t}"),
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
     /// What Enter does with `input`, the caret at `cursor`, as the compiler
     /// sees it. With the caret at the end (or in an input of one line), it
     /// runs the input unless the input stops short: a bracket or a comment

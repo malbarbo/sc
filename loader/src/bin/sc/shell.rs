@@ -16,6 +16,7 @@ pub fn welcome_message(lang: Lang) -> String {
 pub const COMMANDS: &[(&str, &str, &str)] = &[
     (":help", "", "Show this help"),
     (":quit", "", "Exit the REPL"),
+    (":type", "EXPR", "Show the type of an expression, without running it"),
     (":undo", "", "Forget the last cell's declarations (what it ran stays done)"),
     (":theme", "[light|dark]", "Show or switch the theme"),
 ];
@@ -71,6 +72,8 @@ pub fn run(machine: Machine) -> Result<i32> {
                 }
             }
             ":quit" => break,
+            ":type" if arg.is_empty() => println!("The :type command takes an expression."),
+            ":type" => status = if machine.type_of(arg)? { 0 } else { 1 },
             ":undo" => {
                 if machine.undo()? {
                     reader.set_completions(completions(&machine));

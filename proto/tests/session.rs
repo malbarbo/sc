@@ -92,6 +92,8 @@ fn session() {
     assert_eq!(r.status(), Status::Error);
     assert!(r.diags().contains("error: expected expression"), "{}", r.diags());
     assert_eq!(s.cell("int z = 1;", Mode::So).unwrap().status(), Status::Ok);
+    let r = s.cell("z", Mode::Type).unwrap();
+    assert_eq!((r.status(), r.syms().collect::<Vec<_>>()), (Status::Ok, vec!["int".into()]));
 
     // the replay: the same names, without the backend
     let mut s2 = Session::new(args(false)).unwrap();
@@ -254,4 +256,42 @@ fn show() {
     let a = cell("t.n");
     assert_eq!(a.status, Status::Error);
     assert!(a.diags.contains("must be called"), "{}", a.diags);
+}
+
+/// `:type`: the type of an expression, as a shown value writes it; nothing
+/// of the expression stays in the session.
+#[test]
+fn type_of() {
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(false)).unwrap();
+    assert_eq!(r.cell(b"int x = 3; struct p { int a; } q;").unwrap().status, Status::Ok);
+    let mut ty = |src: &str| {
+        let a = r.type_of(src.as_bytes()).unwrap();
+        (a.status, a.syms.join(""), a.diags)
+    };
+    for (src, want) in [("x", "int"), ("q", "struct p"), ("&q.a", "int *"), ("sizeof x", "size_t"),
+                        ("\"ab\"", "char[3]"), ("x / 2.0", "double"), ("(struct r { int b; }){1}", "struct r")] {
+        let (st, t, d) = ty(src);
+        assert_eq!((st, t.as_str()), (Status::Ok, want), "{src:?}: {d}");
+        assert!(d.is_empty(), "{src:?}: {d}");
+    }
+    for src in ["int", "x;", "1; 2", "y", ""] {
+        let (st, t, d) = ty(src);
+        assert_eq!((st, t.as_str()), (Status::Error, ""), "{src:?}");
+        assert!(d.contains("error:"), "{src:?}: {d}");
+    }
+    // the struct of the expression is gone, and the log has the one cell
+    assert_eq!(r.cell(b"struct r { char c; };").unwrap().status, Status::Ok);
+    assert_eq!(r.len(), 2);
+
+    // C++: the names of a class or a template's inside are left out; the
+    // copy constructor Sema defines goes with the expression
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(true)).unwrap();
+    let src = "#include <string>\n#include <vector>\nstd::string s; std::vector<int> v; struct T { std::string a; } t;";
+    assert_eq!(r.cell(src.as_bytes()).unwrap().status, Status::Ok);
+    for (src, want) in [("s", "std::string"), ("s + \"c\"", "std::string"), ("s.size()", "size_t"),
+                        ("v[0]", "int"), ("v.begin()", "std::__wrap_iter<int *>"), ("T(t)", "T")] {
+        let a = r.type_of(src.as_bytes()).unwrap();
+        assert_eq!((a.status, a.syms.join("")), (Status::Ok, want.to_string()), "{src:?}: {}", a.diags);
+    }
+    assert_eq!(r.cell(b"T u = t;").unwrap().status, Status::Ok);
 }

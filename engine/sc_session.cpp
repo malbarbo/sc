@@ -18,6 +18,7 @@
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/GlobalDecl.h"
 #include "clang/Basic/DiagnosticFrontend.h"
+#include "clang/Basic/DiagnosticParse.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CodeGen/BackendUtil.h"
 #include "clang/CodeGen/ModuleBuilder.h"
@@ -178,15 +179,26 @@ static bool isChar(QualType T) {
   return T->isSpecificBuiltinType(BuiltinType::Char_S) || T->isSpecificBuiltinType(BuiltinType::Char_U);
 }
 
-// T without a class's member typedefs (std::string::size_type), which say
-// little outside the class
+// T with the names a typedef at namespace scope gives it (size_t,
+// std::string), and the rest canonical: what a class or a template writes
+// inside (std::string::size_type, basic_string<_CharT>) says little outside
 static QualType plain(ASTContext &C, QualType T) {
   SplitQualType Q = T.split();
-  if (auto *TT = dyn_cast<TypedefType>(Q.Ty); TT && TT->getDecl()->getDeclContext()->isRecord())
-    return plain(C, C.getQualifiedType(TT->desugar(), Q.Quals));
+  if (auto *TT = dyn_cast<TypedefType>(Q.Ty))
+    return TT->getDecl()->getDeclContext()->isRecord() ? plain(C, C.getQualifiedType(TT->desugar(), Q.Quals)) : T;
+  if (isa<PredefinedSugarType>(Q.Ty)) // __size_t
+    return T;
   if (auto *P = dyn_cast<PointerType>(Q.Ty))
     return C.getQualifiedType(C.getPointerType(plain(C, P->getPointeeType())), Q.Quals);
-  return T;
+  return C.getQualifiedType(Q.Ty->getCanonicalTypeInternal(), Q.Quals);
+}
+
+// T as clang writes it (plain); the type of sizeof, __size_t, is size_t
+static std::string typeName(Sema &S, QualType T) {
+  std::string Name = plain(S.getASTContext(), T).getAsString(S.getPrintingPolicy());
+  if (isa<PredefinedSugarType>(T))
+    Name = llvm::StringRef(Name).drop_while([](char c) { return c == '_'; }).str();
+  return Name;
 }
 
 // The call that shows the value of E, or null if E is not shown.
@@ -224,9 +236,7 @@ static Expr *show(Sema &S, Expr *E) {
   CXXScopeSpec SS;
   ExprResult Fn = S.BuildDeclarationNameExpr(SS, R, /*NeedsADL=*/false);
   SourceLocation Loc = E->getBeginLoc();
-  std::string Name = plain(C, T).getAsString(S.getPrintingPolicy());
-  if (isa<PredefinedSugarType>(T)) // the type of sizeof, __size_t, is size_t
-    Name = llvm::StringRef(Name).drop_while([](char c) { return c == '_'; }).str();
+  std::string Name = typeName(S, T);
   Expr *Type = StringLiteral::Create(C, Name, StringLiteralKind::Ordinary, false,
                                      C.getStringLiteralArrayType(C.CharTy, Name.size()), Loc);
   Expr *KindE = IntegerLiteral::Create(C, llvm::APInt(C.getIntWidth(C.IntTy), Kind), C.IntTy, Loc);
@@ -262,6 +272,7 @@ public:
   unsigned InputCount = 0;
   FileID LastFID; // the last cell's
   std::function<void()> BeforeEnd; // before the CodeGen ends the cell's module
+  std::string *TypeOf = nullptr;   // ScSession::type: the cell's type goes here
 
   IncrementalParser(CompilerInstance &Instance, CodeGenerator *CG, llvm::LLVMContext &Ctx)
       : S(Instance.getSema()), CG(CG), Ctx(Ctx) {
@@ -304,9 +315,34 @@ public:
 
     Parser::DeclGroupPtrTy ADecl;
     Sema::ModuleImportState ImportState;
+    DiagnosticsEngine &Diags = S.getDiagnostics();
+    if (TypeOf) {
+      // one expression without its `;`, which the CodeGen does not see
+      unsigned Decls = 0;
+      for (bool AtEOF = P->ParseFirstTopLevelDecl(ADecl, ImportState); !AtEOF;
+           AtEOF = P->ParseTopLevelDecl(ADecl, ImportState))
+        if (ADecl && !Diags.hasErrorOccurred())
+          for (Decl *D : ADecl.get()) {
+            auto *TLSD = dyn_cast<TopLevelStmtDecl>(D);
+            auto *E = TLSD && TLSD->isSemiMissing() ? dyn_cast_or_null<Expr>(TLSD->getStmt()) : nullptr;
+            if (++Decls == 1 && E)
+              *TypeOf = typeName(S, E->IgnoreImplicit()->getType());
+            else // after the first error, the loop parses on to the end
+              Diags.Report(D->getBeginLoc(), diag::err_expected_expression);
+          }
+      if (!Decls && !Diags.hasErrorOccurred())
+        Diags.Report(S.getSourceManager().getLocForStartOfFile(LastFID), diag::err_expected_expression);
+      if (Diags.hasErrorOccurred())
+        TypeOf->clear();
+      // what Sema handed to the CodeGen on the way (an implicit member's
+      // definition) goes with the module
+      std::unique_ptr<llvm::Module> M = CG->ReleaseModule();
+      Fail(C.getTranslationUnitDecl());
+      return nullptr;
+    }
     for (bool AtEOF = P->ParseFirstTopLevelDecl(ADecl, ImportState); !AtEOF;
          AtEOF = P->ParseTopLevelDecl(ADecl, ImportState)) {
-      if (ADecl && !S.getDiagnostics().hasErrorOccurred())
+      if (ADecl && !Diags.hasErrorOccurred())
         for (Decl *D : ADecl.get())
           if (auto *TLSD = dyn_cast<TopLevelStmtDecl>(D); TLSD && TLSD->isSemiMissing())
             if (auto *E = dyn_cast_or_null<Expr>(TLSD->getStmt()))
@@ -316,7 +352,6 @@ public:
         break;
     }
 
-    DiagnosticsEngine &Diags = S.getDiagnostics();
     if (Diags.hasErrorOccurred()) {
       Consumer->HandleTranslationUnit(C); // drops the module
       Fail(C.getTranslationUnitDecl());
@@ -707,6 +742,14 @@ ScStatus ScSession::cell(llvm::StringRef Src, bool Backend, std::string &Obj,
     return ScLost;
   Obj.assign(Buf.begin(), Buf.end());
   return ScOk;
+}
+
+ScStatus ScSession::type(llvm::StringRef Src, std::string &Type) {
+  Type.clear();
+  I->IP->TypeOf = &Type;
+  I->IP->Parse(Src);
+  I->IP->TypeOf = nullptr;
+  return Type.empty() ? ScError : ScOk;
 }
 
 unsigned ScSession::depth(llvm::StringRef Src) {

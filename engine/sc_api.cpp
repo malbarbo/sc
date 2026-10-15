@@ -82,7 +82,7 @@ void sc_session_free(sc_session *s) { delete s; }
 
 int sc_session_cell(sc_session *s, const char *src, unsigned len, int mode) {
   s->clear();
-  if (mode != SC_CELL_SO && mode != SC_CELL_REPLAY && mode != SC_CELL_WHOLE) {
+  if (mode != SC_CELL_SO && mode != SC_CELL_REPLAY && mode != SC_CELL_WHOLE && mode != SC_CELL_TYPE) {
     s->DiagOS << "sc: unknown cell mode\n";
     return SC_ERROR;
   }
@@ -90,6 +90,8 @@ int sc_session_cell(sc_session *s, const char *src, unsigned len, int mode) {
     s->DiagOS << "sc: the session is lost\n";
     return SC_LOST;
   }
+  if (mode == SC_CELL_TYPE)
+    return s->S->type(llvm::StringRef(src, len), s->Syms);
   std::string Obj;
   std::vector<std::string> Syms;
   ScStatus St = s->S->cell(llvm::StringRef(src, len), mode != SC_CELL_REPLAY, Obj, Syms, mode == SC_CELL_WHOLE);

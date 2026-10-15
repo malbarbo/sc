@@ -201,7 +201,8 @@ impl<'s> Reply<'s> {
         self.session.part(sys::sc_part::SC_SO)
     }
 
-    /// The names the cell exports, to check a replay.
+    /// The names the cell exports, to check a replay; [`Mode::Type`]: the
+    /// type.
     pub fn syms(&self) -> impl Iterator<Item = Cow<'s, str>> {
         self.session.part(sys::sc_part::SC_SYMS).split(|&b| b == b'\n').filter(|l| !l.is_empty()).map(String::from_utf8_lossy)
     }
@@ -264,7 +265,7 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
                 // a replayed cell is one that was accepted
                 output.flush()?;
                 let copy = match mode {
-                    Mode::So | Mode::Whole => match Copy::fork()? {
+                    Mode::So | Mode::Whole | Mode::Type => match Copy::fork()? {
                         Fork::Original(c) => c,
                         Fork::Copy(answer) => {
                             output.write_all(&answer)?;
@@ -293,7 +294,8 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
                     }
                 };
                 match copy {
-                    Some(c) if status != Status::Ok => c.hand_over(&answer),
+                    // what Sema made of the expression goes with the original
+                    Some(c) if status != Status::Ok || mode == Mode::Type => c.hand_over(&answer),
                     copy => {
                         // the reply does not wait for the copy to end
                         output.write_all(&answer)?;
@@ -377,8 +379,8 @@ impl Copy {
         unsafe { waitpid(self.pid, ptr::null_mut(), 0) };
     }
 
-    /// The cell failed: the copy goes on with the answer, and the original,
-    /// whose session has the cell's leftovers, ends.
+    /// The cell failed, or was a type: the copy goes on with the answer, and
+    /// the original, whose session has the cell's leftovers, ends.
     fn hand_over(mut self, answer: &[u8]) -> ! {
         let _ = self.to.write_all(b"t").and_then(|_| self.to.write_all(answer));
         unsafe { _exit(0) }

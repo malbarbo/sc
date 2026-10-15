@@ -27,7 +27,8 @@ enum sc_status {
 enum sc_part {
   SC_DIAGS = 0, /* the diagnostics of the call, as text */
   SC_SO = 1,    /* the cell as a wasm shared object */
-  SC_SYMS = 2,  /* the names the cell exports, one per line, to check a replay */
+  SC_SYMS = 2,  /* the names the cell exports, one per line, to check a
+                   replay; SC_CELL_TYPE: the type */
 };
 
 enum sc_cell_mode {
@@ -38,6 +39,10 @@ enum sc_cell_mode {
                          more (a declaration without its `;`, a function's
                          header without its body, an `if` without its
                          statement). The REPL asks so on Enter */
+  SC_CELL_TYPE = 3,   /* the cell is an expression without its `;`: SC_OK with
+                         its type in SC_SYMS, as a shown value writes it
+                         (below). Nothing is generated, but as a failed cell
+                         (SC_ERROR) it leaves part of itself in the session */
 };
 
 /* A cell that ends in an expression without its `;` shows its value, if the
@@ -46,7 +51,8 @@ enum sc_cell_mode {
      void __sc_show_int(const char *type, int kind, long long value);
      void __sc_show_float(const char *type, int kind, double value);
    which the host that loads the cells defines. type is the expression's type
-   as clang writes it; kind is one of these. A string is the address of its
+   as clang writes it: a typedef at namespace scope (size_t, std::string)
+   keeps its name, the rest is canonical; kind is one of these. A string is the address of its
    first char. Any other value is not shown. */
 enum sc_show {
   SC_SHOW_SIGNED = 0,
@@ -93,10 +99,11 @@ int sc_main(int argc, const char **argv);
      SC_MSG_NEW   a session (it replaces the one before): the arguments of
                   sc_session_new, each followed by a NUL, in the first part
      SC_MSG_CELL  sc_session_cell: the source in the first part, the mode in
-                  status. In SC_CELL_SO and SC_CELL_WHOLE the child forks a copy of itself
-                  first; if the cell fails or ends the process, the copy
-                  answers SC_ERROR (or SC_INCOMPLETE) and goes on, so the session is as before
-                  the cell
+                  status. In SC_CELL_SO, SC_CELL_WHOLE and SC_CELL_TYPE the
+                  child forks a copy of itself first; if the cell fails or
+                  ends the process, the copy answers SC_ERROR (or
+                  SC_INCOMPLETE) and goes on, so the session is as before
+                  the cell. After SC_CELL_TYPE the copy always goes on
      SC_MSG_UNDO  sc_session_undo
      SC_MSG_DEPTH sc_session_depth: the source in the first part; the reply's
                   status is the depth */

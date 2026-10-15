@@ -1717,3 +1717,46 @@ O `alias-3` quebra porque o alias da célula seguinte nomeia um `static` já
 emitido na anterior, o mesmo caso do `alias-2` e do `alias-4`. Antes, o
 `static` era adiado e emitido junto com o alias. Um patch no `llvm/`, mais
 tamanho e um programa a menos não pagam 28 linhas: o `Wanted` fica.
+
+## 28. `:type`
+
+`:type EXPR` mostra o tipo de uma expressão sem rodá-la. No `sc.h`, ele é
+um modo de célula novo, `SC_CELL_TYPE`, que devolve o tipo no lugar dos
+nomes exportados (`SC_SYMS`). Assim, o protocolo e a mensagem não mudam.
+
+**No engine** (`ScSession::type`):
+- a célula passa pelo parser e pelo Sema como as outras, mas nenhuma
+  declaração vai para o CodeGen;
+- o que o Sema entrega no caminho, como a definição implícita de um
+  construtor de cópia, sai com o módulo da célula, que é descartado;
+- a célula precisa ser uma expressão sem `;`. Qualquer outra coisa (`int`,
+  `x;`, `1; 2`, nada) dá "expected expression";
+- como numa célula que falha, o que o Sema fez fica na sessão. No filho,
+  a cópia do `fork` tirada antes da célula segue sempre no lugar do
+  original, mesmo com `SC_OK`, e o `Repl` não põe a célula no log.
+
+**O nome do tipo** é o mesmo do valor mostrado (§26), com uma regra nova
+que vale para os dois:
+- um typedef de escopo de namespace (`size_t`, `std::string`, `FILE`, um
+  do aluno) e o `__size_t` do `sizeof` mantêm o nome;
+- um typedef membro de classe vira o tipo que nomeia, como antes;
+- o resto sai na forma canônica.
+
+Antes, o resto saía como estava escrito, e o que vinha de dentro de um
+template era ilegível fora dele:
+
+| expressão | como estava escrito | canônico |
+|---|---|---|
+| `s + "c"` | `basic_string<char, std::char_traits<char>, std::allocator<char>>` | `std::string` |
+| `v.begin()` (`vector<int>`) | `__wrap_iter<pointer>` | `std::__wrap_iter<int *>` |
+| `m.find("a")` (`map<string,int>`) | `__map_iterator<typename __base::iterator>` | `std::__map_iterator<std::__tree_iterator<...>>` |
+
+O canônico sai como `std::string` porque a libc++ marca
+`basic_string<char>` com `preferred_name`. O
+`TypeName::getFullyQualifiedType`, usado pelo clang-repl, foi medido e
+descartado: ele escreve `std::basic_string<char, std::char_traits<char>,
+std::allocator<char>>` e `std::vector<...>::iterator`, com todos os
+argumentos do template.
+
+A sessão só entra no `sc-engine-full`, então o `sc.wasm` não muda. No
+shell, o argumento do `:type` é colorido como código.

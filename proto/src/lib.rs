@@ -79,6 +79,10 @@ pub enum Mode {
     /// first error is at its end (a declaration without its `;`, a header
     /// without its body). The REPL asks so on Enter.
     Whole,
+    /// The cell is an expression without its `;`: its type, in place of the
+    /// exported names. Nothing is generated, but as a failed cell it leaves
+    /// part of itself in a [`Session`]; a [`Child`] goes back to before it.
+    Type,
 }
 
 impl Mode {
@@ -87,6 +91,7 @@ impl Mode {
             sys::sc_cell_mode::SC_CELL_SO => Some(Mode::So),
             sys::sc_cell_mode::SC_CELL_REPLAY => Some(Mode::Replay),
             sys::sc_cell_mode::SC_CELL_WHOLE => Some(Mode::Whole),
+            sys::sc_cell_mode::SC_CELL_TYPE => Some(Mode::Type),
             _ => None,
         }
     }
@@ -96,6 +101,7 @@ impl Mode {
             Mode::So => sys::sc_cell_mode::SC_CELL_SO,
             Mode::Replay => sys::sc_cell_mode::SC_CELL_REPLAY,
             Mode::Whole => sys::sc_cell_mode::SC_CELL_WHOLE,
+            Mode::Type => sys::sc_cell_mode::SC_CELL_TYPE,
         }
     }
 }

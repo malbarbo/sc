@@ -327,10 +327,14 @@ fn highlight(input: &str, t: &Palette) -> String {
         let end = start + chars[start..].iter().take_while(|c| !c.is_whitespace()).count();
         out.extend(&chars[..start]);
         paint(&mut out, t.command, &chars[start..end]);
-        out.extend(&chars[end..]);
-        return out;
+        // what :type takes is code
+        if chars[start..end].iter().collect::<String>() != ":type" {
+            out.extend(&chars[end..]);
+            return out;
+        }
+        i = end;
     }
-    let mut line_start = true;
+    let mut line_start = i == 0;
     while let Some(&c) = chars.get(i) {
         let begin = i;
         if c == '/' && chars.get(i + 1) == Some(&'/') {

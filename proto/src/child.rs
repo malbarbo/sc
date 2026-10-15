@@ -15,7 +15,7 @@ pub struct Answer {
     pub diags: String,
     /// The cell as a wasm shared object.
     pub so: Vec<u8>,
-    /// The names the cell exports.
+    /// The names the cell exports; [`Mode::Type`]: the type.
     pub syms: Vec<String>,
 }
 
@@ -215,6 +215,12 @@ impl Repl {
         self.compile(src, Mode::Whole)
     }
 
+    /// The type of `src`, an expression without its `;`, if
+    /// [`Status::Ok`]. Nothing of it is kept.
+    pub fn type_of(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
+        self.compile(src, Mode::Type)
+    }
+
     /// See [`crate::sys::sc_session_depth`].
     pub fn depth(&mut self, src: &[u8]) -> Result<u32, ReplError> {
         match self.child.depth(src) {
@@ -233,8 +239,8 @@ impl Repl {
             Err(e) => return Err(e.into()),
         };
         match a.status {
-            Status::Ok => self.log.push(Entry { src: src.to_vec(), syms: a.syms.clone() }),
-            Status::Error | Status::Incomplete => {}
+            Status::Ok if mode != Mode::Type => self.log.push(Entry { src: src.to_vec(), syms: a.syms.clone() }),
+            Status::Ok | Status::Error | Status::Incomplete => {}
             Status::Lost => self.restart()?,
         }
         Ok(a)
