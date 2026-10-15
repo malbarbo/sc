@@ -12,6 +12,7 @@
 #include "clang/StaticAnalyzer/Core/AnalyzerOptions.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -77,6 +78,7 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   LO.Char8 = false;
   LO.NativeInt16Type = true;
   LO.HLSLRootSigVer = llvm::dxbc::RootSignatureVersion::V1_1;
+  LO.GPUDefaultStream = LangOptions::GPUDefaultStreamKind::Legacy;
   if (O.CXX) {
     LO.CXXOperatorNames = true;
     LO.Exceptions = LO.CXXExceptions = true;
@@ -135,6 +137,8 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   CG.setExceptionHandling(CodeGenOptions::ExceptionHandlingKind::Wasm);
   if (O.CXX)
     CG.CXXCtorDtorAliases = true;
+  // fields without a default, which the marshalling always sets
+  CG.SanitizeKcfiHash = llvm::KCFIHashAlgorithm::xxHash64;
 
   DiagnosticOptions &DO = Inv.getDiagnosticOpts();
   DO.Warnings = O.Warnings;
@@ -164,6 +168,8 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
 
   FrontendOptions &FO = Inv.getFrontendOpts();
   FO.DisableFree = true;
+  FO.PrintSupportedCPUs = FO.PrintSupportedExtensions = FO.PrintEnabledExtensions = false;
+  FO.ASTDumpDeclTypes = FO.IsSystemModule = false;
   FO.ProgramAction = frontend::EmitObj;
   if (O.ModuleInterface) {
     FO.ProgramAction = frontend::GenerateModuleInterface;
@@ -187,35 +193,67 @@ void scSetLLVMArgs(const CompilerInvocation &Inv) {
   }
 }
 
-// Accepts the subset of cc1 flags the engine passes; everything else is fixed.
-bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
+// Accepts the cc1 flags the engine is given (scripts/flags.py) and turns down
+// any other: those that are fixed must have their fixed value.
+bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O, std::string &Error) {
+  static const llvm::StringSet<> Fixed = {
+      "-emit-obj", "-disable-free", "-clear-ast-before-backend", "-disable-llvm-verifier",
+      "-discard-value-names", "-mframe-pointer=none", "-ffp-contract=on", "-fno-rounding-math",
+      "-fvisibility=hidden", "-fgnuc-version=4.2.1", "-exception-model=wasm", "-mconstructor-aliases",
+      "-fdeprecated-macro", "-fno-implicit-modules", "-fskip-odr-check-in-gmf", "-fcxx-exceptions",
+      "-fexceptions"};
+  static const std::pair<llvm::StringRef, llvm::StringSet<>> FixedValue[] = {
+      {"-triple", {"wasm32-unknown-wasip1"}},
+      {"-target-cpu", {"generic"}},
+      {"-ferror-limit", {"19"}},
+      {"-pic-level", {"2"}},
+      {"-target-feature", {"+exception-handling", "+multivalue", "+reference-types", "+mutable-globals"}},
+      {"-mllvm", {"-wasm-enable-sjlj", "-wasm-use-legacy-eh=false", "-wasm-enable-eh"}},
+      {"-mrelocation-model", {"static", "pic"}}};
   bool Lang = false; // -x: the language, else the extension of the input
   for (size_t i = 0; i < Args.size(); ++i) {
     llvm::StringRef A = Args[i];
     auto Next = [&]() -> const char * { return i + 1 < Args.size() ? Args[++i] : ""; };
-    if (A == "-o") O.Output = Next();
+    auto *FV = llvm::find_if(FixedValue, [&](auto &F) { return F.first == A; });
+    if (FV != std::end(FixedValue)) {
+      llvm::StringRef V = Next();
+      if (!FV->second.contains(V)) {
+        Error = ("unsupported value of " + A + ": '" + V + "'").str();
+        return false;
+      }
+      if (A == "-mrelocation-model") O.PIC = V == "pic";
+    }
+    else if (Fixed.contains(A)) continue;
+    else if (A == "-o") O.Output = Next();
     else if (A == "-isysroot") O.Sysroot = Next();
     else if (A == "-resource-dir") O.ResourceDir = Next();
     else if (A == "-internal-isystem") O.ISystem.push_back(Next());
     else if (A == "-internal-externc-isystem") O.ExternCISystem.push_back(Next());
-    else if (A == "-mrelocation-model") O.PIC = llvm::StringRef(Next()) == "pic";
     else if (A == "-fvisibility=default") O.VisibilityDefault = true;
     else if (A == "-emit-module-interface" || A == "-fmodules-reduced-bmi") O.ModuleInterface = true;
     else if (A == "-fcolor-diagnostics") O.Colors = true;
     else if (A == "-sc-one-cell") O.OneCell = true;
     else if (A == "-I") O.Include.push_back(Next());
     else if (A == "-x") {
-      O.CXX = llvm::StringRef(Next()) == "c++";
+      llvm::StringRef X = Next();
+      if (X != "c" && X != "c++") {
+        Error = ("unsupported language: '" + X + "'").str();
+        return false;
+      }
+      O.CXX = X == "c++";
       Lang = true;
     }
-    else if (A.consume_front("-std=")) O.Std = A.str();
+    else if (A.consume_front("-std=")) {
+      if (LangStandard::getLangKind(A) == LangStandard::lang_unspecified) {
+        Error = ("unknown standard: '" + A + "'").str();
+        return false;
+      }
+      O.Std = A.str();
+    }
     else if (A.consume_front("-fmodule-file=")) {
       auto [Name, File] = A.split('=');
       O.ModuleFiles.emplace_back(Name.str(), File.str());
     }
-    else if (A == "-triple" || A == "-target-cpu" || A == "-ferror-limit" || A == "-pic-level" ||
-             A == "-target-feature" || A == "-mllvm")
-      Next();
     else if (A.starts_with("-W"))
       O.Warnings.push_back(A.drop_front(2).str());
     else if (!A.starts_with("-")) {
@@ -223,6 +261,10 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O) {
       if (!Lang)
         O.CXX = A.ends_with(".cpp") || A.ends_with(".cc") || A.ends_with(".cxx") || A.ends_with(".cppm");
     }
+    else {
+      Error = ("unknown argument: '" + A + "'").str();
+      return false;
+    }
   }
-  return !O.Input.empty();
+  return true;
 }

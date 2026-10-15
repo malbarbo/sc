@@ -13,7 +13,7 @@ mod shell;
 mod show;
 
 use bpaf::{Bpaf, Parser};
-use machine::{Lang, Machine, Outcome};
+use machine::{Lang, Machine, Outcome, Safety};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -31,6 +31,14 @@ fn lang_arg() -> impl Parser<Option<Lang>> {
         .optional()
 }
 
+fn safety_arg() -> impl Parser<Safety> {
+    bpaf::long("safety")
+        .help("How much the compiler checks: off (as a common compiler), on (default) or strict")
+        .argument::<String>("LEVEL")
+        .parse(|l| Safety::parse(&l).ok_or("expected off, on or strict"))
+        .fallback(Safety::On)
+}
+
 #[derive(Debug, Clone, Bpaf)]
 enum Command {
     /// Start the interactive REPL (default).
@@ -38,6 +46,8 @@ enum Command {
     Repl {
         #[bpaf(external(lang_arg))]
         lang: Option<Lang>,
+        #[bpaf(external(safety_arg))]
+        safety: Safety,
         /// Suppress the welcome message.
         #[bpaf(short)]
         quiet: bool,
@@ -50,6 +60,8 @@ enum Command {
     Run {
         #[bpaf(external(lang_arg))]
         lang: Option<Lang>,
+        #[bpaf(external(safety_arg))]
+        safety: Safety,
         /// The program.
         #[bpaf(positional("FILE"))]
         file: PathBuf,
@@ -62,6 +74,8 @@ enum Command {
     Check {
         #[bpaf(external(lang_arg))]
         lang: Option<Lang>,
+        #[bpaf(external(safety_arg))]
+        safety: Safety,
         /// The program.
         #[bpaf(positional("FILE"))]
         file: PathBuf,
@@ -79,14 +93,16 @@ enum Command {
 /// `FILE` is a `run`, and bare options are a `repl`. `None` is the bare `sc`.
 fn cli() -> bpaf::OptionParser<Option<Command>> {
     let lang = lang_arg();
+    let safety = safety_arg();
     let file = bpaf::positional::<PathBuf>("FILE");
     let args = bpaf::positional::<String>("ARG").many();
-    let file_as_run = bpaf::construct!(Command::Run { lang, file, args });
+    let file_as_run = bpaf::construct!(Command::Run { lang, safety, file, args });
 
     let lang = lang_arg();
+    let safety = safety_arg();
     let quiet = bpaf::short('q').help("Suppress the welcome message.").switch();
     let file = bpaf::pure(None);
-    let options_as_repl = bpaf::construct!(Command::Repl { lang, quiet, file });
+    let options_as_repl = bpaf::construct!(Command::Repl { lang, safety, quiet, file });
 
     let command = bpaf::construct!([command(), file_as_run, options_as_repl]).optional();
     bpaf::construct!(command)
@@ -112,14 +128,14 @@ fn main() -> ExitCode {
             return ExitCode::from(err.exit_code() as u8);
         }
     };
-    let result = match parsed.unwrap_or(Command::Repl { lang: None, quiet: false, file: None }) {
+    let result = match parsed.unwrap_or(Command::Repl { lang: None, safety: Safety::On, quiet: false, file: None }) {
         Command::Help { command: None } => return show_help(cli(), &["--help"]),
         // The commands alone, without the shorthands, so that a name that is
         // not a command lists the commands and does not run as a file.
         Command::Help { command: Some(name) } => return show_help(command().to_options(), &[&name, "--help"]),
-        Command::Repl { lang, quiet, file } => repl(lang, quiet, file.as_deref()),
-        Command::Run { lang, file, args } => run(lang, &file, args),
-        Command::Check { lang, file } => check(lang, &file),
+        Command::Repl { lang, safety, quiet, file } => repl(lang, safety, quiet, file.as_deref()),
+        Command::Run { lang, safety, file, args } => run(lang, safety, &file, args),
+        Command::Check { lang, safety, file } => check(lang, safety, &file),
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),
@@ -147,12 +163,12 @@ fn read(file: &Path) -> Result<String> {
     Ok(format!("#line 1 \"{name}\"\n{src}"))
 }
 
-fn repl(lang: Option<Lang>, quiet: bool, file: Option<&Path>) -> Result<i32> {
+fn repl(lang: Option<Lang>, safety: Safety, quiet: bool, file: Option<&Path>) -> Result<i32> {
     let lang = lang_of(lang, file);
     let src = file.map(read).transpose()?;
-    let mut machine = Machine::new(lang, vec![NAME.into()], true)?;
+    let mut machine = Machine::new(lang, safety, vec![NAME.into()], true)?;
     if !quiet {
-        print!("{}", shell::welcome_message(lang));
+        print!("{}", shell::welcome_message(lang, safety));
     }
     if let Some(src) = src {
         // the file's declarations are there for the cells; its `main` does
@@ -166,10 +182,10 @@ fn repl(lang: Option<Lang>, quiet: bool, file: Option<&Path>) -> Result<i32> {
     shell::run(machine)
 }
 
-fn run(lang: Option<Lang>, file: &Path, args: Vec<String>) -> Result<i32> {
+fn run(lang: Option<Lang>, safety: Safety, file: &Path, args: Vec<String>) -> Result<i32> {
     let src = read(file)?;
     let argv = std::iter::once(file.display().to_string()).chain(args).collect();
-    let mut machine = Machine::new(lang_of(lang, Some(file)), argv, false)?;
+    let mut machine = Machine::new(lang_of(lang, Some(file)), safety, argv, false)?;
     match machine.cell(&src)? {
         Outcome::Ok => Ok(machine.main()),
         Outcome::Error => Ok(1),
@@ -177,8 +193,8 @@ fn run(lang: Option<Lang>, file: &Path, args: Vec<String>) -> Result<i32> {
     }
 }
 
-fn check(lang: Option<Lang>, file: &Path) -> Result<i32> {
+fn check(lang: Option<Lang>, safety: Safety, file: &Path) -> Result<i32> {
     let src = read(file)?;
-    let mut machine = Machine::new(lang_of(lang, Some(file)), vec![NAME.into()], false)?;
+    let mut machine = Machine::new(lang_of(lang, Some(file)), safety, vec![NAME.into()], false)?;
     Ok(if machine.compile(&src)? { 0 } else { 1 })
 }

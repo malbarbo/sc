@@ -1833,3 +1833,121 @@ Uma variável `weak` continua com endereço 0, e `&v` deixou de ser nulo,
 como deve ser para uma variável que não é `weak`. Um ponteiro tomado
 antes da definição continua apontando para o endereço provisório, e o
 trap então sai sem o nome.
+
+## 30. `--safety`: os níveis e os avisos (F1 do PLANO-VERIFICACOES.md)
+
+**Os níveis.** O `sc` tem `--safety=off|on|strict` (o padrão é `on`) no
+REPL, no `sc FILE` e no `sc check`. No REPL, `:safety NÍVEL` recomeça a
+sessão vazia, porque as células anteriores teriam de rodar de novo para
+compilar em outro nível. Os conjuntos estão em `scripts/flags.py`
+(`safety()`), e o `make repl` gera um arquivo de argumentos por linguagem,
+nível e modo: `build/repl/<ling>-<nível>[-file].args`. O `-file` é o do
+`sc FILE`, que liga o `-Wshadow` em C (PLANO §4.3). O engine não mudou os
+seus padrões: quem escolhe é o `flags.py`.
+
+| Nível | Avisos | Erros |
+|---|---|---|
+| `off` | os do clang, sem `-Wall -Wextra` | os do clang |
+| `on` | `-Wall -Wextra` − R + A | + E, com as exceções de `E_WARN` |
+| `strict` | `-Wall -Wextra` + A + S + `-Wpedantic` | + E |
+
+**O parse estrito.** O `scParseArgs` recusava em silêncio o que não
+conhecia. Agora:
+- recusa a flag desconhecida (`sc: unknown argument: '-fsanitize=address'`);
+- exige o valor fixo das flags que não variam (`-triple`, `-target-cpu`,
+  `-mllvm`, `-target-feature`...);
+- recusa `-x` e `-std=` que não existem.
+
+A sessão que recebe uma flag dessas não começa. O `-mllvm -asan-*` e as
+flags dos sanitizers entram na F2 e na F3.
+
+**Campos sem valor inicial.** O `checkinv` dos níveis caía num segfault
+dentro do `generateCC1CommandLine`. O valgrind mostrou leituras de memória
+não inicializada já no `checkinv` antigo: seis campos não têm valor no
+construtor, porque o parser de opções sempre os escreve. Com mais
+argumentos, o lixo da heap mudou, e o `denormalizeSimpleEnum` de
+`GPUDefaultStream` caiu. O `sc_inv.cpp` agora dá o valor do parser a:
+- `GPUDefaultStream` e `SanitizeKcfiHash`;
+- `PrintSupportedCPUs`, `PrintSupportedExtensions` e
+  `PrintEnabledExtensions`;
+- `ASTDumpDeclTypes` e `IsSystemModule`.
+
+O engine lia os mesmos campos sem valor. O valgrind não acusa mais nada.
+
+**O `checkinv`** ganhou 9 linhas: {C pic, C++ pic, C++ pic mod} × {off,
+on, strict}. São 17 linhas, todas SAME.
+
+**O corpus nos níveis.** Cada programa que roda também roda nos níveis
+`on` e `strict` (`<nome>-on`, `<nome>-strict`), ligado de uma vez, como no
+`sc FILE`. O c-testsuite e o gcc torture têm UB de propósito. Neles o E
+fica como aviso (`safety(..., errors=False)`), para o programa não parar na
+compilação.
+
+**A sessão e o `-Wpedantic`.** O arquivo principal da sessão é vazio, e as
+células vêm depois dele. O `-Wpedantic` contava o "ISO C requires a
+translation unit to contain at least one declaration" sem mostrá-lo, e o
+`strict` imprimia só "1 warning generated.". A sessão agora ignora o
+`ext_empty_translation_unit`.
+
+**O código correto de aluno (`test/aluno`, `make test-aluno`).**
+- São 20 programas: 11 escritos para isto (listas, matrizes, strings,
+  structs com `qsort`, recursão, menu com `fgets`, `vector`, `map`, classes
+  com exceções, BFS, template de pilha) e os 9 corretos do revisor W.
+- O `expected.txt` diz o código de saída e os avisos, por flag, de cada
+  programa em cada nível. No `on`, nenhum programa pode ter erro.
+
+Medido:
+- `off`: nenhum aviso.
+- `on`: 14 dos 20 programas não têm aviso nenhum. Dos 6 avisos, o
+  `-Wunreachable-code` do `rev-ur.c` é o falso positivo descrito abaixo. Os
+  outros 5 já eram esperados pelo plano:
+  - `-Wshadow` em `rev-c2.c`;
+  - `-Wdeprecated-copy-with-user-provided-dtor` em `rev-dtor.cpp`;
+  - `-Wsometimes-uninitialized` em `rev-u.c`, como aviso;
+  - `-Wunused-but-set-variable` em `p2` e `p4`, que é verdadeiro.
+- O `-Wlifetime-safety-permissive`, com `dangling-field` e
+  `dangling-global`, não disparou em nenhum programa: fica no A.
+- `strict`: o `-Wmissing-prototypes` dispara em 16 dos 20 programas, até
+  11 vezes num só. Cada função de aluno sem protótipo antes dela dispara o
+  aviso. É estilo de projeto com vários arquivos, e o lugar dele seria o N.
+- O `-Wsign-conversion` dispara em 7 programas, até 9 vezes num só (o BFS).
+
+**As células não eram o arquivo principal.** Cada célula entra como um
+arquivo incluído no início do principal (como no clang-repl). O
+`SourceManager::isInMainFile` dizia então que ela não era o principal, e
+duas verificações do clang que dependem disso falhavam:
+- o `-Wunreachable-code` (A) **nunca disparava**, nem no REPL nem no
+  `sc FILE`. O `CheckUnreachable` só analisa o arquivo principal: o `puts`
+  depois de um `return` passava sem aviso;
+- o `-Wheader-hygiene` (S) dava **falso positivo** em `using namespace std;`
+  ("in header"), nos 10 programas C++ do `test/aluno`.
+
+Uma célula sem local de inclusão contaria como o arquivo principal. Mas o
+`isBeforeInTranslationUnit` entre duas células sem ancestral comum chega ao
+`llvm_unreachable("Unsortable locations found")`.
+
+A correção é o patch `llvm/incremental-main-file.patch`, de 4 linhas: o
+`isInMainFile` aceita também o arquivo incluído no início do arquivo
+principal. Um `#include` nunca fica nesse ponto, porque o local de inclusão
+é o do nome do arquivo, depois de `#include`. Só uma entrada incremental
+fica ali. Depois do patch:
+- os dois avisos ficam como no clang de uma vez só: o `-Wunreachable-code`
+  dispara, e o `-Wheader-hygiene` não dispara mais;
+- nas outras chamadas de `isInMainFile` (macros não usadas,
+  `#pragma hdrstop`, módulos, PGO, a forma da mensagem do `static` não
+  usado), a célula passa a ser tratada como o código do aluno, que é o que
+  ela é.
+
+**Um falso positivo medido do `-Wunreachable-code`.** O `rev-ur.c` do
+revisor W tem `enum { MAX = 10 }` e `if (MAX > 100) printf(...)`. O clang
+do pin também avisa, compilando o arquivo de uma vez só: uma constante de
+`enum` iniciada com um literal não conta como valor de configuração. O
+revisor tinha medido o grupo sem esse caso (W-A12). Os outros casos do
+`rev-ur.c` não disparam no `on`:
+- `#define DEBUG 0`;
+- `const bool`;
+- `break` depois de `return` e `return` depois de `exit`;
+- `while (1)` com `return` dentro.
+
+O `-Wunreachable-code` continua no A. A nota do clang ensina o silêncio:
+`if ((MAX > 100))`.

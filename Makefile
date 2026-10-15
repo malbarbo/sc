@@ -35,7 +35,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto test-split repl clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto test-split test-aluno repl clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -47,7 +47,7 @@ $(B)/src/llvm/CMakeLists.txt:
 	  && git fetch -q --depth 1 $(LLVM_REPO) $(LLVM_COMMIT) && git checkout -q FETCH_HEAD \
 	  && git apply $(CURDIR)/llvm/wasi-host.patch $(CURDIR)/llvm/no-veclibs.patch $(CURDIR)/llvm/dylink-weak.patch \
 	  $(CURDIR)/llvm/libcxx-locale.patch $(CURDIR)/llvm/incremental-c-scopes.patch \
-	  $(CURDIR)/llvm/incremental-stmts.patch
+	  $(CURDIR)/llvm/incremental-stmts.patch $(CURDIR)/llvm/incremental-main-file.patch
 
 $(B)/c-testsuite/.git:
 	git init -q $(B)/c-testsuite && cd $(B)/c-testsuite \
@@ -221,11 +221,17 @@ $(SC_REPL): loader/Cargo.toml loader/Cargo.lock $(shell find loader/src -name '*
 
 loader: $(SCLOAD)
 
+# a session's arguments: <lang>-<safety level>[-file].args, -file for `sc FILE`
+REPL_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/repl/$l-$s.args $(B)/repl/$l-$s-file.args))
 $(B)/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/repl
-	scripts/flags.py --session $* $(CURDIR)/$(B) > $@
+	scripts/flags.py --session $(firstword $(subst -, ,$*)) $(CURDIR)/$(B) $(wordlist 2,3,$(subst -, ,$*)) > $@
 
-repl: $(SC_REPL) $(B)/sc-engine-full $(B)/repl/c.args $(B)/repl/c++.args $(SR)/lib/wasm32-wasip1/libc++.so
+repl: $(SC_REPL) $(B)/sc-engine-full $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so
+
+# a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
+test-aluno: repl
+	test/aluno.py
 
 # --- tests: the corpus against the uncut engine
 $(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
@@ -283,6 +289,11 @@ checkinv: $(B)/checkinv
 	$< $$(scripts/flags.py c++ pcm) -o - /c/std.cppm
 	$< $$(scripts/flags.py c++ mod) -o - /c/x.cpp
 	$< $$(scripts/flags.py c++ pic mod) -o - /c/x.cpp
+	for l in off on strict; do \
+	  $< $$(scripts/flags.py pic $$l) -o - /c/x.c && \
+	  $< $$(scripts/flags.py c++ pic $$l) -o - /c/x.cpp && \
+	  $< $$(scripts/flags.py c++ pic mod $$l) -o - /c/x.cpp || exit 1; \
+	done
 
 size: $(B)/sc.wasm
 	@for f in $(wildcard $(B)/sc.wasm $(B)/sc); do printf '%s: %s raw, %s gzip, %s zstd\n' $$f $$(stat -c %s $$f) \

@@ -594,6 +594,13 @@ Cada fase fecha com o `make test` com 0 diferenças, o `test-split`, o
 | **F3** | o passe do ASan no `sc_backend` (T1); o `libsc_rt`; o layout com offset (R2); o alocador e o loader (R8); o `__cxa_throw` (R9); o relato com pilha | grande |
 | **F4** | `strict`: U-estrito, vazamentos, libc++ `DEBUG`, `scanf("%s")`; opcional: libc instrumentada | média |
 
+**A F1 está feita** (ANALISE.md §30).
+- A célula passou a contar como o arquivo principal
+  (`llvm/incremental-main-file.patch`). Antes disso, o `-Wunreachable-code`
+  não disparava, e o `-Wheader-hygiene` dava falso positivo.
+- Pendência: o `-Wmissing-prototypes` dispara em 16 dos 20 programas
+  corretos do `test/aluno` no `strict`.
+
 A F1 vem primeiro, porque é o alicerce:
 
 - o `sc_inv` passa a aceitar e conferir as flags;

@@ -5,9 +5,14 @@ the libraries a shared object is linked with. The paths are the engine's
 view: the sysroot at /sysroot, clang's resource directory at /res and libc++'s
 std module at /m/std.pcm; real() puts the build's in their place.
 
-usage: flags.py [c++|gnu17] [pic] [pcm|mod]   the -cc1 flags (make checkinv)
-       flags.py --session c|c++ <build>        a REPL session's arguments, one
-                                               per line (build/repl, sc.h)
+The level of --safety (PLANO-VERIFICACOES.md §3, §4) adds to these flags the
+warnings, and the warnings that are errors, of what the student sees.
+
+usage: flags.py [c++|gnu17] [pic] [pcm|mod] [off|on|strict]
+                                    the -cc1 flags (make checkinv)
+       flags.py --session c|c++ <build> [off|on|strict] [file]
+                                    a REPL session's arguments, one per line
+                                    (build/repl, sc.h); file: of `sc FILE`
 """
 import sys
 
@@ -27,6 +32,64 @@ CXXFLAGS = FLAGS[:FLAGS.index('/res/include') - 1] + [
     '-fskip-odr-check-in-gmf', '-fcxx-exceptions', '-fexceptions', '-mllvm', '-wasm-enable-eh']
 # the use of libc++'s std module
 MODFILE = ['-fmodule-file=std=/m/std.pcm']
+
+
+# PLANO-VERIFICACOES.md §4.1, E: undefined behaviour for certain, or an error
+# with no use, which no correct program of the measures set off; an error
+# from the level on. -Werror=G is also the error of G's subgroups: the
+# second list keeps those that are a warning
+E = ['uninitialized', 'return-type', 'return-stack-address', 'dangling', 'array-bounds', 'division-by-zero',
+     'shift-count-overflow', 'shift-count-negative', 'integer-overflow', 'fortify-source', 'format',
+     'string-compare', 'unsequenced', 'mismatched-new-delete', 'delete-abstract-non-virtual-dtor',
+     'free-nonheap-object']
+E_WARN = ['sometimes-uninitialized', 'uninitialized-const-pointer', 'return-type-c-linkage', 'format-security',
+          'format-extra-args', 'format-zero-length', 'format-truncation']
+# §4.2, R: in -Wall or -Wextra, but noise in a beginner's correct code; strict only
+R = ['unused-parameter', 'missing-field-initializers', 'sign-compare']
+# §4.3 and §4.4, A: off in clang, a student's common error, no false positive
+# measured. -Wshadow only in C and only in a whole program (§4.3)
+A = ['float-overflow-conversion', 'float-zero-conversion', 'string-conversion', 'shift-bool',
+     'tautological-unsigned-zero-compare', 'tautological-unsigned-enum-zero-compare',
+     'tautological-value-range-compare', 'unreachable-code', 'implicit-fallthrough', 'comma', 'main',
+     'main-return-type', 'array-bounds-pointer-arithmetic']
+A_C = ['shift-sign-overflow', 'default-const-init-var', 'default-const-init-field']
+A_CXX = ['shadow-field-in-constructor-modified', 'non-virtual-dtor', 'deprecated-copy-with-user-provided-dtor',
+         'lifetime-safety-permissive']
+# §4, S: style, conversions, portability; strict only. P: the GNU and clang
+# extensions, with -Wpedantic (decision 6, §11)
+S = ['alloca', 'anon-enum-enum-conversion', 'assign-enum', 'bad-function-cast', 'c++-compat', 'c++-hidden-decl',
+     'c++-keyword', 'c++-unterminated-string-initialization', 'cast-align', 'cast-function-type-strict', 'cast-qual',
+     'class-varargs', 'conditional-uninitialized', 'conversion', 'ctad-maybe-unsupported',
+     'deprecated-copy-with-dtor', 'double-promotion', 'dtor-name', 'duplicate-decl-specifier', 'duplicate-enum',
+     'enum-compare-conditional', 'enum-enum-conversion', 'enum-float-conversion', 'expansion-to-defined',
+     'extra-semi', 'extra-semi-stmt', 'float-conversion', 'float-equal', 'format-nonliteral', 'format-signedness',
+     'format-type-confusion', 'four-char-constants', 'header-hygiene', 'ignored-base-class-qualifiers',
+     'implicit-float-conversion', 'implicit-int-conversion', 'implicit-int-conversion-on-negation',
+     'implicit-int-enum-cast', 'implicit-int-float-conversion', 'implicit-void-ptr-cast',
+     'incompatible-function-pointer-types-strict', 'inconsistent-missing-destructor-override', 'jump-misses-init',
+     'keyword-macro', 'lifetime-safety-invalidation', 'missing-prototypes', 'old-style-cast',
+     'range-loop-bind-reference', 'reserved-attribute-identifier', 'reserved-identifier',
+     'reserved-macro-identifier', 'shadow-field', 'shadow-uncaptured-local', 'shorten-64-to-32', 'sign-conversion',
+     'static-in-inline', 'suggest-destructor-override', 'suggest-override', 'switch-default', 'switch-enum',
+     'tautological-type-limit-compare', 'tautological-unsigned-char-zero-compare', 'tentative-definition-compat',
+     'tentative-definition-incomplete-type', 'undef', 'undefined-internal-type', 'undefined-reinterpret-cast',
+     'unneeded-member-function', 'unreachable-code-break', 'unreachable-code-return', 'unused-exception-parameter',
+     'unused-macros', 'unused-member-function', 'unused-template', 'vla', 'zero-as-null-pointer-constant']
+LEVELS = ['off', 'on', 'strict']
+
+
+def safety(fl, level, cxx, file=False, errors=True):
+    """fl at a level of --safety: off has clang's warnings, on and strict
+    those of their sets; file: in a whole program, not in the REPL. Without
+    errors, E stays warnings: for the tests that have undefined behaviour on
+    purpose, which would stop in the frontend"""
+    fl = [x for x in fl if x not in ('-Wall', '-Wextra')]
+    if level == 'off':
+        return fl
+    w = ['all', 'extra'] + A + (A_CXX if cxx else A_C + ['shadow'] * file)
+    w += [f'no-{x}' for x in R] if level == 'on' else S + ['pedantic']
+    w += [f'error={x}' for x in E] + [f'no-error={x}' for x in E_WARN] if errors else []
+    return fl + [f'-W{x}' for x in w]
 
 
 def iface(fl):
@@ -64,18 +127,24 @@ def real(fl, build, pcm=None):
     return [x.replace('/m/std.pcm', pcm) for x in fl] if pcm else fl
 
 
-def session(cxx, build, c17=False, mod=False, pcm=None):
+def session(cxx, build, c17=False, mod=False, pcm=None, level=None, file=False):
     """a REPL session's arguments (sc_session_new): the -cc1 flags, then after
-    -- the link's, with the build's paths"""
+    -- the link's, with the build's paths; at a level of --safety, or with
+    the engine's flags"""
     fl = pic(CXXFLAGS if cxx else gnu17(FLAGS) if c17 else FLAGS)[1:] + MODFILE * mod
+    fl = safety(fl, level, cxx, file) if level else fl
     return real(fl + ['-x', 'c++' if cxx else 'c', '--'] + solibs(cxx), build, pcm)
 
 
 if __name__ == '__main__':
     if sys.argv[1:2] == ['--session']:
-        sys.exit(print('\n'.join(session(sys.argv[2] == 'c++', sys.argv[3]))))
+        a = sys.argv[4:]
+        level = next((x for x in a if x in LEVELS), None)
+        sys.exit(print('\n'.join(session(sys.argv[2] == 'c++', sys.argv[3], level=level, file='file' in a))))
     a = sys.argv[1:]
     fl = CXXFLAGS if 'c++' in a else gnu17(FLAGS) if 'gnu17' in a else FLAGS
     fl = pic(fl) if 'pic' in a else fl
     fl = iface(fl) if 'pcm' in a else fl + MODFILE if 'mod' in a else fl
+    level = next((x for x in a if x in LEVELS), None)
+    fl = safety(fl, level, 'c++' in a) if level else fl
     print(' '.join(fl[1:]))

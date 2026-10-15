@@ -254,6 +254,8 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
                         session = Some(s);
                         reply(output, Status::Ok, b"")?
                     }
+                    // the engine's diagnostics, which the parent says did not start
+                    Err(Error::Start(d)) => reply(output, Status::Error, d.as_bytes())?,
                     Err(e) => reply(output, Status::Error, format!("sc: {e}\n").as_bytes())?,
                 }
             }

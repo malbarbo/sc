@@ -1,0 +1,16 @@
+diff --git a/clang/lib/Basic/SourceManager.cpp b/clang/lib/Basic/SourceManager.cpp
+index 5540aade0..29d288456 100644
+--- a/clang/lib/Basic/SourceManager.cpp
++++ b/clang/lib/Basic/SourceManager.cpp
+@@ -1552,7 +1552,10 @@ bool SourceManager::isInMainFile(SourceLocation Loc) const {
+       if (Entry->IncludeOffset)
+         return false;
+ 
+-  return FI.getIncludeLoc().isInvalid();
++  // An input of incremental processing (clang-repl) is included at the start
++  // of the empty main file, where no #include can be: it is a main file too
++  SourceLocation IncludeLoc = FI.getIncludeLoc();
++  return IncludeLoc.isInvalid() || IncludeLoc == getLocForStartOfFile(getMainFileID());
+ }
+ 
+ /// The size of the SLocEntry that \p FID represents.

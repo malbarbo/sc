@@ -75,7 +75,11 @@ int sc_session_new(int argc, const char *const *argv, sc_session **out) {
     for (const char *A : llvm::ArrayRef(Sep + 1, Args.end()))
       s->LinkArgs.push_back(A);
   ScOptions O;
-  scParseArgs(llvm::ArrayRef(Args.begin(), Sep), O);
+  std::string Error;
+  if (!scParseArgs(llvm::ArrayRef(Args.begin(), Sep), O, Error)) {
+    s->DiagOS << "sc: " << Error << "\n";
+    return SC_ERROR;
+  }
   s->OneCell = O.OneCell;
   if (std::error_code EC = llvm::sys::fs::createUniqueDirectory("sc", s->Dir)) {
     s->Dir.clear();

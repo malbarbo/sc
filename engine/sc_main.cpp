@@ -39,7 +39,12 @@ static void errorHandler(void *UserData, const char *Message, bool GenCrashDiag)
 
 static int cc1(llvm::ArrayRef<const char *> Args) {
   ScOptions O;
-  if (!scParseArgs(Args, O)) {
+  std::string Error;
+  if (!scParseArgs(Args, O, Error)) {
+    llvm::errs() << "sc: " << Error << "\n";
+    return 1;
+  }
+  if (O.Input.empty()) {
     llvm::errs() << "sc: no input file\n";
     return 1;
   }

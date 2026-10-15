@@ -18,7 +18,8 @@ struct ScOptions {
   bool OneCell = false;        // -sc-one-cell: a session of one cell, the whole program
 };
 
-bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O);
+// false, with the reason in Error, for a flag the engine does not take
+bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O, std::string &Error);
 void scBuildInvocation(clang::CompilerInvocation &Inv, const ScOptions &O);
 // sets the backend options the invocation lists (FrontendOptions::LLVMArgs, the
 // driver's -mllvm), as cc1 does, but without the command line parser. Those

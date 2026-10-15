@@ -18,13 +18,17 @@ std module (std-pcm), which the programs in test/mod import.
 The programs are also compiled with -fPIC, linked as shared objects and run
 by the REPL's loader, build/loader/release/scload (pic-), and test/repl has
 sequences of REPL inputs, each loaded on top of the ones before (repl-).
+The programs run again at each level of --safety but off (<name>-on,
+<name>-strict; PLANO-VERIFICACOES.md §9): those that have undefined
+behaviour on purpose (c-testsuite, the gcc torture tests) with the errors of
+the levels as warnings.
 """
 from corpuslib import norm_hash, diff
 import hashlib, re, json, os, subprocess, sys, glob
 from concurrent.futures import ThreadPoolExecutor
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
-from flags import FLAGS, CXXFLAGS, MODFILE, iface, gnu17, pic, solibs, res  # the engine's flags
+from flags import FLAGS, CXXFLAGS, MODFILE, iface, gnu17, pic, safety, solibs, res  # the engine's flags
 B = os.environ.get('SC_BUILD', f'{R}/build')
 RES = res(B)
 SR = f'{B}/sysroot'  # wasi-sdk's libc with libc++, libc++abi and libunwind built from the pin with exceptions
@@ -58,7 +62,8 @@ def engine(dirs, args):
 
 # (path, kind) — True: link and execute; False: compile only (diagnostics + object
 # hash); 'pic': compile with -fPIC and link a shared object, as the REPL does
-# for each input (diagnostics + the object's md5)
+# for each input (diagnostics + the object's md5); 'on', 'strict': as True, at
+# that level of --safety
 progs = [(p, True) for p in sorted(glob.glob(f'{R}/test/samples/*.c')) + sorted(glob.glob(f'{B}/c-testsuite/tests/single-exec/*.c'))]
 if os.environ.get('CORPUS', 'full') == 'full':
     T = f'{B}/src/clang/test'
@@ -70,7 +75,8 @@ progs += [(p, True) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp')) + sorted(g
 if os.environ.get('CORPUS', 'full') == 'full':
     for sub in ['SemaCXX', 'SemaTemplate', 'CodeGenCXX', 'CXX/**', 'Parser', 'Lexer', 'AST', 'Misc']:
         progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.cpp', recursive=True))]
-progs += [(p, 'pic') for p, k in list(progs) if k is True]
+SAFETY = ('on', 'strict')
+progs += [(p, k) for p, t in list(progs) if t is True for k in ('pic',) + SAFETY]
 
 def name(pr):
     """the name of a result: <outdir>/<name>.txt"""
@@ -81,7 +87,7 @@ def name(pr):
     n = stem if d == f'{R}/test/samples' else 'cxx-' + stem if d == f'{R}/test/cxx' else 'mod-' + stem if d == f'{R}/test/mod' else (
         'ct-' + stem if 'c-testsuite' in d else rel.replace('/', '_'))
     if len(n) > 200: n = n[-200:]
-    return 'pic-' + n if kind == 'pic' else n
+    return 'pic-' + n if kind == 'pic' else f'{n}-{kind}' if kind in SAFETY else n
 
 
 def one(pr):
@@ -126,8 +132,11 @@ def run(cmd):
 def one1(p, d, f, n, kind):
     cxx = f.endswith(CXXEXT)
     obj = f'{tmp}/{n}.o'
-    fl = CXXFLAGS if cxx else gnu17(FLAGS) if p.startswith((f'{B}/c-testsuite/', f'{B}/gcc-ts/')) else FLAGS
+    ub = p.startswith((f'{B}/c-testsuite/', f'{B}/gcc-ts/'))  # undefined behaviour on purpose
+    fl = CXXFLAGS if cxx else gnu17(FLAGS) if ub else FLAGS
     fl = pic(fl) if kind == 'pic' else fl
+    if kind in SAFETY:
+        fl, kind = safety(fl, kind, cxx, file=True, errors=not ub), True
     txt, o, ok = cc1(d, f, n, fl, d == f'{R}/test/mod')
     if o and kind is not True:
         txt += 'obj ' + hashlib.md5(o).hexdigest() + '\n'

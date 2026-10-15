@@ -45,7 +45,11 @@ extern std::function<void(llvm::Module &)> scBeforeBackend;
 
 static int spikeA(llvm::ArrayRef<const char *> Args) {
   ScOptions O;
-  scParseArgs(Args, O);
+  std::string Error;
+  if (!scParseArgs(Args, O, Error)) {
+    std::cout << "sc: " << Error << std::endl;
+    return 2;
+  }
   auto S = ScSession::create(O);
   if (!S) {
     std::cout << "lost" << std::endl;
@@ -103,7 +107,8 @@ static int spikeB(llvm::ArrayRef<const char *> Args) {
     else if (A == "-known") KnownFile = Args[++i];
     else Rest.push_back(Args[i]);
   }
-  if (!scParseArgs(Rest, O))
+  std::string Error;
+  if (!scParseArgs(Rest, O, Error) || O.Input.empty())
     return 2;
   O.PIC = O.VisibilityDefault = true;
   LLVMInitializeWebAssemblyTargetInfo();

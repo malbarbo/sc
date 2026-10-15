@@ -30,7 +30,11 @@ int main(int argc, const char **argv) {
   if (!CompilerInvocation::CreateFromArgs(Parsed, Args, Diags, "clang"))
     return 1;
   ScOptions O;
-  scParseArgs(Args, O);
+  std::string Error;
+  if (!scParseArgs(Args, O, Error)) {
+    llvm::outs() << "sc: " << Error << "\nDIFFERENT\n";
+    return 1;
+  }
   CompilerInvocation Mine;
   scBuildInvocation(Mine, O);
   auto A = gen(Parsed), B = gen(Mine);

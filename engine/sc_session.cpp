@@ -688,6 +688,8 @@ std::unique_ptr<ScSession> ScSession::create(ScOptions O, llvm::raw_ostream *Dia
   I.CI->createVirtualFileSystem(llvm::vfs::getRealFileSystem());
   I.First = new FirstError(Diags ? *Diags : llvm::errs(), I.CI->getDiagnosticOpts());
   I.CI->createDiagnostics(I.First);
+  // the main file is empty, the cells come after it (-Wpedantic)
+  I.CI->getDiagnostics().setSeverity(diag::ext_empty_translation_unit, diag::Severity::Ignored, {});
   I.Ctx.setDiagnosticHandler(std::make_unique<BackendDiags>(I.CI->getDiagnostics()));
   I.Act = std::make_unique<SessionAction>(I.Ctx);
   if (!I.CI->ExecuteAction(*I.Act) || I.CI->getDiagnostics().hasErrorOccurred())

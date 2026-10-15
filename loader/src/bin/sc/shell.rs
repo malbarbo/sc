@@ -1,15 +1,16 @@
 //! The REPL's loop and its `:` commands, as in sgleam and spython.
-use crate::machine::{Lang, Machine, Outcome};
+use crate::machine::{Lang, Machine, Outcome, Safety};
 use std::sync::{Arc, Mutex};
 use crate::reader::{Reader, Theme};
 use crate::{config, Result};
 
-pub fn welcome_message(lang: Lang) -> String {
+pub fn welcome_message(lang: Lang, safety: Safety) -> String {
     let std = match lang {
         Lang::C => "C (gnu23)",
         Lang::Cxx => "C++ (gnu++26)",
     };
-    format!("Welcome to sc {} for {std}.\nType ctrl-d or \":quit\" to exit.\n", env!("CARGO_PKG_VERSION"))
+    let safety = if safety == Safety::On { String::new() } else { format!(", safety {}", safety.name()) };
+    format!("Welcome to sc {} for {std}{safety}.\nType ctrl-d or \":quit\" to exit.\n", env!("CARGO_PKG_VERSION"))
 }
 
 /// The commands: the name, what it takes, and its help.
@@ -18,6 +19,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     (":quit", "", "Exit the REPL"),
     (":type", "EXPR", "Show the type of an expression, without running it"),
     (":undo", "", "Forget the last cell's declarations (what it ran stays done)"),
+    (":safety", "[off|on|strict]", "Show or switch how much the compiler checks (starts over, empty)"),
     (":theme", "[light|dark]", "Show or switch the theme"),
 ];
 
@@ -79,6 +81,15 @@ pub fn run(machine: Machine) -> Result<i32> {
                     reader.set_completions(completions(&machine));
                 }
             }
+            ":safety" if arg.is_empty() => println!("{}", machine.safety().name()),
+            ":safety" => match Safety::parse(arg) {
+                Some(s) => {
+                    machine.restart(s)?;
+                    reader.set_completions(completions(&machine));
+                    println!("Safety {}: the session starts over, empty.", s.name());
+                }
+                None => println!("Unknown safety level: {arg}. Use 'off', 'on' or 'strict'."),
+            },
             ":theme" if arg.is_empty() => println!("{}", theme.name()),
             ":theme" => match Theme::parse(arg) {
                 Some(t) => {

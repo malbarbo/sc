@@ -7,7 +7,7 @@ use crate::show;
 use scload::{Loader, STACK};
 use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use wasmtime::{Engine, Error, ThrownException, Trap, Val, ValType};
 use wasmtime_wasi::{I32Exit, WasiCtxBuilder};
 
@@ -23,6 +23,31 @@ impl Lang {
             Lang::C => "c",
             Lang::Cxx => "c++",
         }
+    }
+}
+
+/// How much the compiler checks (PLANO-VERIFICACOES.md §3): `off` is a
+/// common compiler's, `on` the default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Safety {
+    Off,
+    On,
+    Strict,
+}
+
+impl Safety {
+    pub const ALL: [Safety; 3] = [Safety::Off, Safety::On, Safety::Strict];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Safety::Off => "off",
+            Safety::On => "on",
+            Safety::Strict => "strict",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Safety> {
+        Safety::ALL.into_iter().find(|l| l.name() == s)
     }
 }
 
@@ -46,6 +71,9 @@ pub enum Outcome {
 }
 
 pub struct Machine {
+    lang: Lang,
+    safety: Safety,
+    argv: Vec<String>,
     repl: Repl,
     loader: Loader,
     /// Cells loaded, which names each module for the loader.
@@ -58,12 +86,15 @@ pub struct Machine {
     shown: Arc<Mutex<Option<String>>>,
 }
 
-/// The engine Ctrl-C interrupts.
-static ENGINE: OnceLock<Engine> = OnceLock::new();
+/// The engine Ctrl-C interrupts: the last session's.
+static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
 
 extern "C" fn interrupt(_: libc::c_int) {
-    if let Some(e) = ENGINE.get() {
-        e.increment_epoch();
+    // the main thread holds the lock only to put a new engine there
+    if let Ok(e) = ENGINE.try_lock() {
+        if let Some(e) = e.as_ref() {
+            e.increment_epoch();
+        }
     }
 }
 
@@ -77,13 +108,15 @@ fn build_dir() -> std::io::Result<PathBuf> {
 }
 
 impl Machine {
-    /// A session in `lang`, whose programs see `argv`. One that is not
-    /// `interactive` takes one cell, the whole program. Only an `interactive`
-    /// one is stopped by Ctrl-C: the epoch checks cost in every loop and call.
-    pub fn new(lang: Lang, argv: Vec<String>, interactive: bool) -> crate::Result<Machine> {
+    /// A session in `lang` at `safety`, whose programs see `argv`. One that
+    /// is not `interactive` takes one cell, the whole program. Only an
+    /// `interactive` one is stopped by Ctrl-C: the epoch checks cost in
+    /// every loop and call.
+    pub fn new(lang: Lang, safety: Safety, argv: Vec<String>, interactive: bool) -> crate::Result<Machine> {
         let b = build_dir()?;
         let engine = b.join("sc-engine-full");
-        let args_file = b.join("repl").join(format!("{}.args", lang.name()));
+        let file = if interactive { "" } else { "-file" };
+        let args_file = b.join("repl").join(format!("{}-{}{file}.args", lang.name(), safety.name()));
         let mut args: Vec<String> = std::fs::read_to_string(&args_file)
             .map_err(|e| format!("{}: {e} (make repl)", args_file.display()))?
             .lines()
@@ -116,11 +149,22 @@ impl Machine {
         loader.host("__sc_show_float", &[ValType::I32, ValType::I32, ValType::F64], move |mem, a| {
             *s.lock().unwrap() = Some(show::float(mem, a[0].unwrap_i32() as u32, a[1].unwrap_i32() as u32, a[2].unwrap_f64()));
         });
-        if interactive && ENGINE.set(loader.interrupter()).is_ok() {
+        if interactive && ENGINE.lock().unwrap().replace(loader.interrupter()).is_none() {
             // SAFETY: the handler only bumps an atomic counter
             unsafe { libc::signal(libc::SIGINT, interrupt as *const () as libc::sighandler_t) };
         }
-        Ok(Machine { repl, loader, loaded: 0, pending: None, shown })
+        Ok(Machine { lang, safety, argv, repl, loader, loaded: 0, pending: None, shown })
+    }
+
+    pub fn safety(&self) -> Safety {
+        self.safety
+    }
+
+    /// Starts over, empty, at `safety`: the cells before would have to run
+    /// again to be compiled at another level.
+    pub fn restart(&mut self, safety: Safety) -> crate::Result<()> {
+        *self = Machine::new(self.lang, safety, self.argv.clone(), true)?;
+        Ok(())
     }
 
     /// Compiles `src` without running it: whether the compiler accepted it.
