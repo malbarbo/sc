@@ -28,7 +28,8 @@
 //! its definition in one file: a GOT.mem import is set when the symbol comes,
 //! and a GOT.func import or a stub gets a table slot at once, which the
 //! function fills when it comes (the same slot for all modules). Until then
-//! a GOT.mem import is 0 and a call through the slot traps.
+//! a GOT.mem import is an address past the memory, so a read or a write
+//! traps, and a call through the slot traps.
 
 use wasmtime::error::Context;
 use wasmtime::{bail, format_err, Result};
@@ -40,6 +41,11 @@ use wasmtime_wasi::p1::{self, WasiP1Ctx};
 
 pub const STACK: u32 = 1 << 20; // the default; the stack is first, so an overflow traps below 0
 const PAGE: u32 = 1 << 16;
+// A variable not defined yet has an address from here up, each its own MiB,
+// above the most the memory grows to: reading or writing it traps, and
+// [`Loader::undefined_at`] names it.
+const UNDEFINED: u32 = 0xC000_0000;
+const UNDEFINED_SIZE: u32 = 1 << 20;
 
 #[derive(Clone, Copy)]
 enum Sym {
@@ -83,6 +89,7 @@ pub struct Loader {
     loaded: HashSet<String>,
     bump: Option<u32>, // the next free address, until the heap is set up
     later: Vec<(String, Global)>, // GOT.mem imports of symbols not defined yet
+    undefined: Vec<String>,       // what the addresses from UNDEFINED stand for
     slots: HashMap<String, u32>,  // table slots of functions not defined yet
 }
 
@@ -154,14 +161,15 @@ impl Loader {
         }
         let engine = Engine::new(&config)?;
         let mut store = Store::new(&engine, Host { wasi, syms: HashMap::new() });
-        let memory = Memory::new(&mut store, MemoryType::new(stack.div_ceil(PAGE), None))?;
+        let memory = Memory::new(&mut store, MemoryType::new(stack.div_ceil(PAGE), Some(UNDEFINED / PAGE)))?;
         let table = Table::new(&mut store, TableType::new(RefType::FUNCREF, 1, None), Ref::Func(None))?;
         let sp = Global::new(&mut store, GlobalType::new(ValType::I32, Mutability::Var), Val::I32(stack as i32))?;
         let mut linker = Linker::new(&engine);
         p1::add_to_linker_sync(&mut linker, |h: &mut Host| &mut h.wasi)?;
         linker.define(&mut store, "env", "memory", memory)?;
         let mut l = Loader { engine, store, linker, memory, table, sp, wasi: HashMap::new(), libdirs,
-                             loaded: HashSet::new(), bump: Some(stack), later: Vec::new(), slots: HashMap::new() };
+                             loaded: HashSet::new(), bump: Some(stack), later: Vec::new(), undefined: Vec::new(),
+                             slots: HashMap::new() };
         l.define("__stack_low", Sym::Data(16), false);
         l.define("__stack_high", Sym::Data(stack), false);
         Ok(l)
@@ -266,6 +274,28 @@ impl Loader {
             self.wasi.insert(n, f);
         }
         Ok(())
+    }
+
+    /// The address of the variable `name` until it is defined: 0 once the
+    /// addresses run out.
+    fn undefined_address(&mut self, name: &str) -> u32 {
+        let k = match self.undefined.iter().position(|n| n == name) {
+            Some(k) => k,
+            None if self.undefined.len() < ((u32::MAX - UNDEFINED) / UNDEFINED_SIZE) as usize => {
+                self.undefined.push(name.to_string());
+                self.undefined.len() - 1
+            }
+            None => return 0,
+        };
+        UNDEFINED + k as u32 * UNDEFINED_SIZE
+    }
+
+    /// The variable not defined yet whose address `addr` is in, as the
+    /// source names it.
+    pub fn undefined_at(&self, addr: u64) -> Option<String> {
+        let k = addr.checked_sub(UNDEFINED as u64)? / UNDEFINED_SIZE as u64;
+        let n = self.undefined.get(k as usize)?;
+        self.later.iter().any(|(l, _)| l == n).then(|| source_name(n))
     }
 
     /// The table slot reserved for a function not defined yet.
@@ -439,7 +469,7 @@ impl Loader {
                 None if func => self.reserve_slot(&n, None)?,
                 None => {
                     self.later.push((n.clone(), g));
-                    0
+                    self.undefined_address(&n)
                 }
             };
             g.set(&mut self.store, Val::I32(v as i32))?;

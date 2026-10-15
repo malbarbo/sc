@@ -1820,6 +1820,16 @@ Os itens que o §26 deixou à vista, resolvidos sem patch:
   o wasmtime já trazia, só para nomes que começam com `_Z`. Sem esse
   filtro, `h` virava `unsigned char`.
 
-Ficou de fora: no REPL, uma variável `extern` ainda não definida lê 0, e
-uma escrita nela cai no endereço 0, sem aviso. A entrada `GOT.mem` que
-não tem definição vale 0 até a definição chegar.
+**A variável `extern` ainda não definida no REPL** lia 0, e uma escrita
+nela caía no endereço 0, sem aviso: a entrada `GOT.mem` sem definição
+valia 0 até a definição chegar. Agora cada uma dessas variáveis tem um
+endereço próprio a partir de 3 GiB (`UNDEFINED`), num bloco de 1 MiB, para
+um campo ou um elemento cair no mesmo bloco. A memória tem máximo de
+3 GiB, então ler ou escrever ali sempre dá trap. O wasmtime descreve o
+trap com o endereço ("memory fault at wasm address 0x..."), mas não
+exporta o tipo (`WasmFault`), então o `sc` lê o endereço do texto, e o
+`Loader::undefined_at` diz de quem ele é: `error: undefined symbol: v`.
+Uma variável `weak` continua com endereço 0, e `&v` deixou de ser nulo,
+como deve ser para uma variável que não é `weak`. Um ponteiro tomado
+antes da definição continua apontando para o endereço provisório, e o
+trap então sai sem o nome.

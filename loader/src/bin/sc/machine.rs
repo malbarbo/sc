@@ -242,14 +242,17 @@ impl Machine {
             }
             Err(e) => {
                 let _ = self.loader.set_stack_pointer(sp);
-                eprintln!("{}", runtime_error(&e));
+                eprintln!("{}", runtime_error(&e, &self.loader));
                 Outcome::Error
             }
         }
     }
 }
 
-fn runtime_error(e: &Error) -> String {
+fn runtime_error(e: &Error, loader: &Loader) -> String {
+    if let Some(n) = fault_address(e).and_then(|a| loader.undefined_at(a)) {
+        return format!("error: undefined symbol: {n}");
+    }
     match e.downcast_ref::<Trap>() {
         Some(Trap::Interrupt) => "interrupted".into(),
         Some(Trap::StackOverflow) => "error: stack overflow".into(),
@@ -257,4 +260,14 @@ fn runtime_error(e: &Error) -> String {
         Some(t) => format!("error: {t}"),
         None => format!("error: {}", e.root_cause()),
     }
+}
+
+/// The address of an access out of the memory, from wasmtime's description
+/// of the fault, which it keeps to itself as a type.
+fn fault_address(e: &Error) -> Option<u64> {
+    e.chain().find_map(|c| {
+        let s = c.to_string();
+        let hex = s.strip_prefix("memory fault at wasm address 0x")?.split(' ').next()?;
+        u64::from_str_radix(hex, 16).ok()
+    })
 }
