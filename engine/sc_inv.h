@@ -16,6 +16,7 @@ struct ScOptions {
   bool ModuleInterface = false; // -emit-module-interface -fmodules-reduced-bmi (a .pcm)
   bool Colors = false;         // -fcolor-diagnostics
   bool OneCell = false;        // -sc-one-cell: a session of one cell, the whole program
+  bool LineTables = false;     // -debug-info-kind=line-tables-only: where a trap is
 };
 
 // false, with the reason in Error, for a flag the engine does not take

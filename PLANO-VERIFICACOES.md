@@ -601,6 +601,10 @@ Cada fase fecha com o `make test` com 0 diferenças, o `test-split`, o
 - O `-Wmissing-prototypes` saiu do S para o N: disparava em 16 dos 20
   programas corretos do `test/aluno` no `strict`.
 
+**A F0 está feita** (ANALISE.md §31): o erro em palavras e os frames do
+aluno, com `-gline-tables-only` em toda sessão; o `test-split` com `-g`
+(T8) e o `make test-checks`.
+
 A F1 vem primeiro, porque é o alicerce:
 
 - o `sc_inv` passa a aceitar e conferir as flags;

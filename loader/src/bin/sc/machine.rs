@@ -6,7 +6,7 @@ use sc_proto::{Answer, Repl, Status};
 use crate::show;
 use scload::{Loader, STACK};
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use wasmtime::{Engine, Error, ThrownException, Trap, Val, ValType};
 use wasmtime_wasi::{I32Exit, WasiCtxBuilder};
@@ -75,6 +75,8 @@ pub struct Machine {
     safety: Safety,
     argv: Vec<String>,
     repl: Repl,
+    /// The build directory, whose headers are not the student's code.
+    build: PathBuf,
     loader: Loader,
     /// Cells loaded, which names each module for the loader.
     loaded: usize,
@@ -153,7 +155,7 @@ impl Machine {
             // SAFETY: the handler only bumps an atomic counter
             unsafe { libc::signal(libc::SIGINT, interrupt as *const () as libc::sighandler_t) };
         }
-        Ok(Machine { lang, safety, argv, repl, loader, loaded: 0, pending: None, shown })
+        Ok(Machine { lang, safety, argv, repl, build: b, loader, loaded: 0, pending: None, shown })
     }
 
     pub fn safety(&self) -> Safety {
@@ -285,24 +287,126 @@ impl Machine {
                 Outcome::Ok
             }
             Err(e) => {
+                eprintln!("{}", runtime_error(&e, &mut self.loader, &self.build));
                 let _ = self.loader.set_stack_pointer(sp);
-                eprintln!("{}", runtime_error(&e, &self.loader));
                 Outcome::Error
             }
         }
     }
 }
 
-fn runtime_error(e: &Error, loader: &Loader) -> String {
+/// What stopped the code, and where: the frames of the student's code.
+fn runtime_error(e: &Error, loader: &mut Loader, build: &Path) -> String {
+    let msg = message(e, loader);
+    let mut out = msg.clone();
+    for f in frames(e, build, msg != "aborted") {
+        out += &format!("\n    {f}");
+    }
+    out
+}
+
+fn message(e: &Error, loader: &mut Loader) -> String {
     if let Some(n) = fault_address(e).and_then(|a| loader.undefined_at(a)) {
         return format!("error: undefined symbol: {n}");
     }
+    // the stack grows down from STACK: below 0 it wraps around
+    let below = loader.stack_pointer().i32().is_some_and(|sp| sp as u32 > STACK);
     match e.downcast_ref::<Trap>() {
         Some(Trap::Interrupt) => "interrupted".into(),
-        Some(Trap::StackOverflow) => "error: stack overflow".into(),
+        Some(Trap::StackOverflow) => "error: stack overflow (infinite recursion?)".into(),
+        Some(Trap::MemoryOutOfBounds) if below => "error: stack overflow (infinite recursion?)".into(),
+        Some(Trap::MemoryOutOfBounds) => "error: invalid memory access".into(),
+        Some(Trap::IntegerDivisionByZero) => "error: division by zero".into(),
+        Some(Trap::IntegerOverflow) => "error: integer overflow in a division (INT_MIN / -1)".into(),
+        Some(Trap::BadSignature) => "error: call through a function pointer of the wrong type".into(),
+        Some(Trap::IndirectCallToNull) => "error: call through a null function pointer".into(),
+        Some(Trap::TableOutOfBounds) => "error: call through an invalid function pointer".into(),
         Some(Trap::UnreachableCodeReached) => "aborted".into(),
         Some(t) => format!("error: {t}"),
         None => format!("error: {}", e.root_cause()),
+    }
+}
+
+/// The frames of `e`, innermost first, as `at f (file:line:column)`: those
+/// of the student's code, after the innermost frame if it is not (a
+/// function of the libraries, where the code stopped; not when `abort`
+/// stopped it, which says it was called). A frame repeated in a row, as in
+/// a recursion, comes once, with how many times; a cycle of 2 to 4 frames
+/// too. A long list keeps its start and its end.
+fn frames(e: &Error, build: &Path, library: bool) -> Vec<String> {
+    let Some(bt) = e.downcast_ref::<wasmtime::WasmBacktrace>() else { return Vec::new() };
+    let build = build.to_string_lossy();
+    // (function, where in the student's code), inlined functions first
+    let entries = bt.frames().iter().flat_map(|f| {
+        let name = f.func_name().map(source_name).unwrap_or_default();
+        let syms: Vec<_> = f.symbols().iter().map(|s| {
+            // the libraries' own sources are wasi-sdk's (wasisdk://...)
+            let user = s.file().is_some_and(|f| !f.starts_with(&*build) && !f.contains("://"));
+            let at = s.line().filter(|_| user)
+                .map(|l| format!("{}:{l}:{}", s.file().unwrap_or_default(), s.column().unwrap_or(0)));
+            (s.name().map(source_name).unwrap_or_else(|| name.clone()), at)
+        }).collect();
+        if syms.is_empty() { vec![(name, None)] } else { syms }
+    });
+    let mut fs: Vec<(String, u32)> = Vec::new();
+    for (k, (n, at)) in entries.enumerate() {
+        let line = match at {
+            Some(at) if n.starts_with("__stmts__") => format!("at {at}"),
+            Some(at) => format!("at {n} ({at})"),
+            None if k == 0 && library && !n.is_empty() => format!("in {n}"),
+            None => continue,
+        };
+        match fs.last_mut() {
+            Some((l, times)) if *l == line => *times += 1,
+            _ => fs.push((line, 1)),
+        }
+    }
+    // a stack overflow stops a function before its first line
+    if let [(first, 1), rest @ ..] = &fs[..] {
+        let name = first.strip_prefix("in ").unwrap_or_default();
+        if rest.iter().any(|(l, _)| l.starts_with(&format!("at {name} ("))) {
+            fs.remove(0);
+        }
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < fs.len() {
+        // a recursion through more than one function: its cycle once
+        let cycle = (2..=4).filter_map(|p| {
+            let k = (1..).take_while(|&k| fs.get(i + (k + 1) * p - 1).is_some()
+                && fs[i + k * p..i + (k + 1) * p] == fs[i..i + p]).count() + 1;
+            (k >= 3).then_some((p, k))
+        }).next();
+        let (p, k) = cycle.unwrap_or((1, 1));
+        out.extend(fs[i..i + p].iter()
+            .map(|(l, times)| if *times > 1 { format!("{l}, {times} times") } else { l.clone() }));
+        if k > 1 {
+            out.push(format!("(the {p} frames above, {k} times)"));
+        }
+        i += p * k;
+    }
+    // what is left of a long recursion: its start and its end
+    const HEAD: usize = 10;
+    const TAIL: usize = 3;
+    if out.len() > HEAD + TAIL + 1 {
+        let more = out.len() - HEAD - TAIL;
+        out.splice(HEAD..out.len() - TAIL, [format!("... {more} more")]);
+    }
+    out
+}
+
+/// A function as the source names it: `main` for libc's names of it,
+/// without the `.sc` of a static of a REPL cell, and without libc++'s
+/// inline namespace and ABI tags. A lambda is one in the function around it.
+fn source_name(name: &str) -> String {
+    // wasm-ld demangles _Z1fi.sc as `f(int) (.sc)`
+    let n = name.strip_suffix(" (.sc)").or(name.strip_suffix(".sc")).unwrap_or(name);
+    match n {
+        "__original_main" | "__main_argc_argv" => "main".into(),
+        _ if n.contains("::$_") => format!("a lambda in {}", source_name(&n[..n.find("::$_").unwrap()])),
+        _ => n.replace("std::__2::", "std::").split("[abi:").enumerate()
+            .map(|(k, p)| if k == 0 { p } else { p.split_once(']').map_or("", |x| x.1) })
+            .collect(),
     }
 }
 

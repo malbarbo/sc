@@ -1,0 +1,204 @@
+== abort.c off exit=134
+antes
+aborted
+    at main (abort.c:6:5)
+== abort.c on exit=134
+antes
+aborted
+    at main (abort.c:6:5)
+== abort.c strict exit=134
+antes
+aborted
+    at main (abort.c:6:5)
+== assert.c off exit=134
+Assertion failed: n % 2 == 0 (assert.c: main: 5)
+aborted
+    at main (assert.c:5:5)
+== assert.c on exit=134
+Assertion failed: n % 2 == 0 (assert.c: main: 5)
+aborted
+    at main (assert.c:5:5)
+== assert.c strict exit=134
+Assertion failed: n % 2 == 0 (assert.c: main: 5)
+aborted
+    at main (assert.c:5:5)
+== bad-address.c off exit=134
+error: invalid memory access
+    at main (bad-address.c:5:20)
+== bad-address.c on exit=134
+error: invalid memory access
+    at main (bad-address.c:5:20)
+== bad-address.c strict exit=134
+error: invalid memory access
+    at main (bad-address.c:5:20)
+== cells-static.cpp.repl off exit=1
+error: division by zero
+    at f(int) (cell_1:1:32)
+    at (anonymous namespace)::g(int) (cell_2:1:35)
+    at cell_3:1:1
+== cells-static.cpp.repl on exit=1
+error: division by zero
+    at f(int) (cell_1:1:32)
+    at (anonymous namespace)::g(int) (cell_2:1:35)
+    at cell_3:1:1
+== cells-static.cpp.repl strict exit=1
+error: division by zero
+    at f(int) (cell_1:1:32)
+    at (anonymous namespace)::g(int) (cell_2:1:35)
+    at cell_3:1:1
+== cells.c.repl off exit=0
+(int) 1
+error: division by zero
+    at media (cell_1:2:17)
+    at cell_3:1:1
+== cells.c.repl on exit=0
+(int) 1
+error: division by zero
+    at media (cell_1:2:17)
+    at cell_3:1:1
+== cells.c.repl strict exit=0
+(int) 1
+error: division by zero
+    at media (cell_1:2:17)
+    at cell_3:1:1
+== cells.cpp.repl off exit=0
+(size_t) 3
+aborted
+    at pega(int) (cell_3:1:26)
+    at cell_4:1:1
+== cells.cpp.repl on exit=0
+(size_t) 3
+aborted
+    at pega(int) (cell_3:1:26)
+    at cell_4:1:1
+== cells.cpp.repl strict exit=0
+(size_t) 3
+cell_3:1:28: warning: implicit conversion changes signedness: 'int' to 'size_type' (aka 'unsigned long') [-Wsign-conversion]
+    1 | int pega(int i) { return v[i]; }
+      |                          ~ ^
+aborted
+    at pega(int) (cell_3:1:26)
+    at cell_4:1:1
+== div-zero.c off exit=134
+antes
+error: division by zero
+    at media (div-zero.c:4:17)
+    at main (div-zero.c:10:20)
+== div-zero.c on exit=134
+antes
+error: division by zero
+    at media (div-zero.c:4:17)
+    at main (div-zero.c:10:20)
+== div-zero.c strict exit=134
+antes
+error: division by zero
+    at media (div-zero.c:4:17)
+    at main (div-zero.c:10:20)
+== in-libc.c off exit=134
+error: invalid memory access
+    in strlen
+    at tamanho (in-libc.c:5:12)
+    at main (in-libc.c:9:20)
+== in-libc.c on exit=134
+error: invalid memory access
+    in strlen
+    at tamanho (in-libc.c:5:12)
+    at main (in-libc.c:9:20)
+== in-libc.c strict exit=134
+in-libc.c:5:12: warning: implicit conversion changes signedness: '__size_t' (aka 'unsigned long') to 'int' [-Wsign-conversion]
+    5 |     return strlen(s);
+      |     ~~~~~~ ^~~~~~~~~
+error: invalid memory access
+    in strlen
+    at tamanho (in-libc.c:5:12)
+    at main (in-libc.c:9:20)
+== int-min.c off exit=134
+error: integer overflow in a division (INT_MIN / -1)
+    at main (int-min.c:6:22)
+== int-min.c on exit=134
+error: integer overflow in a division (INT_MIN / -1)
+    at main (int-min.c:6:22)
+== int-min.c strict exit=134
+error: integer overflow in a division (INT_MIN / -1)
+    at main (int-min.c:6:22)
+== lambda.cpp off exit=134
+error: division by zero
+    at a lambda in main (lambda.cpp:7:64)
+    at main (lambda.cpp:7:5)
+== lambda.cpp on exit=134
+error: division by zero
+    at a lambda in main (lambda.cpp:7:64)
+    at main (lambda.cpp:7:5)
+== lambda.cpp strict exit=134
+error: division by zero
+    at a lambda in main (lambda.cpp:7:64)
+    at main (lambda.cpp:7:5)
+== method.cpp off exit=134
+error: division by zero
+    at Turma::media() const (method.cpp:5:37)
+    at main (method.cpp:10:20)
+== method.cpp on exit=134
+error: division by zero
+    at Turma::media() const (method.cpp:5:37)
+    at main (method.cpp:10:20)
+== method.cpp strict exit=134
+error: division by zero
+    at Turma::media() const (method.cpp:5:37)
+    at main (method.cpp:10:20)
+== mutual.c off exit=134
+error: stack overflow (infinite recursion?)
+    at impar (mutual.c:3:40)
+    at par (mutual.c:5:38)
+    (the 2 frames above, 8187 times)
+    at main (mutual.c:7:25)
+== mutual.c on exit=134
+error: stack overflow (infinite recursion?)
+    at impar (mutual.c:3:40)
+    at par (mutual.c:5:38)
+    (the 2 frames above, 8187 times)
+    at main (mutual.c:7:25)
+== mutual.c strict exit=134
+error: stack overflow (infinite recursion?)
+    at impar (mutual.c:3:40)
+    at par (mutual.c:5:38)
+    (the 2 frames above, 8187 times)
+    at main (mutual.c:7:25)
+== null-fn.c off exit=134
+error: call through a null function pointer
+    at aplica (null-fn.c:4:12)
+    at main (null-fn.c:9:20)
+== null-fn.c on exit=134
+error: call through a null function pointer
+    at aplica (null-fn.c:4:12)
+    at main (null-fn.c:9:20)
+== null-fn.c strict exit=134
+error: call through a null function pointer
+    at aplica (null-fn.c:4:12)
+    at main (null-fn.c:9:20)
+== recursion.c off exit=134
+error: stack overflow (infinite recursion?)
+    at fatorial (recursion.c:4:16), 10916 times
+    at main (recursion.c:8:20)
+== recursion.c on exit=134
+recursion.c:3:21: warning: all paths through this function will call itself [-Winfinite-recursion]
+    3 | int fatorial(int n) {
+      |                     ^
+error: stack overflow (infinite recursion?)
+    at fatorial (recursion.c:4:16), 10916 times
+    at main (recursion.c:8:20)
+== recursion.c strict exit=134
+recursion.c:3:21: warning: all paths through this function will call itself [-Winfinite-recursion]
+    3 | int fatorial(int n) {
+      |                     ^
+error: stack overflow (infinite recursion?)
+    at fatorial (recursion.c:4:16), 10916 times
+    at main (recursion.c:8:20)
+== vector-index.cpp off exit=134
+aborted
+    at main (vector-index.cpp:6:18)
+== vector-index.cpp on exit=134
+aborted
+    at main (vector-index.cpp:6:18)
+== vector-index.cpp strict exit=134
+aborted
+    at main (vector-index.cpp:6:18)

@@ -35,7 +35,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto test-split test-aluno repl clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto test-split test-aluno test-checks repl clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -233,6 +233,9 @@ repl: $(SC_REPL) $(B)/sc-engine-full $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++
 test-aluno: repl
 	test/aluno.py
 
+test-checks: repl
+	test/checks.py
+
 # --- tests: the corpus against the uncut engine
 $(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
 	test/corpus.py $< $(B)/res/base
@@ -294,6 +297,8 @@ checkinv: $(B)/checkinv
 	  $< $$(scripts/flags.py c++ pic $$l) -o - /c/x.cpp && \
 	  $< $$(scripts/flags.py c++ pic mod $$l) -o - /c/x.cpp || exit 1; \
 	done
+	$< $$(scripts/flags.py pic on g) -o - /c/x.c
+	$< $$(scripts/flags.py c++ pic mod on g) -o - /c/x.cpp
 
 size: $(B)/sc.wasm
 	@for f in $(wildcard $(B)/sc.wasm $(B)/sc); do printf '%s: %s raw, %s gzip, %s zstd\n' $$f $$(stat -c %s $$f) \

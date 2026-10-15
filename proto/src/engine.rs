@@ -299,11 +299,15 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
                     // what Sema made of the expression goes with the original
                     Some(c) if status != Status::Ok || mode == Mode::Type => c.hand_over(&answer),
                     copy => {
-                        // the reply does not wait for the copy to end
+                        // the copy is told before the reply, which the
+                        // parent may answer by killing the original (the
+                        // end of the REPL); the reply does not wait for
+                        // the copy to end
+                        let pid = copy.map(Copy::discard);
                         output.write_all(&answer)?;
                         output.flush()?;
-                        if let Some(c) = copy {
-                            c.discard()
+                        if let Some(pid) = pid {
+                            unsafe { waitpid(pid, ptr::null_mut(), 0) };
                         }
                     }
                 }
@@ -374,11 +378,10 @@ impl Copy {
         }
     }
 
-    /// The cell was accepted: the copy ends.
-    fn discard(mut self) {
+    /// The cell was accepted: the copy ends. Its pid, to wait for.
+    fn discard(mut self) -> c_int {
         let _ = self.to.write_all(b"d");
-        drop(self.to);
-        unsafe { waitpid(self.pid, ptr::null_mut(), 0) };
+        self.pid
     }
 
     /// The cell failed, or was a type: the copy goes on with the answer, and

@@ -156,6 +156,9 @@ impl Loader {
     pub fn new(wasi: WasiP1Ctx, libdirs: Vec<PathBuf>, stack: u32, interruptible: bool) -> Result<Loader> {
         let mut config = Config::new();
         config.epoch_interruption(interruptible);
+        // a trap's frames with their file and line, from the modules' DWARF
+        config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
+        config.wasm_backtrace_max_frames(std::num::NonZeroUsize::new(1 << 20));
         if let Ok(c) = Cache::from_file(None) {
             config.cache(Some(c));
         }

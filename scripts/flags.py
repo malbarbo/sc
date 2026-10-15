@@ -8,7 +8,7 @@ std module at /m/std.pcm; real() puts the build's in their place.
 The level of --safety (PLANO-VERIFICACOES.md §3, §4) adds to these flags the
 warnings, and the warnings that are errors, of what the student sees.
 
-usage: flags.py [c++|gnu17] [pic] [pcm|mod] [off|on|strict]
+usage: flags.py [c++|gnu17] [pic] [pcm|mod] [off|on|strict] [g]
                                     the -cc1 flags (make checkinv)
        flags.py --session c|c++ <build> [off|on|strict] [file]
                                     a REPL session's arguments, one per line
@@ -92,6 +92,11 @@ def safety(fl, level, cxx, file=False, errors=True):
     return fl + [f'-W{x}' for x in w]
 
 
+def lines(fl):
+    """-gline-tables-only, as the driver sets it: where a trap is (§5.6)"""
+    return fl + ['-debug-info-kind=line-tables-only', '-dwarf-version=4', '-debugger-tuning=gdb']
+
+
 def iface(fl):
     """the std module's interface, built as the driver does for --precompile"""
     return [{'-emit-obj': '-emit-module-interface'}.get(x, x) for x in fl] + [
@@ -130,9 +135,9 @@ def real(fl, build, pcm=None):
 def session(cxx, build, c17=False, mod=False, pcm=None, level=None, file=False):
     """a REPL session's arguments (sc_session_new): the -cc1 flags, then after
     -- the link's, with the build's paths; at a level of --safety, or with
-    the engine's flags"""
+    the engine's flags. With the lines of the code, for where a trap is"""
     fl = pic(CXXFLAGS if cxx else gnu17(FLAGS) if c17 else FLAGS)[1:] + MODFILE * mod
-    fl = safety(fl, level, cxx, file) if level else fl
+    fl = lines(safety(fl, level, cxx, file) if level else fl)
     return real(fl + ['-x', 'c++' if cxx else 'c', '--'] + solibs(cxx), build, pcm)
 
 
@@ -147,4 +152,5 @@ if __name__ == '__main__':
     fl = iface(fl) if 'pcm' in a else fl + MODFILE if 'mod' in a else fl
     level = next((x for x in a if x in LEVELS), None)
     fl = safety(fl, level, 'c++' in a) if level else fl
+    fl = lines(fl) if 'g' in a else fl
     print(' '.join(fl[1:]))

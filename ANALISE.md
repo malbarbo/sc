@@ -1953,3 +1953,94 @@ revisor tinha medido o grupo sem esse caso (W-A12). Os outros casos do
 
 O `-Wunreachable-code` continua no A. A nota do clang ensina o silêncio:
 `if ((MAX > 100))`.
+
+## 31. O local do erro em execução (F0 do PLANO-VERIFICACOES.md)
+
+Antes, um erro em execução dizia só o tipo, sem a linha:
+`error: wasm trap: integer divide by zero`. Agora o `sc` diz o erro em
+palavras e os frames do código do aluno:
+
+```
+error: division by zero
+    at media (div-zero.c:4:17)
+    at main (div-zero.c:10:20)
+```
+
+**As peças:**
+- **`-gline-tables-only` em toda sessão.** O `sc_inv` aceita
+  `-debug-info-kind=line-tables-only`, `-dwarf-version=4` e
+  `-debugger-tuning=gdb`, como o driver os passa. O `flags.py --session`
+  sempre os acrescenta, em todos os níveis: o local do erro só muda a
+  mensagem (§3 do plano). O `checkinv` ganhou duas linhas com eles (19
+  SAME), e acusa a falta de qualquer um.
+- **`wasm_backtrace_details` no loader** (`lib.rs`), com
+  `wasm_backtrace_max_frames` de 2^20: o padrão de 20 frames perderia o
+  `main` de uma recursão.
+- **Os frames.** O `machine.rs` mostra os frames com linha num arquivo do
+  aluno. Ficam de fora os cabeçalhos do build (libc++) e os fontes da libc,
+  que vêm com DWARF da wasi-sdk (`wasisdk://...`). Se o erro para numa
+  função da biblioteca, ela vem primeiro, sem linha (`in strlen`). Os
+  nomes vêm da seção de nomes, que o wasm-ld já demangla. Ajustes:
+  - `__original_main` e `__main_argc_argv` são `main`;
+  - o `.sc` de um `static` de célula sai, inclusive na forma demanglada
+    `f(int) (.sc)`;
+  - `std::__2::` vira `std::`, e as tags `[abi:...]` saem;
+  - uma lambda é `a lambda in main`;
+  - as instruções de uma célula (`__stmts__N`) são só o local:
+    `at cell_3:1:1`, o nome que os diagnósticos dão à célula.
+- **A recursão.** Um frame repetido aparece uma vez, com a contagem
+  (`at fatorial (recursion.c:4:16), 10916 times`). Um ciclo de 2 a 4
+  frames, como `par` e `impar`, aparece uma vez, com
+  `(the 2 frames above, 8187 times)`. O que sobrar de muito longo mostra
+  os 10 primeiros e os 3 últimos.
+- **As mensagens:**
+
+  | Trap | Mensagem |
+  |---|---|
+  | `call stack exhausted` | `stack overflow (infinite recursion?)` |
+  | `out of bounds memory access` com o `__stack_pointer` abaixo de 0 | `stack overflow (infinite recursion?)` |
+  | `out of bounds memory access` | `invalid memory access` |
+  | `integer divide by zero` | `division by zero` |
+  | `integer overflow` | `integer overflow in a division (INT_MIN / -1)` |
+  | `indirect call type mismatch` | `call through a function pointer of the wrong type` |
+  | `uninitialized element` | `call through a null function pointer` |
+  | `undefined element` | `call through an invalid function pointer` |
+  | `unreachable` | `aborted`, com os frames do aluno, sem o `abort` |
+  | interrupção (Ctrl-C) | `interrupted`, com os frames: onde estava o laço |
+
+  O `stack_pointer` é lido antes de o `exec` restaurá-lo.
+
+**Custos medidos:**
+- compilar com `-g` custa cerca de 2% por célula (`grafo.cpp`: 1,94 s contra
+  1,91 s; `rev-c1.c`: 0,058 s contra 0,060 s). O `.so` cresce de 20% a 40%
+  (127 KB contra 105 KB; 7,5 KB contra 5,3 KB);
+- o `wasm_backtrace_details` não tem custo medível: `sc run grafo.cpp`
+  leva cerca de 2 s com ou sem ele, e `lista.c` 0,09 s;
+- capturar e simbolizar todos os frames de uma recursão infinita leva
+  menos de 0,1 s: 16 mil frames, e o `sc` todo leva 0,14 s.
+
+**O DWARF na sessão incremental (T8).** O `test-split` agora compila as
+10541 células com `-g`, porque passa pelo `session()`: 0 diferença. Cada
+célula tem a sua linha (`cell_N`); no `sc FILE`, o `#line` dá o nome do
+arquivo ao DWARF também.
+
+**O `test/checks`.** São 15 programas, com um erro em cada, rodados com
+`make test-checks` nos três níveis. O `expected.txt` guarda a saída
+inteira: os avisos, a mensagem, os frames e o status. Dois deles são
+sessões do REPL (`*.repl`, uma linha por vez).
+
+**Um defeito antigo, achado pelo `test-checks`.** Às vezes, no fim de uma
+sessão do REPL, saía `sc: Broken pipe (os error 32)`: de 2 a 4 vezes em 48
+sessões paralelas. O engine respondia a uma célula aceita **antes** de
+avisar a sua cópia (o `fork` da célula) de que ela podia terminar. O `sc`
+recebia a resposta, chegava ao fim da entrada e matava o engine. Sem o
+aviso, a cópia achava que o engine tinha caído e respondia no pipe, já
+fechado. Agora o engine avisa a cópia antes de responder e espera por ela
+depois (`proto/src/engine.rs`). Em 5 rodadas de 48, o erro não apareceu.
+
+**Fora da F0:**
+- a mensagem do hardening da libc++ (`__clang_trap_msg`) só existe com o
+  `EXTENSIVE` da F2: hoje o `v[5]` dá `aborted` com a linha;
+- um `assert` numa instrução de célula avisa
+  `-Wpredefined-identifier-outside-function` (o `__func__` do `assert.h`
+  fora de função) e imprime `(cell_6: : 1)`.

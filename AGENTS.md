@@ -23,6 +23,7 @@ make test-proto  # proto/, the Rust API over engine/sc.h, after changing either
 make test-split  # the corpus as REPL cells, after changing the session or the loader
 make repl        # build/loader/release/sc, the REPL (sc, sc FILE, sc help)
 make test-aluno  # test/aluno, correct code, at each --safety level (scripts/flags.py)
+make test-checks # test/checks, one bug per program: what sc says of it at each level
 ```
 
 The cuts keep the code of every warning: `make learn` runs the corpus with

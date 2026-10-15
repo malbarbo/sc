@@ -1,0 +1,3 @@
+static int f(int z) { return 1 / z; }
+namespace { int g(int z) { return f(z); } }
+g(0);
