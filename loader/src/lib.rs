@@ -73,6 +73,16 @@ struct Host {
     wasi: WasiP1Ctx,
     syms: HashMap<String, (Sym, Option<u32>)>, // the symbol and its table slot
     stacks: Stacks,
+    data: Vec<Data>,
+    roots: Vec<(u32, u32)>, // the words of data written since, for libsc_rt's leaks
+}
+
+/// The data of a module, at an ASan level: where, and what was there
+/// before its constructors ran, without the zeros at the end.
+struct Data {
+    start: u32,
+    end: u32,
+    image: Vec<u8>,
 }
 
 /// The stacks that libsc_rt asks the loader to keep ([`Loader::keep_stacks`]):
@@ -83,6 +93,14 @@ struct Stacks {
     ids: HashMap<Vec<(usize, usize)>, u32>, // (module, offset in it) of each frame
     traces: Vec<Arc<WasmBacktrace>>,
     blamed: Option<(u32, u32)>, // the stacks of the block of a report: allocated, freed
+    leaks: Vec<(u32, u32, u32)>, // lost blocks: the stack they were allocated at, bytes, blocks
+}
+
+/// Blocks of libsc_rt's allocator that the program lost ([`Loader::leaks`]).
+pub struct Leak {
+    pub allocated: Option<Arc<WasmBacktrace>>,
+    pub bytes: u32,
+    pub blocks: u32,
 }
 
 /// What the `dylink.0` section says.
@@ -230,7 +248,7 @@ impl Loader {
             config.cache(Some(c));
         }
         let engine = Engine::new(&config)?;
-        let mut store = Store::new(&engine, Host { wasi, syms: HashMap::new(), stacks: Stacks::default() });
+        let mut store = Store::new(&engine, Host { wasi, syms: HashMap::new(), stacks: Stacks::default(), data: Vec::new(), roots: Vec::new() });
         let memory = Memory::new(&mut store, MemoryType::new(stack.div_ceil(PAGE), Some(UNDEFINED / PAGE)))?;
         let table = Table::new(&mut store, TableType::new(RefType::FUNCREF, 1, None), Ref::Func(None))?;
         let sp = Global::new(&mut store, GlobalType::new(ValType::I32, Mutability::Var), Val::I32(stack as i32))?;
@@ -484,6 +502,9 @@ impl Loader {
         for p in &group {
             let shadow = shadow && p.name == name;
             let mem_base = self.alloc(p.info.mem_size, 1 << p.info.mem_align)?;
+            if p.info.mem_size > 0 && self.asan {
+                self.store.data_mut().data.push(Data { start: mem_base, end: mem_base + p.info.mem_size, image: Vec::new() });
+            }
             let size = self.table.size(&self.store) as u32;
             let table_base = align(size, 1 << p.info.table_align);
             self.table.grow(&mut self.store, (table_base + p.info.table_size - size) as u64, Ref::Func(None))?;
@@ -540,7 +561,7 @@ impl Loader {
                     _ => {}
                 }
             }
-            insts.push(inst);
+            insts.push((inst, mem_base));
         }
         self.forward()?;
         if let Some(b) = self.bump.take() {
@@ -565,10 +586,13 @@ impl Loader {
             };
             g.set(&mut self.store, Val::I32(v as i32))?;
         }
-        for (p, inst) in group.iter().zip(insts) {
+        for (p, (inst, base)) in group.iter().zip(insts) {
             self.loaded.insert(p.name.clone());
             for f in ["__wasm_apply_data_relocs", if inst.get_func(&mut self.store, "_initialize").is_some() {
                 "_initialize" } else { "__wasm_call_ctors" }] {
+                if f != "__wasm_apply_data_relocs" {
+                    self.image(base);
+                }
                 if let Some(f) = inst.get_func(&mut self.store, f) {
                     f.call(&mut self.store, &[], &mut [])?;
                 }
@@ -625,11 +649,24 @@ impl Loader {
         self.define(name, Sym::Func(func), true);
     }
 
+    /// What the data of the module at `base` is now, before its
+    /// constructors: words that change after it may point to the heap.
+    fn image(&mut self, base: u32) {
+        let (mem, host) = self.memory.data_and_store_mut(&mut self.store);
+        if let Some(d) = host.data.iter_mut().rev().find(|d| d.start == base) {
+            let all = &mem[d.start as usize..d.end as usize];
+            d.image = all[..all.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1)].to_vec();
+        }
+    }
+
     /// libsc_rt's imports for the stacks of its blocks:
     /// `uint32_t __sc_rt_stack(void)` keeps the stack of its caller and
     /// says its number, and `void __sc_rt_blame(uint32_t allocated,
     /// uint32_t freed)` names the stacks of the block of the report that
-    /// follows ([`Loader::blamed`]); 0 is none.
+    /// follows ([`Loader::blamed`]); 0 is none. And those for its leaks
+    /// ([`Loader::leaks`]): `uint64_t __sc_rt_data(uint32_t i)`, where the
+    /// data of the i-th module is, and `void __sc_rt_leak(uint32_t
+    /// allocated, uint32_t bytes, uint32_t blocks)`.
     pub fn keep_stacks(&mut self) {
         let ty = FuncType::new(&self.engine, [], [ValType::I32]);
         let f = Func::new(&mut self.store, ty, |mut caller: Caller<'_, Host>, _, r| {
@@ -652,6 +689,55 @@ impl Loader {
             Ok(())
         });
         self.define("__sc_rt_blame", Sym::Func(f), true);
+        let ty = FuncType::new(&self.engine, [ValType::I32], [ValType::I64]);
+        let f = Func::new(&mut self.store, ty, |caller: Caller<'_, Host>, a, r| {
+            let d = caller.data().roots.get(a[0].unwrap_i32() as usize).copied();
+            r[0] = Val::I64(d.map_or(0, |(start, end)| ((end as u64) << 32 | start as u64) as i64));
+            Ok(())
+        });
+        self.define("__sc_rt_data", Sym::Func(f), true);
+        let ty = FuncType::new(&self.engine, [ValType::I32, ValType::I32, ValType::I32], []);
+        let f = Func::new(&mut self.store, ty, |mut caller: Caller<'_, Host>, a, _| {
+            let [x, y, z] = [0, 1, 2].map(|i| a[i].unwrap_i32() as u32);
+            caller.data_mut().stacks.leaks.push((x, y, z));
+            Ok(())
+        });
+        self.define("__sc_rt_leak", Sym::Func(f), true);
+    }
+
+    /// The blocks of libsc_rt's allocator that nothing reaches from the
+    /// stack or the data of the modules, by the stack they were allocated
+    /// at, the most bytes first; none without libsc_rt.
+    pub fn leaks(&mut self) -> Result<Vec<Leak>> {
+        if !self.defines("__sc_rt_leaks") {
+            return Ok(Vec::new());
+        }
+        let mem = self.memory.data(&self.store);
+        let mut roots = Vec::new();
+        for d in &self.store.data().data {
+            let mut run = None;
+            for a in (d.start & !3..d.end).step_by(4) {
+                let i = a as usize;
+                let then = |k: usize| a.checked_sub(d.start).and_then(|o| d.image.get(o as usize + k)).copied().unwrap_or(0);
+                if (0..4).any(|k| mem[i + k] != then(k)) {
+                    run.get_or_insert(a);
+                } else if let Some(s) = run.take() {
+                    roots.push((s, a));
+                }
+            }
+            roots.extend(run.map(|s| (s, d.end)));
+        }
+        self.store.data_mut().roots = roots;
+        let sp = self.stack_pointer();
+        self.call("__sc_rt_leaks", &[sp])?;
+        let st = &mut self.store.data_mut().stacks;
+        let mut out: Vec<Leak> = st.leaks.drain(..).map(|(a, bytes, blocks)| Leak {
+            allocated: a.checked_sub(1).and_then(|i| st.traces.get(i as usize)).cloned(),
+            bytes,
+            blocks,
+        }).collect();
+        out.sort_by_key(|l| std::cmp::Reverse(l.bytes));
+        Ok(out)
     }
 
     /// The stacks where the block of libsc_rt's last report was allocated

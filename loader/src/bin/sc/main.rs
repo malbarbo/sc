@@ -187,10 +187,15 @@ fn run(lang: Option<Lang>, safety: Safety, file: &Path, args: Vec<String>) -> Re
     let argv = std::iter::once(file.display().to_string()).chain(args).collect();
     let mut machine = Machine::new(lang_of(lang, Some(file)), safety, argv, false)?;
     match machine.cell(&src)? {
-        Outcome::Ok => Ok(machine.main()),
-        Outcome::Error => Ok(1),
-        Outcome::Exit(code) => Ok(code),
+        Outcome::Ok => {}
+        Outcome::Error => return Ok(1),
+        Outcome::Exit(code) => return Ok(machine.exit(code)),
     }
+    Ok(match machine.main() {
+        Outcome::Ok => machine.exit(0),
+        Outcome::Error => 134,
+        Outcome::Exit(code) => machine.exit(code),
+    })
 }
 
 fn check(lang: Option<Lang>, safety: Safety, file: &Path) -> Result<i32> {

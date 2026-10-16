@@ -318,7 +318,7 @@ ganho dos handlers.
 | `address`, `use-after-scope` | **on** |
 | `use-after-return` | `=never`: precisa da *fake stack*, e o `-Wreturn-stack-address` pega o caso comum |
 | `pointer-compare`, `pointer-subtract` | não: o driver recusa no wasm |
-| `leak` | **strict**, só no `sc FILE`, filtrado pelo frame do aluno. A libc++ aloca para si (R12) |
+| `leak` | **strict**, no fim do `sc FILE`; o `:leaks` no `on` e no `strict`. Só o bloco que nada alcança (ANALISE §37) |
 | `init-order` | não. `__asan_before_dynamic_init` e `__asan_after_dynamic_init` são emitidos mesmo assim e viram no-op (R7) |
 
 **O passe precisa entrar no engine (T1).**
@@ -627,6 +627,10 @@ ele só no relato. Só os primeiros 20 mil blocos guardam a pilha, e o
 `std::map` de 100 mil chaves fica no tempo de antes (R12). O `sc FILE` com
 `setjmp`/`longjmp` também foi corrigido (§35).
 
+**Os vazamentos da F4 estão feitos** (ANALISE.md §37): no fim do `sc FILE`
+no `strict` e no `:leaks` do REPL. Faltam o libc++ `DEBUG`, o `scanf("%s")`
+e o U-estrito.
+
 A F1 vem primeiro, porque é o alicerce:
 
 - o `sc_inv` passa a aceitar e conferir as flags;
@@ -694,8 +698,10 @@ obrigatório (R5).
 4. **O UBSan usa os handlers completos**, se a latência medida na F2
    permitir. Se não permitir, o REPL usa o modo `trap`, e o `sc FILE` fica
    com os handlers.
-5. **Os vazamentos aparecem só no `strict`.** O `:leaks` do REPL funciona em
-   qualquer nível.
+5. **Os vazamentos aparecem só no `strict`.** O `:leaks` do REPL funciona no
+   `on` e no `strict`: o `off` não tem o alocador que conhece os blocos
+   (2026-10-16). Vazamento é o bloco que nada alcança, como no LSan, e ele
+   muda um status 0 para 1 (ANALISE §37).
 6. **O `strict` só liga `-Wpedantic`.** O dialeto continua `gnu23` e
    `gnu++26`.
 7. **O controle se chama `--safety=off|on|strict`**, no REPL `:safety

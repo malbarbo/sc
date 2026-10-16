@@ -263,6 +263,55 @@ error: division by zero
 error: division by zero
     at a lambda in main (lambda.cpp:7:64)
     at main (lambda.cpp:7:5)
+== leak-global.c off exit=0
+3
+== leak-global.c on exit=0
+3
+== leak-global.c strict exit=0
+3
+leak-global.c:13:20: warning: implicit conversion when initializing 'struct no *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
+   13 |         struct no *n = malloc(sizeof(struct no));
+      |                    ^   ~~~~~~~~~~~~~~~~~~~~~~~~~
+== leak.c off exit=0
+6
+== leak.c on exit=0
+6
+== leak.c strict exit=1
+6
+leak.c:10:16: warning: implicit conversion when initializing 'struct no *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
+   10 |     struct no *n = malloc(sizeof(struct no));
+      |                ^   ~~~~~~~~~~~~~~~~~~~~~~~~~
+error: memory leak: 24 bytes in 3 blocks, never freed
+the blocks were allocated
+    at insere (leak.c:10:20)
+    at soma (leak.c:19:17)
+    at main (leak.c:29:20)
+== leak.cpp off exit=0
+2 2
+== leak.cpp on exit=0
+2 2
+== leak.cpp strict exit=1
+2 2
+error: memory leak: 80 bytes in 2 blocks, never freed
+the blocks were allocated
+    at Pilha::Pilha() (leak.cpp:9:21)
+    at main (leak.cpp:20:26)
+== leaks.c.repl off exit=0
+The :leaks command needs safety on or strict.
+The :leaks command needs safety on or strict.
+== leaks.c.repl on exit=0
+No leaks.
+error: memory leak: 40 bytes in 1 block, never freed
+the block was allocated
+    at cell_3:1:5
+== leaks.c.repl strict exit=0
+No leaks.
+cell_3:1:3: warning: implicit conversion when assigning to 'int *' from type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
+    1 | p = malloc(10 * sizeof(int));
+      |   ^ ~~~~~~~~~~~~~~~~~~~~~~~~
+error: memory leak: 40 bytes in 1 block, never freed
+the block was allocated
+    at cell_3:1:5
 == method.cpp off exit=134
 error: division by zero
     at Turma::media() const (method.cpp:5:37)

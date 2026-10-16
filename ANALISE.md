@@ -2422,3 +2422,84 @@ Três coisas pesavam:
 **Os testes.** O `test/checks/expected.txt` ganhou as linhas das pilhas
 nos 7 programas com erro de heap, no `on` e no `strict`. No REPL, a pilha
 aponta para a célula (`at cell_4:1:5`).
+
+## 37. Os vazamentos (F4)
+
+No `strict`, o `sc FILE` avisa no fim os blocos que o programa perdeu, e um
+status 0 vira 1. O `:leaks` do REPL faz o mesmo a qualquer momento, no `on`
+e no `strict`. O `off` não carrega o `libsc_rt`, e sem ele nenhum alocador
+conhece os blocos.
+
+```
+error: memory leak: 24 bytes in 3 blocks, never freed
+the blocks were allocated
+    at insere (leak.c:10:20)
+    at soma (leak.c:19:17)
+    at main (leak.c:29:20)
+```
+
+**O que conta (decisão de 2026-10-16).** É o bloco que nada alcança, como no
+LSan. Uma lista mantida num global até o fim não é vazamento, e nem o que a
+libc++ aloca para si, que os globais dela alcançam. Por isso não é preciso
+filtrar pelo frame do aluno, como o plano previa.
+
+**As peças:**
+- **O runtime.** O cabeçalho do bloco ganhou o campo `prev` no lugar do
+  `pad`, e os blocos vivos ficam numa lista duplamente ligada. O `next` serve
+  à lista e, depois do `free`, à quarentena.
+  - O `__sc_rt_leaks(sp)` ordena os blocos vivos por endereço e varre como
+    raízes as palavras da pilha acima de `sp` e as dos dados dos módulos.
+  - Um valor que cai em `[início, fim)` de um bloco o alcança, inclusive
+    quando aponta para o meio. Os blocos alcançados são varridos por sua vez.
+  - Os perdidos vão ao loader por `__sc_rt_leak`, agrupados pela pilha da
+    alocação.
+- **O loader.**
+  - Chama o `__sc_rt_leaks` depois do `exit`: os `atexit` e os destrutores
+    dos globais do C++ já rodaram, e a pilha que sobra é a do `exit`. Se o
+    aluno chamou `exit` de dentro de uma função, os frames dela ainda estão
+    lá, e um ponteiro numa variável local ainda alcança o bloco, como no
+    LSan.
+  - Depois de um erro em tempo de execução, de um `abort` ou de uma exceção
+    não capturada, não há relato.
+  - Mostra no máximo 10 grupos, os de mais bytes primeiro.
+  - Os blocos depois dos 20 mil que guardam a pilha (§36) formam um grupo
+    sem ela, e o relato diz isso.
+
+**As raízes dos dados: só o que mudou.** A primeira versão varria os dados
+inteiros de cada módulo.
+- Uma lista perdida de 100 mil nós deu 9 737 blocos perdidos numa rodada e
+  55 656 noutra.
+- O heap começa logo depois dos dados da `libc.so`, perto de `0x2014_0000`,
+  e algumas constantes do `.rodata` dela (`0x20152014`) caíam no meio de um
+  nó. Dali a lista inteira contava como alcançada.
+- Pular o `.rodata` pelo nome não basta: a `libc.so` nomeia os segmentos,
+  mas a `libc++.so` não tem a seção `name`.
+- Por isso o loader guarda a imagem dos dados de cada módulo depois das
+  relocações e antes dos construtores, sem os zeros do fim (o `.bss`).
+  - Só as palavras que mudaram desde então são raízes.
+  - Um ponteiro para o heap só chega aos dados por uma escrita durante a
+    execução, e uma constante nunca muda.
+  - Com isso, os 100 mil blocos aparecem, e os dois grupos (20 mil com a
+    pilha e 80 mil sem) são os esperados.
+
+**O custo.** A medida trocou só a `libsc_rt.so` (a do HEAD contra a nova), no
+`on`, intercalando as duas, com o menor de 4 tempos. A máquina estava
+carregada, então só a comparação vale:
+
+| | lista de 300 mil nós | `std::map` de 100 mil chaves | 100 mil blocos perdidos |
+|---|---|---|---|
+| sem a lista dos vivos | 0,23 s | 4,48 s | 0,16 s |
+| com ela | 0,24 s | 4,50 s | 0,15 s |
+
+A varredura no `strict` custou cerca de 0,1 s nos 100 mil blocos perdidos
+(0,27 s contra 0,17 s no `on`), e nada nos outros dois programas. Eles
+terminam com pouco no heap.
+
+**Os testes.** O `test/checks` ganhou quatro programas:
+- `leak.c`, uma lista perdida dentro de uma função;
+- `leak-global.c`, uma lista num global, que não é avisada;
+- `leak.cpp`, um `new[]` sem `delete[]` ao lado de `std::map`,
+  `std::string` e `std::vector`, sem falso positivo da libc++;
+- `leaks.c.repl`, o `:leaks` antes e depois de perder o bloco.
+
+O `test-aluno` ficou igual: nenhum dos 21 programas corretos perde memória.

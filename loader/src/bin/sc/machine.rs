@@ -249,13 +249,48 @@ impl Machine {
         Ok(a.status == Status::Ok)
     }
 
-    /// Runs `main` and exits: the program's exit status.
-    pub fn main(&mut self) -> i32 {
-        match self.exec(|l| l.run().map(drop)) {
-            Outcome::Ok => 0,
-            Outcome::Error => 134,
-            Outcome::Exit(code) => code,
+    /// Runs `main` and exits.
+    pub fn main(&mut self) -> Outcome {
+        self.exec(|l| l.run().map(drop))
+    }
+
+    /// The status of a program that exits with `code`: at `strict`, the
+    /// blocks it lost are told, and make a 0 a 1.
+    pub fn exit(&mut self, code: i32) -> i32 {
+        if self.safety == Safety::Strict && self.leaks() > 0 && code == 0 { 1 } else { code }
+    }
+
+    /// Tells the blocks of the heap that nothing reaches any more (at `on`
+    /// and `strict`, whose allocator keeps them): how many groups of them,
+    /// by where they were allocated.
+    pub fn leaks(&mut self) -> usize {
+        const MOST: usize = 10;
+        self.loader.arm();
+        let leaks = match self.loader.leaks() {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("{}", runtime_error(&e, &mut self.loader, &self.build));
+                return 0;
+            }
+        };
+        let plural = |n: u32, what: &str| if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") };
+        for l in leaks.iter().take(MOST) {
+            eprintln!("error: memory leak: {} in {}, never freed", plural(l.bytes, "byte"), plural(l.blocks, "block"));
+            let fs = l.allocated.as_ref().map(|bt| frames(bt, &self.loader, &self.build, false)).unwrap_or_default();
+            if l.allocated.is_none() {
+                eprintln!("sc keeps where only the first blocks of a program were allocated");
+            } else if !fs.is_empty() {
+                eprintln!("{} allocated", if l.blocks == 1 { "the block was" } else { "the blocks were" });
+                fs.iter().for_each(|f| eprintln!("    {f}"));
+            }
         }
+        if leaks.len() > MOST {
+            let rest = &leaks[MOST..];
+            let bytes = rest.iter().map(|l| l.bytes).sum();
+            let blocks = rest.iter().map(|l| l.blocks).sum();
+            eprintln!("... and {} in {} more, allocated elsewhere", plural(bytes, "byte"), plural(blocks, "block"));
+        }
+        leaks.len()
     }
 
     /// The names the cells export.

@@ -15,7 +15,8 @@
 // of the code linked with libsc_rt, and __real_malloc libc's. The static
 // programs are linked with --wrap; the REPL's loader does the same for the
 // shared objects. libc calls its own malloc, so a block that libc allocates
-// (strdup) has no header, and free passes it on.
+// (strdup) has no header, and free passes it on. The live blocks are in a
+// list, for __sc_rt_leaks.
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -111,9 +112,8 @@ static const Global *global_at(uintptr_t a) {
 typedef struct Block {
   uint32_t magic, size; // LIVE or DEAD; the size the program asked for
   uint32_t left, total; // the block libc gave: user - left, total bytes
-  struct Block *next;   // in the quarantine
+  struct Block *next, *prev; // in the list of the live blocks; next in the quarantine
   uint32_t allocated, freed; // where: the numbers of their stacks (stack)
-  uint32_t pad;
 } Block;
 
 _Static_assert(sizeof(Block) == 32, "the header is 4 granules");
@@ -463,6 +463,7 @@ size_t __real_malloc_usable_size(void *);
 
 static Block *quarantine, *quarantine_end;
 static size_t quarantined;
+static Block *live; // the blocks not freed, the newest first (__sc_rt_leaks)
 
 // the right redzone of a block of n bytes, as compiler-rt's
 static uintptr_t redzone(size_t n) {
@@ -481,7 +482,10 @@ static void *alloc(size_t n, size_t align) {
   unpoison(user, n);
   fill(up8(user + n), real + total - up8(user + n), HEAP_RIGHT);
   Block *b = header(user);
-  *b = (Block){.magic = LIVE, .size = n, .left = left, .total = total, .allocated = stacks < STACKS ? (stacks++, stack()) : 0};
+  *b = (Block){.magic = LIVE, .size = n, .left = left, .total = total, .next = live,
+               .allocated = stacks < STACKS ? (stacks++, stack()) : 0};
+  if (live) live->prev = b;
+  live = b;
   return (void *)user;
 }
 
@@ -525,6 +529,9 @@ static void release(Block *b) {
   uintptr_t user = (uintptr_t)b + sizeof(Block);
   b->magic = DEAD;
   b->freed = b->allocated ? stack() : 0;
+  if (b->prev) b->prev->next = b->next;
+  else live = b->next;
+  if (b->next) b->next->prev = b->prev;
   fill(user, up8(b->size), FREED);
   b->next = 0;
   if (quarantine_end) quarantine_end->next = b;
@@ -592,6 +599,90 @@ int __wrap_posix_memalign(void **r, size_t align, size_t n) {
 size_t __wrap_malloc_usable_size(void *p) {
   Block *b = p ? block((uintptr_t)p) : 0;
   return b ? b->size : p ? __real_malloc_usable_size(p) : 0;
+}
+
+// --- the leaks, as LSan's: the blocks that nothing reaches
+
+// the loader's: __sc_rt_data says where the i-th range of the modules' data
+// written since they were loaded is, end << 32 | start, and 0 after the
+// last (their constants would look like pointers to the heap, which comes
+// after them); __sc_rt_leak tells it of lost blocks allocated at one stack
+__attribute__((weak)) uint64_t __sc_rt_data(uint32_t i);
+__attribute__((weak)) void __sc_rt_leak(uint32_t allocated, uint32_t bytes, uint32_t blocks);
+
+// the live blocks by address, which of them are reached, and those reached
+// whose words are still to be scanned
+typedef struct {
+  Block **v;
+  uint8_t *seen;
+  uint32_t *work;
+  size_t n, top;
+} Reach;
+
+static int by_address(const void *x, const void *y) {
+  uintptr_t a = (uintptr_t)*(Block *const *)x, b = (uintptr_t)*(Block *const *)y;
+  return (a > b) - (a < b);
+}
+
+static int by_stack(const void *x, const void *y) {
+  uint32_t a = (*(Block *const *)x)->allocated, b = (*(Block *const *)y)->allocated;
+  return (a > b) - (a < b);
+}
+
+// reaches the blocks the words in [beg, end) point into
+static void scan(Reach *r, uintptr_t beg, uintptr_t end) {
+  for (uintptr_t p = (beg + 3) & ~(uintptr_t)3; p + 4 <= end; p += 4) {
+    uintptr_t a = *(const uint32_t *)p;
+    if (a < SHADOW + (512u << 20)) continue;
+    size_t lo = 0, hi = r->n; // after the last block whose header is before a
+    while (lo < hi) {
+      size_t m = (lo + hi) / 2;
+      if ((uintptr_t)r->v[m] < a) lo = m + 1;
+      else hi = m;
+    }
+    if (!lo) continue;
+    Block *b = r->v[--lo];
+    uintptr_t user = (uintptr_t)b + sizeof(Block);
+    if (a >= user && a - user < (b->size ? b->size : 1) && !r->seen[lo]) {
+      r->seen[lo] = 1;
+      r->work[r->top++] = lo;
+    }
+  }
+}
+
+// The live blocks that nothing reaches: neither the stack above sp, nor the
+// modules' data, nor a block reached. It tells the loader of them, a
+// group for each stack where they were allocated, and says how many.
+uint32_t __sc_rt_leaks(uintptr_t sp) {
+  size_t n = 0;
+  for (Block *b = live; b; b = b->next) n++;
+  if (!n || !__sc_rt_data) return 0;
+  Reach r = {.v = __real_malloc(n * sizeof(Block *)), .seen = __real_malloc(n), .work = __real_malloc(n * 4), .n = n};
+  size_t k = 0;
+  if (r.v && r.seen && r.work) {
+    n = 0;
+    for (Block *b = live; b; b = b->next) r.v[n++] = b;
+    qsort(r.v, n, sizeof *r.v, by_address);
+    memset(r.seen, 0, n);
+    scan(&r, sp, (uintptr_t)&__stack_high);
+    uint64_t d;
+    for (uint32_t i = 0; (d = __sc_rt_data(i)); i++) scan(&r, (uint32_t)d, d >> 32);
+    while (r.top) {
+      Block *b = r.v[r.work[--r.top]];
+      uintptr_t user = (uintptr_t)b + sizeof(Block);
+      scan(&r, user, user + b->size);
+    }
+    for (size_t i = 0; i < n; i++)
+      if (!r.seen[i]) r.v[k++] = r.v[i];
+    qsort(r.v, k, sizeof *r.v, by_stack);
+    for (size_t i = 0, j; i < k; i = j) {
+      uint32_t bytes = 0;
+      for (j = i; j < k && r.v[j]->allocated == r.v[i]->allocated; j++) bytes += r.v[j]->size;
+      if (__sc_rt_leak) __sc_rt_leak(r.v[i]->allocated, bytes, j - i);
+    }
+  }
+  __real_free(r.v), __real_free(r.seen), __real_free(r.work);
+  return k;
 }
 
 // libc's getdelim reallocates the line with its own realloc: it reads into a

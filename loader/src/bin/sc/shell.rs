@@ -19,6 +19,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     (":quit", "", "Exit the REPL"),
     (":type", "EXPR", "Show the type of an expression, without running it"),
     (":undo", "", "Forget the last cell's declarations (what it ran stays done)"),
+    (":leaks", "", "Show the memory the cells allocated and nothing points to any more"),
     (":safety", "[off|on|strict]", "Show or switch how much the compiler checks (starts over, empty)"),
     (":theme", "[light|dark]", "Show or switch the theme"),
 ];
@@ -79,6 +80,12 @@ pub fn run(machine: Machine) -> Result<i32> {
             ":undo" => {
                 if machine.undo()? {
                     reader.set_completions(completions(&machine));
+                }
+            }
+            ":leaks" if machine.safety() == Safety::Off => println!("The :leaks command needs safety on or strict."),
+            ":leaks" => {
+                if machine.leaks() == 0 {
+                    println!("No leaks.");
                 }
             }
             ":safety" if arg.is_empty() => println!("{}", machine.safety().name()),
