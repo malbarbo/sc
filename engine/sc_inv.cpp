@@ -101,6 +101,7 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
       S.set(parseSanitizerValue(N, /*AllowGroups=*/false), true);
   };
   Kinds(O.Sanitize, LO.Sanitize);
+  LO.NoSanitizeFiles = O.SanitizeIgnorelist;
 
   CodeGenOptions &CG = Inv.getCodeGenOpts();
   CG.DisableFree = true;
@@ -269,6 +270,7 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O, std::string &E
     else if (A == "-fsanitize-address-use-after-scope") O.AsanUseAfterScope = true;
     else if (A == "-fsanitize-address-use-after-return=never") O.AsanNoUseAfterReturn = true;
     else if (A == "-fsanitize-address-globals-dead-stripping") O.AsanGlobalsDeadStripping = true;
+    else if (A.consume_front("-fsanitize-ignorelist=")) O.SanitizeIgnorelist.push_back(A.str());
     else if (A == "-I") O.Include.push_back(Next());
     else if (A == "-D") O.Macros.push_back(Next());
     else if (A.starts_with("-fsanitize=") || A.starts_with("-fsanitize-trap=") || A.starts_with("-fsanitize-merge=")) {

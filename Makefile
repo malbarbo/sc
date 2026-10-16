@@ -129,6 +129,20 @@ $(RT).a: $(RT_OBJS)
 $(RT).so: $(RT_OBJS)
 	$(N)/bin/wasm-ld -shared --experimental-pic --unresolved-symbols=import-dynamic $^ -L$(SR)/lib/wasm32-wasip1 -lc -o $@
 
+# where U-estrito stays off: the sysroot's headers (ANALISE.md §40)
+IGNORELIST := $(SR)/share/sc/ignorelist.txt
+$(IGNORELIST): rt/ignorelist.txt | $(SR)/lib/wasm32-wasip1/libc++.so
+	@mkdir -p $(@D)
+	cp $< $@
+
+# musl's isdigit, isalpha... are macros that wrap an unsigned on purpose, in
+# the program's code, where the ignorelist does not reach: without them they
+# are libc's functions (ANALISE.md §40)
+$(SR)/.ctype: | $(SR)/lib/wasm32-wasip1/libc++.so
+	sed -i '/^#define isw\?[a-z]*(a) (0 ? isw\?[a-z]*(a) : .*(unsigned)(a)/d' \
+	  $(addprefix $(SR)/include/wasm32-wasip1/,ctype.h wchar.h wctype.h)
+	touch $@
+
 # libsetjmp.so again from wasi-sdk's libsetjmp.a, with the tag of
 # rt/c_longjmp.s; the stamp goes with the sysroot
 $(SR)/.setjmp: rt/c_longjmp.s | $(SR)/lib/wasm32-wasip1/libc++.so
@@ -140,7 +154,7 @@ $(SR)/.setjmp: rt/c_longjmp.s | $(SR)/lib/wasm32-wasip1/libc++.so
 	  -L$(SR)/lib/wasm32-wasip1 -lc -o $(SR)/lib/wasm32-wasip1/libsetjmp.so
 	touch $@
 
-sysroot: $(SR)/lib/wasm32-wasip1/libc++.so $(SR)/.setjmp $(RT).a $(RT).so
+sysroot: $(SR)/lib/wasm32-wasip1/libc++.so $(SR)/.setjmp $(RT).a $(RT).so $(IGNORELIST) $(SR)/.ctype
 
 # --- the engine
 $(B)/engine/%.o: engine/%.cpp engine/sc.h engine/sc_inv.h | $(B)/wasm/lib/libclangSema.a
@@ -257,7 +271,7 @@ $(B)/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/repl
 	scripts/flags.py --session $(firstword $(subst -, ,$*)) $(CURDIR)/$(B) $(wordlist 2,3,$(subst -, ,$*)) > $@
 
-repl: $(SC_REPL) $(B)/sc-engine-full $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp
+repl: $(SC_REPL) $(B)/sc-engine-full $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 
 # a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
 test-aluno: repl
@@ -267,11 +281,11 @@ test-checks: repl
 	test/checks.py
 
 # --- tests: the corpus against the uncut engine
-$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp
+$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 	test/corpus.py $< $(B)/res/base
 
 # the same with every warning on, so the cuts keep the code of all warnings
-$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp
+$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/wev-base
 
 baseline: $(B)/res/base/summary.json
@@ -284,10 +298,10 @@ test-small: $(B)/sc.wasm $(B)/res/base/summary.json $(SCLOAD)
 
 # the native engine against the uncut native engine (sc.wasm and the native
 # engine differ where the host does: stack depth, memory, the sandbox)
-$(B)/res/native-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp
+$(B)/res/native-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 	test/corpus.py $< $(B)/res/native-base
 
-$(B)/res/native-wev-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp
+$(B)/res/native-wev-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/native-wev-base
 
 test-native: $(B)/sc $(B)/res/native-base/summary.json $(SCLOAD)

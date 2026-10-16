@@ -1,0 +1,18 @@
+# The checks of U-estrito (scripts/flags.py, U_STRICT) are about what is
+# defined but rarely what a student means; libc++'s and libc's headers do it
+# on purpose (mersenne_twister_engine's shifts). They stay off in the
+# sysroot's headers, and only these: ASan and U go on there
+[float-divide-by-zero]
+src:*/sysroot/include/*
+[unsigned-integer-overflow]
+src:*/sysroot/include/*
+[unsigned-shift-base]
+src:*/sysroot/include/*
+[implicit-unsigned-integer-truncation]
+src:*/sysroot/include/*
+[implicit-signed-integer-truncation]
+src:*/sysroot/include/*
+[implicit-integer-sign-change]
+src:*/sysroot/include/*
+[implicit-bitfield-conversion]
+src:*/sysroot/include/*

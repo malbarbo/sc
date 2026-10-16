@@ -155,6 +155,22 @@ void __ubsan_handle_shift_out_of_bounds_abort(ShiftData *d, Value l, Value r) {
 typedef struct {
   Location loc;
   const Type *from, *to;
+  uint8_t kind;      // 0, 1, 2: a truncation; 3, 4: a change of sign
+  uint32_t bitfield; // the bit-field's width, or 0
+} ImplicitConversionData;
+
+void __ubsan_handle_implicit_conversion_abort(ImplicitConversionData *d, Value from, Value to) {
+  char a[48], b[48];
+  unsigned w = d->bitfield ? d->bitfield : width(d->to);
+  report("implicit conversion from type %s of value %s (%u-bit, %ssigned) to type %s changed the value to %s "
+         "(%u-bit%s, %ssigned)", d->from->name, text(a, sizeof a, d->from, from), width(d->from),
+         is_signed(d->from) ? "" : "un", d->to->name, text(b, sizeof b, d->to, to), w,
+         d->bitfield ? " bitfield" : "", is_signed(d->to) ? "" : "un");
+}
+
+typedef struct {
+  Location loc;
+  const Type *from, *to;
 } FloatCastData;
 
 void __ubsan_handle_float_cast_overflow_abort(FloatCastData *d, Value v) {

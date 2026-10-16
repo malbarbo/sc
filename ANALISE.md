@@ -2588,3 +2588,89 @@ teste usa um bloco do heap, que o clang não vê.
 - `scanf-width.c`, um `%9s` num bloco de 4 bytes, com uma entrada curta.
 
 No `off`, o `scanf.c` estraga a pilha e sai com um status inválido.
+
+## 40. O U-estrito (F4)
+
+O `strict` ganhou as verificações do UBSan que o plano chamou de U-estrito
+(§5.1 do plano). Elas pegam o que é definido, mas raramente é o que o aluno quis:
+
+| Verificação | Pega |
+|---|---|
+| `unsigned-integer-overflow` | `saldo - saque` com `saque > saldo`, `size_t i = n - 1` com `n = 0` |
+| `unsigned-shift-base` | `1u << 31 << 1` |
+| `implicit-conversion` | `short p = 50000`, `uint8_t b = 250; b += 10`, `unsigned u = -1` |
+| `float-divide-by-zero` | `soma / n` com `n = 0` em `double` |
+
+O `implicit-conversion` é um grupo. O `-cc1` só aceita as verificações uma a
+uma, então o `U_STRICT` do `flags.py` o expande como o driver faz:
+`implicit-unsigned-integer-truncation`, `implicit-signed-integer-truncation`,
+`implicit-integer-sign-change` e `implicit-bitfield-conversion`.
+
+A `libsc_rt` ganhou o handler da conversão, com as palavras do compiler-rt:
+
+```
+error: implicit conversion from type 'int' of value 50000 (32-bit, signed) to type 'short' changed the value to -15536 (16-bit, signed)
+    at main (truncation.c:5:23)
+```
+
+Os outros três já tinham handler: o do overflow (que diz "unsigned"), o do
+shift e o da divisão (que diz "division by zero").
+
+**Os headers.** Medido com um harness que recupera e conta cada relato:
+- O `std::shuffle` com um `mt19937` disparou 293 vezes, todas em
+  `mersenne_twister_engine.h:318` (`unsigned-shift-base`).
+- O `std::hash` não dispara. A libc++ já marca o murmur com `no_sanitize`.
+
+A volta é intencional nos dois casos. Por isso o `strict` passa
+`-fsanitize-ignorelist=/sysroot/share/sc/ignorelist.txt`, que vem de
+`rt/ignorelist.txt`:
+- Ela tira `src:*/sysroot/include/*` só nas seções das sete verificações do
+  U-estrito. O ASan e o U continuam no código dos headers.
+- O padrão com `*` na frente vale para os dois caminhos: o `/sysroot` do
+  engine e o caminho real que o REPL usa.
+- O `sc_inv` passou a aceitar a flag (`LangOptions::NoSanitizeFiles`). O
+  `checkinv` dá SAME e o engine cortado não precisou de `make learn`.
+
+**As macros da `ctype.h`.** A musl define `isdigit`, `isalpha`, `islower`,
+`isupper`, `isprint` e `isgraph` (e `iswdigit`, na `wchar.h` e na `wctype.h`)
+como `((unsigned)(a)-'0') < 10`. A macro se expande no código do aluno, aonde
+a ignorelist não chega, e `isdigit(' ')` parou o `test/aluno/erros.c`, que é
+correto. O passo `$(SR)/.ctype` do Makefile apaga essas macros dos headers do
+sysroot. Elas viram as funções da libc, com o mesmo resultado, em todos os
+níveis. O `isspace` usa o `__isspace`, uma função do header, que a
+ignorelist já cobre.
+
+**O que para no corpus.** Das 1951 execuções do `strict`, 179 param no
+U-estrito:
+- 174 testes de tortura do gcc;
+- 3 do c-testsuite;
+- o `p2.c` (um hash djb2, `h * 33 + c`) e o `p5.c` (`uint8_t by += 10`).
+
+Nenhuma para dentro de um header. Os testes de tortura dão a volta de
+propósito.
+
+O hash do `p2.c` é o caso que custa: um programa correto para no `strict`.
+Isso foi decidido. O `strict` é o nível exigente, como o `-Wconversion` e o
+`-Wsign-conversion` que ele já liga. Quem quer a volta escreve o cast ou usa o
+`on`.
+
+**O custo** é o tamanho do objeto no `strict`, sem e com o U-estrito:
+
+| Programa | sem | com | |
+|---|---|---|---|
+| `aluno/matriz.c` | 13 925 | 13 925 | 1,00× |
+| `aluno/texto.c` | 14 365 | 15 341 | 1,07× |
+| `aluno/alunos.c` | 13 272 | 14 312 | 1,08× |
+| `aluno/vetor.cpp` | 341 016 | 342 695 | 1,00× |
+| `aluno/grafo.cpp` | 426 604 | 428 430 | 1,00× |
+| `cxx/c1_basics.cpp` | 321 533 | 322 100 | 1,00× |
+
+O C++ quase não muda: o código dos headers fica fora.
+
+**Os testes.**
+- O `test/checks` ganhou `unsigned.c`, `truncation.c` e `float-div-zero.c`.
+  No `off` e no `on` eles imprimem o valor que deu a volta. No `strict`, o
+  relato.
+- O `test/aluno` ganhou o `sorteio.cpp`, um código correto com `mt19937`,
+  `shuffle`, `uniform_int_distribution` e um `unordered_map<char, int>` com
+  "Fábio". Ele não pode parar no `strict`.

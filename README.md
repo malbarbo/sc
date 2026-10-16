@@ -106,7 +106,8 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   freed, which the reports show (§36), and finds the blocks nothing
   reaches, the leaks of `strict` and of `:leaks` (§37). `rt/c_longjmp.s` is the tag of
   `setjmp`/`longjmp`, defined strong in the sysroot's `libsetjmp.so`
-  (§35).
+  (§35). `rt/ignorelist.txt` keeps the checks of `strict` alone (U-estrito)
+  out of the sysroot's headers (§40).
 - `bench/` times the engine in V8 (`cc.mjs`) and compares O0/O1/O2 code.
 - `build/` holds everything generated and is not tracked.
 

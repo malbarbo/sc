@@ -279,7 +279,7 @@ Um erro numa função esconde os avisos de análise das funções seguintes
 | `nonnull-attribute`, `returns-nonnull-attribute` | `NULL` para um parâmetro `nonnull` da libc | **U** |
 | `local-bounds` | — | não emite nada a `-O0` (medido) |
 | `object-size` | — | não tem efeito a `-O0` (o clang avisa) |
-| `unsigned-integer-overflow`, `unsigned-shift-base`, `implicit-conversion`, `float-divide-by-zero` | volta de `unsigned`, truncamento implícito, `1.0/0` | **U-estrito**: disparam em `std::hash` e nos geradores dos headers |
+| `unsigned-integer-overflow`, `unsigned-shift-base`, `implicit-conversion`, `float-divide-by-zero` | volta de `unsigned`, truncamento implícito, `1.0/0` | **U-estrito**: disparam nos geradores dos headers e nas macros da `ctype.h`, que ficam de fora (ANALISE.md §40) |
 | `nullability-*` | — | só com `_Nonnull` |
 | `function` | — | não suportado no wasm, e o wasm já faz trap |
 | `vptr` | — | só no Emscripten, precisa de um runtime C++ |
@@ -634,7 +634,12 @@ no `strict` e no `:leaks` do REPL.
 comparador que não é uma ordem estrita fraca, como o `<=` no `std::sort`.
 
 **O `scanf("%s")` da F4 está feito** (ANALISE.md §39): no `on` e no
-`strict`, como os outros interceptores. Falta o U-estrito.
+`strict`, como os outros interceptores.
+
+**O U-estrito da F4 está feito** (ANALISE.md §40): no `strict`, fora dos
+headers do sysroot (uma ignorelist), e sem as macros `isdigit`... da musl,
+que dão a volta no código do aluno. Da F4 falta só a libc instrumentada, que
+é opcional.
 
 A F1 vem primeiro, porque é o alicerce:
 

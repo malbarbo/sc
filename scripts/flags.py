@@ -82,6 +82,13 @@ LEVELS = ['off', 'on', 'strict']
 U = ['alignment', 'array-bounds', 'bool', 'builtin', 'enum', 'float-cast-overflow', 'integer-divide-by-zero',
      'nonnull-attribute', 'null', 'pointer-overflow', 'return', 'returns-nonnull-attribute', 'shift-base',
      'shift-exponent', 'signed-integer-overflow', 'unreachable', 'vla-bound']
+# U-estrito: what is defined, but rarely what the student meant; strict only.
+# implicit-conversion's group, as the driver expands it
+U_STRICT = ['float-divide-by-zero', 'unsigned-integer-overflow', 'unsigned-shift-base',
+            'implicit-unsigned-integer-truncation', 'implicit-signed-integer-truncation',
+            'implicit-integer-sign-change', 'implicit-bitfield-conversion']
+# where they stay off: the sysroot's headers (rt/ignorelist.txt)
+IGNORELIST = '/sysroot/share/sc/ignorelist.txt'
 # §5.3: libc++'s hardening; off: none (the sysroot is built with fast); strict:
 # debug, which also checks the comparators of the algorithms (ANALISE.md §38)
 HARDENING = {'off': 'NONE', 'on': 'EXTENSIVE', 'strict': 'DEBUG'}
@@ -109,8 +116,10 @@ def checks(fl, level, cxx):
     fl = fl + ['-D', f'_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_{HARDENING[level]}'] * cxx
     if level == 'off':
         return fl
-    u = ','.join(U)
-    return fl + [f'-fsanitize=address,{u}', f'-fsanitize-merge={u}', '-fno-sanitize-memory-param-retval',
+    strict = level == 'strict'
+    u = ','.join(U + U_STRICT * strict)
+    return fl + [f'-fsanitize=address,{u}', f'-fsanitize-merge={u}'] + [f'-fsanitize-ignorelist={IGNORELIST}'] * strict + [
+                 '-fno-sanitize-memory-param-retval',
                  '-fno-sanitize-address-use-odr-indicator', '-ftrivial-auto-var-init=pattern'] + ASAN
 
 

@@ -157,6 +157,13 @@ error: 8.1e+09 is outside the range of representable values of type 'int'
 == float-cast.c strict exit=134
 error: 8.1e+09 is outside the range of representable values of type 'int'
     at main (float-cast.c:5:13)
+== float-div-zero.c off exit=0
+media: inf
+== float-div-zero.c on exit=0
+media: inf
+== float-div-zero.c strict exit=134
+error: division by zero
+    at main (float-div-zero.c:7:32)
 == free-local.c off exit=0
 == free-local.c on exit=134
 error: invalid-free: free of the address of a local variable
@@ -515,6 +522,16 @@ abc error: string index out of bounds
 == string-index.cpp strict exit=134
 abc error: string index out of bounds
     at main (string-index.cpp:7:22)
+== truncation.c off exit=0
+-15536
+== truncation.c on exit=0
+-15536
+== truncation.c strict exit=134
+truncation.c:5:23: warning: implicit conversion loses integer precision: 'int' to 'short' [-Wimplicit-int-conversion]
+    5 |     short populacao = habitantes;
+      |           ~~~~~~~~~   ^~~~~~~~~~
+error: implicit conversion from type 'int' of value 50000 (32-bit, signed) to type 'short' changed the value to -15536 (16-bit, signed)
+    at main (truncation.c:5:23)
 == uninit-pointer.c off exit=0
 42
 == uninit-pointer.c on exit=134
@@ -588,6 +605,13 @@ uninit-string.c:4:15: note: initialize the variable 'nome' to silence this warni
       |                = NULL
 error: invalid memory access through an uninitialized pointer
     in main
+== unsigned.c off exit=0
+saldo: 4294967286
+== unsigned.c on exit=0
+saldo: 4294967286
+== unsigned.c strict exit=134
+error: unsigned integer overflow: 10 - 20 cannot be represented in type 'unsigned int'
+    at main (unsigned.c:5:19)
 == use-after-free.c off exit=0
 ok
 == use-after-free.c on exit=134
