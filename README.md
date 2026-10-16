@@ -100,7 +100,8 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `--safety`, which say the error and trap (`ANALISE.md` §32).
   `rt/sc_asan.c`, in the same library, is ASan's runtime: the shadow, the
   allocator with its redzones and quarantine, and the checked libc
-  functions, named as wasm-ld's `--wrap` names them (`ANALISE.md` §34).
+  functions, `scanf` among them (§39), named as wasm-ld's `--wrap` names them
+  (`ANALISE.md` §34).
   It asks the loader for the stacks where each block was allocated and
   freed, which the reports show (§36), and finds the blocks nothing
   reaches, the leaks of `strict` and of `:leaks` (§37). `rt/c_longjmp.s` is the tag of

@@ -388,7 +388,7 @@ ganho dos handlers.
   `snprintf`, `fgets`, `fread` e `read`.
   - O loader entrega a libc ao runtime como `__real_*`.
   - Uma chamada de dentro da libc não é interceptada.
-  - `scanf("%s")` fica para a F4.
+  - `scanf("%s")` ficou para a F4 (ANALISE.md §39).
 - **Exceções e `longjmp` (R9).**
   - O `__asan_handle_no_return` é emitido antes do `__cxa_throw` do aluno e
     do `longjmp` (testado).
@@ -632,7 +632,9 @@ no `strict` e no `:leaks` do REPL.
 
 **O libc++ `DEBUG` da F4 está feito** (ANALISE.md §38): o `strict` pega o
 comparador que não é uma ordem estrita fraca, como o `<=` no `std::sort`.
-Faltam o `scanf("%s")` e o U-estrito.
+
+**O `scanf("%s")` da F4 está feito** (ANALISE.md §39): no `on` e no
+`strict`, como os outros interceptores. Falta o U-estrito.
 
 A F1 vem primeiro, porque é o alicerce:
 

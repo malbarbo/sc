@@ -2,7 +2,8 @@
 """One bug per program (PLANO-VERIFICACOES.md §9): what sc (make repl) says
 of each program in test/checks at each level of --safety must be what
 test/checks/expected.txt says: the output, the diagnostics and the exit
-status. A NAME.c or NAME.cpp runs as `sc NAME`; a NAME.c.repl or
+status. A NAME.c or NAME.cpp runs as `sc NAME`, with NAME.c.in or
+NAME.cpp.in as its input if there is one; a NAME.c.repl or
 NAME.cpp.repl goes, a line at a time, to the REPL.
 
 usage: checks.py [--update]   --update writes expected.txt
@@ -24,7 +25,8 @@ def one(job):
         lang = name.split('.')[-2]
         cmd, stdin = [SC, '-q', f'-x={"c++" if lang == "cpp" else lang}', f'--safety={level}'], open(prog, 'rb').read()
     else:
-        cmd, stdin = [SC, f'--safety={level}', name], b''
+        inp = f'{prog}.in'
+        cmd, stdin = [SC, f'--safety={level}', name], open(inp, 'rb').read() if os.path.exists(inp) else b''
     r = subprocess.run(cmd, cwd=D, input=stdin, capture_output=True, timeout=120, env=os.environ | {'NO_COLOR': '1'})
     out = (r.stdout + r.stderr).decode(errors='replace')
     return f'== {name} {level} exit={r.returncode}\n{out}'

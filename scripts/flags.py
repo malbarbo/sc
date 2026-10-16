@@ -94,7 +94,8 @@ SHADOW = 0x110000
 # that write the program's memory, and the throws of libc++
 WRAP = ['malloc', 'free', 'calloc', 'realloc', 'reallocarray', 'aligned_alloc', 'posix_memalign',
         'malloc_usable_size', 'getdelim', 'getline', 'strcpy', 'strncpy', 'strcat', 'strncat', 'sprintf',
-        'snprintf', 'fgets', 'fread', 'read', '__cxa_throw', '__cxa_rethrow']
+        'snprintf', 'fgets', 'fread', 'read', 'scanf', 'fscanf', 'sscanf', 'vscanf', 'vfscanf', 'vsscanf',
+        '__cxa_throw', '__cxa_rethrow']
 # use-after-return would take a fake stack; the stack safety analysis takes
 # ScalarEvolution, which the engine leaves out
 ASAN = ['-fsanitize-address-use-after-scope', '-fsanitize-address-use-after-return=never',

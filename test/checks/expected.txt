@@ -439,6 +439,30 @@ the block was freed
 and allocated
     at Nome::Nome(char const*) (regra-dos-tres.cpp:7:33)
     at main (regra-dos-tres.cpp:13:10)
+== scanf-width.c off exit=0
+UEM
+== scanf-width.c on exit=134
+error: heap-buffer-overflow: write of up to 10 bytes by scanf, 0 bytes past the end of a block of 4 bytes
+    at main (scanf-width.c:6:9)
+the block was allocated
+    at main (scanf-width.c:5:19)
+== scanf-width.c strict exit=134
+scanf-width.c:5:11: warning: implicit conversion when initializing 'char *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
+    5 |     char *sigla = malloc(4);
+      |           ^       ~~~~~~~~~
+error: heap-buffer-overflow: write of up to 10 bytes by scanf, 0 bytes past the end of a block of 4 bytes
+    at main (scanf-width.c:6:9)
+the block was allocated
+    at main (scanf-width.c:5:19)
+== scanf.c off exit=134
+Nome e idade: Maximiliano tem 20 anos
+error: exit with invalid exit status outside of [0..126)
+== scanf.c on exit=134
+Nome e idade: error: stack-buffer-overflow: write of 12 bytes by scanf, 0 bytes past the end of the variable 'nome' (8 bytes)
+    at main (scanf.c:7:9)
+== scanf.c strict exit=134
+Nome e idade: error: stack-buffer-overflow: write of 12 bytes by scanf, 0 bytes past the end of the variable 'nome' (8 bytes)
+    at main (scanf.c:7:9)
 == shift.c off exit=0
 1
 == shift.c on exit=134

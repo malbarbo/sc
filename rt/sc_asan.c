@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 #include <sys/types.h>
 
 #define SHADOW 0x110000u // scripts/flags.py
@@ -224,12 +225,11 @@ static void name_line(char *name) { // "a:6" is the variable a, at line 6
 }
 
 // the report of an access of n bytes at a, whose first bad byte is bad;
-// fn: the function of libc that does it
-static _Noreturn void access_error(uintptr_t a, uintptr_t n, int write, uintptr_t bad, const char *fn) {
+// fn: the function of libc that does it; room: n is the room it is told of
+// (fgets), which this input may not fill
+static _Noreturn void access_error(uintptr_t a, uintptr_t n, int write, uintptr_t bad, const char *fn, int room) {
   char msg[512], acc[96], w[64], b[32], name[128];
   uint8_t k = kind(bad);
-  // fgets, fread and read are checked for the room they are told of
-  int room = fn && (!strcmp(fn, "fgets") || !strcmp(fn, "fread") || !strcmp(fn, "read"));
   format(acc, sizeof acc, "%s of %s%s%s%s", write ? "write" : "read", room ? "up to " : "", bytes(b, sizeof b, n),
          fn ? " by " : "", fn ? fn : "");
   uintptr_t user, beg, size;
@@ -293,7 +293,12 @@ static _Noreturn void access_error(uintptr_t a, uintptr_t n, int write, uintptr_
 
 static void check(uintptr_t a, uintptr_t n, int write, const char *fn) {
   uintptr_t bad = first_bad(a, n);
-  if (bad) access_error(a, n, write, bad, fn);
+  if (bad) access_error(a, n, write, bad, fn, 0);
+}
+
+static void check_room(uintptr_t a, uintptr_t n, const char *fn) {
+  uintptr_t bad = first_bad(a, n);
+  if (bad) access_error(a, n, 1, bad, fn, 1);
 }
 
 static void check_str(const char *s, int write, const char *fn) { // a string and its 0
@@ -301,8 +306,8 @@ static void check_str(const char *s, int write, const char *fn) { // a string an
 }
 
 #define REPORT(n)                                                                                                     \
-  void __asan_report_load##n(uintptr_t a) { access_error(a, n, 0, first_bad(a, n) ?: a, 0); }                      \
-  void __asan_report_store##n(uintptr_t a) { access_error(a, n, 1, first_bad(a, n) ?: a, 0); }                     \
+  void __asan_report_load##n(uintptr_t a) { access_error(a, n, 0, first_bad(a, n) ?: a, 0, 0); }                      \
+  void __asan_report_store##n(uintptr_t a) { access_error(a, n, 1, first_bad(a, n) ?: a, 0, 0); }                     \
   void __asan_load##n(uintptr_t a) { check(a, n, 0, 0); }                                                            \
   void __asan_store##n(uintptr_t a) { check(a, n, 1, 0); }
 REPORT(1)
@@ -311,8 +316,8 @@ REPORT(4)
 REPORT(8)
 REPORT(16)
 
-void __asan_report_load_n(uintptr_t a, uintptr_t n) { access_error(a, n, 0, first_bad(a, n) ?: a, 0); }
-void __asan_report_store_n(uintptr_t a, uintptr_t n) { access_error(a, n, 1, first_bad(a, n) ?: a, 0); }
+void __asan_report_load_n(uintptr_t a, uintptr_t n) { access_error(a, n, 0, first_bad(a, n) ?: a, 0, 0); }
+void __asan_report_store_n(uintptr_t a, uintptr_t n) { access_error(a, n, 1, first_bad(a, n) ?: a, 0, 0); }
 void __asan_loadN(uintptr_t a, uintptr_t n) { check(a, n, 0, 0); }
 void __asan_storeN(uintptr_t a, uintptr_t n) { check(a, n, 1, 0); }
 
@@ -782,19 +787,104 @@ int __wrap_snprintf(char *d, size_t cap, const char *fmt, ...) {
 
 // the room the program says it has, not only what this input fills
 char *__wrap_fgets(char *s, int n, FILE *f) {
-  if (n > 0) check((uintptr_t)s, n, 1, "fgets");
+  if (n > 0) check_room((uintptr_t)s, n, "fgets");
   return __real_fgets(s, n, f);
 }
 
 size_t __wrap_fread(void *p, size_t size, size_t n, FILE *f) {
-  if (!size || n <= SIZE_MAX / size) check((uintptr_t)p, size * n, 1, "fread");
+  if (!size || n <= SIZE_MAX / size) check_room((uintptr_t)p, size * n, "fread");
   return __real_fread(p, size, n, f);
 }
 
 ssize_t __wrap_read(int fd, void *p, size_t n) {
-  check((uintptr_t)p, n, 1, "read");
+  check_room((uintptr_t)p, n, "read");
   return __real_read(fd, p, n);
 }
+
+// --- scanf: libc writes each conversion through its pointer. What the format
+// says the size of (%d, %9s, %c) is checked before the call, as the room of
+// fgets; a %s or %[ without a width, after it, for the conversions it made
+int __real_vfscanf(FILE *, const char *, va_list);
+int __real_vsscanf(const char *, const char *, va_list);
+
+// the pointers of fmt's conversions: done < 0, before the call, those of a
+// known size; else, after it, the strings without a width among the first
+// done conversions. A positional argument (%1$d) stops the check
+static void scan_args(const char *fn, const char *fmt, va_list ap, int done) {
+  for (const char *f = fmt; *f; f++) {
+    if (*f != '%') continue;
+    if (*++f == '%') continue;
+    int skip = *f == '*';
+    f += skip;
+    size_t width = 0;
+    while (*f >= '0' && *f <= '9') width = width * 10 + (size_t)(*f++ - '0');
+    if (*f == '$') return;
+    int alloc = *f == 'm';
+    f += alloc;
+    int len = 0; // h -1, hh -2, l 1, ll 2; j as ll; z and t as int; L as ll
+    if (*f == 'h') len = f[1] == 'h' ? (f += 2, -2) : (f++, -1);
+    else if (*f == 'l') len = f[1] == 'l' ? (f += 2, 2) : (f++, 1);
+    else if (*f == 'j' || *f == 'L' || *f == 'q') len = 2, f++;
+    else if (*f == 'z' || *f == 't') f++;
+    char c = *f;
+    if (!c) return;
+    if (c == '[') { // the set: a ] first is in it
+      f += f[1] == '^';
+      f += f[1] == ']';
+      while (f[1] && f[1] != ']') f++;
+      if (!*++f) return;
+    }
+    if (skip) continue;
+    void *p = va_arg(ap, void *);
+    uintptr_t a = (uintptr_t)p, n;
+    int str = c == 's' || c == '[' || c == 'S' || c == 'c' || c == 'C';
+    size_t esz = len == 1 || c == 'S' || c == 'C' ? sizeof(wchar_t) : 1;
+    if (done >= 0) {
+      if (c != 'n' && done-- == 0) return;
+      if ((c == 's' || c == '[' || c == 'S') && !width && !alloc)
+        check(a, esz == 1 ? strlen(p) + 1 : (wcslen(p) + 1) * esz, 1, fn);
+      continue;
+    }
+    if (alloc && str) n = sizeof(char *);
+    else if (c == 'c' || c == 'C') n = (width ? width : 1) * esz;
+    else if (str) {
+      if (width) check_room(a, (width + 1) * esz, fn);
+      continue;
+    } else if (strchr("aAeEfFgG", c)) n = len == 2 ? sizeof(long double) : len == 1 ? sizeof(double) : sizeof(float);
+    else if (c == 'p') n = sizeof(void *);
+    else n = len == 2 ? sizeof(long long) : len == 1 ? sizeof(long) : len == -1 ? sizeof(short) : len == -2 ? 1 : sizeof(int);
+    check(a, n, 1, fn);
+  }
+}
+
+static int checked_vfscanf(const char *fn, FILE *s, const char *str, const char *fmt, va_list ap) {
+  va_list before, after;
+  if (str) check_str(str, 0, fn);
+  va_copy(before, ap);
+  va_copy(after, ap);
+  scan_args(fn, fmt, before, -1);
+  va_end(before);
+  int r = str ? __real_vsscanf(str, fmt, ap) : __real_vfscanf(s, fmt, ap);
+  if (r > 0) scan_args(fn, fmt, after, r);
+  va_end(after);
+  return r;
+}
+
+int __wrap_vfscanf(FILE *s, const char *fmt, va_list ap) { return checked_vfscanf("fscanf", s, 0, fmt, ap); }
+int __wrap_vscanf(const char *fmt, va_list ap) { return checked_vfscanf("scanf", stdin, 0, fmt, ap); }
+int __wrap_vsscanf(const char *str, const char *fmt, va_list ap) { return checked_vfscanf("sscanf", 0, str, fmt, ap); }
+
+#define SCANF(name, ...)                                                                                               \
+  {                                                                                                                    \
+    va_list ap;                                                                                                        \
+    va_start(ap, fmt);                                                                                                 \
+    int r = checked_vfscanf(name, __VA_ARGS__, fmt, ap);                                                               \
+    va_end(ap);                                                                                                        \
+    return r;                                                                                                          \
+  }
+int __wrap_scanf(const char *fmt, ...) SCANF("scanf", stdin, 0)
+int __wrap_fscanf(FILE *s, const char *fmt, ...) SCANF("fscanf", s, 0)
+int __wrap_sscanf(const char *str, const char *fmt, ...) SCANF("sscanf", 0, str)
 
 // --- C++: a throw from libc++ (at, stoi) leaves frames without the pass's
 // __asan_handle_no_return

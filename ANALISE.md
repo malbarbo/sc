@@ -2248,7 +2248,7 @@ e `--global-base` (`rt_static()` no `flags.py`).
 - os interceptores que conferem os argumentos: `strcpy`, `strncpy`,
   `strcat`, `strncat`, `sprintf`, `snprintf`, `fgets`, `fread`, `read`,
   `getline` e `getdelim`, além de `memcpy`, `memmove` e `memset` (com a
-  sobreposição no `memcpy`);
+  sobreposição no `memcpy`). A família `scanf` veio na F4 (§39);
 - o `__cxa_throw` e o `__cxa_rethrow`, que limpam a *shadow* da pilha
   abandonada antes de lançar.
 
@@ -2544,3 +2544,47 @@ máquina carregada:
 | `std::map` de 100 mil chaves | 5,03 s | 4,72 s |
 
 **Os testes.** O `test/checks` ganhou o `sort-cmp.cpp`, um `sort` com `<=`.
+
+## 39. O `scanf` (F4)
+
+A `libsc_rt` passou a interceptar o `scanf`, o `fscanf`, o `sscanf` e as
+versões com `va_list`. Como os outros interceptores, ele vale no `on` e no
+`strict` (os nomes estão no `WRAP` do `flags.py`):
+
+```
+Nome e idade: error: stack-buffer-overflow: write of 12 bytes by scanf, 0 bytes past the end of the variable 'nome' (8 bytes)
+    at main (scanf.c:7:9)
+```
+
+**Como confere.** A escrita é feita dentro da libc, que não é instrumentada.
+Por isso o interceptor lê o formato e confere os ponteiros em dois momentos.
+
+*Antes da chamada*, o que o formato diz o tamanho:
+- os números, pelo modificador: `%d`, `%hd`, `%lld`, `%f`, `%lf`, `%p`, `%n`;
+- o `%c`, com a largura ou 1;
+- o `%ms`, um `char *`.
+
+O `%9s` e o `%9[` são conferidos pelo espaço que o programa diz ter, 10
+bytes, como o `fgets`, e o relato diz "write of up to".
+
+*Depois da chamada*, o `%s` e o `%[` sem largura, pelo que foi lido: o
+`strlen` mais 1. Só as conversões que o retorno conta são conferidas. É o
+que o ASan do compiler-rt também faz.
+
+**Os limites.**
+- Um `%s` sem largura já escreveu quando o relato sai. O programa para logo
+  em seguida, antes de usar a memória estragada.
+- Um argumento posicional (`%1$d`) para a conferência.
+- Um ponteiro nulo é avisado antes da chamada, mesmo que a entrada acabe
+  antes da conversão. É sempre um erro.
+
+**O `%9s` num array de 4** nem chega à execução no `on`: o
+`-Wfortify-source` está no E (§4.1 do plano) e dá erro de compilação. Por isso o
+teste usa um bloco do heap, que o clang não vê.
+
+**Os testes.** O `checks.py` passou a dar ao programa a entrada de
+`NOME.c.in`, quando ele existe. O `test/checks` ganhou:
+- `scanf.c`, um `%s` num array de 8 com "Maximiliano";
+- `scanf-width.c`, um `%9s` num bloco de 4 bytes, com uma entrada curta.
+
+No `off`, o `scanf.c` estraga a pilha e sai com um status inválido.
