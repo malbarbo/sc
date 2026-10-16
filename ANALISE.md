@@ -2167,9 +2167,31 @@ nos 20 programas corretos, em nenhum nível.
 `make learn` devolveu ao `sc.wasm` só 1 objeto (`NSAPI.cpp`) e 2 símbolos
 (`SanitizerMetadata::disableSanitizerForGlobal` e
 `hasBranchWeightOrigin`). O `sc.wasm` tem 19 668 486 bytes. O DWARF da F0
-continua cortado (F2b): o corpus não usa `-g`.
+ficou para a F2b (§33).
 
 E o `int-min.c` e o `vector-index.cpp` mudaram: no `on`, o primeiro diz
 `division of -2147483648 by -1 cannot be represented in type 'int'` (o
 UBSan pega antes do trap), e o segundo, `vector[] index out of bounds`. No
 `off`, o `v[5]` agora imprime 0 em silêncio (`NONE`).
+
+## 33. O DWARF no `sc.wasm` (F2b do PLANO-VERIFICACOES.md)
+
+A sessão sempre compila com `-gline-tables-only` (§31), mas o corpus não
+usava `-g`, e o `learn` tinha cortado o código do DWARF. O `sc.wasm`
+cortado parava com `unreachable` ao compilar com `-g`; o REPL não sentia,
+porque usa o `sc-engine-full`.
+
+Agora o corpus compila com `-gline-tables-only`, como uma sessão, as
+variantes que fazem o papel dela: os `pic-`, os `repl-` e os níveis (`-on`,
+`-strict`). Os programas sem sufixo continuam sem `-g`, para não perder o
+código gerado sem DWARF.
+
+O `make learn` devolveu uns 155 símbolos, nenhum objeto: o `CGDebugInfo` do
+clang e o DWARF do AsmPrinter (`DwarfDebug`, `DwarfCompileUnit`,
+`DwarfUnit`, `DIE`...). O `learn-native` não mudou nada. O `sc.wasm` foi de
+19 668 486 para 19 879 645 bytes (+211 KB, +1,1%), abaixo do teto de 0,8 MB
+estimado no plano (§6). Um objeto compilado com `-g` no `sc.wasm` é igual
+ao do `sc-full.wasm`.
+
+O `make test`, o `test-warn` e o `test-native` deram 0 diferença, e o
+`checkinv` deu SAME.

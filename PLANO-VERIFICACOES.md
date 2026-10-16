@@ -610,6 +610,10 @@ aluno, com `-gline-tables-only` em toda sessão; o `test-split` com `-g`
 `pattern`, e um `std.pcm` por nível no corpus. Uma célula leva 102 ms no
 `on` contra 61 ms no `off`.
 
+**A F2b está feita** (ANALISE.md §33): o corpus compila os `pic-`, os
+`repl-` e os níveis com `-gline-tables-only`, e o `learn` devolveu o DWARF
+ao `sc.wasm` (+211 KB).
+
 A F1 vem primeiro, porque é o alicerce:
 
 - o `sc_inv` passa a aceitar e conferir as flags;

@@ -23,14 +23,16 @@ The programs run again at each level of --safety but off (<name>-on,
 behaviour on purpose (c-testsuite, the gcc torture tests) with the errors of
 the levels as warnings. Their checks at run time take libsc_rt, and the
 programs in test/mod a std module of their level (std-pcm-on...): it keeps
-the macros it was built with, libc++'s hardening among them.
+the macros it was built with, libc++'s hardening among them. As a REPL
+session does, pic-, repl- and the levels compile with -gline-tables-only:
+the debug info, for where a trap is (ANALISE.md §31, §33).
 """
 from corpuslib import norm_hash, diff
 import hashlib, re, json, os, subprocess, sys, glob
 from concurrent.futures import ThreadPoolExecutor
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
-from flags import FLAGS, CXXFLAGS, MODFILE, iface, gnu17, pic, safety, checks, solibs, res  # the engine's flags
+from flags import FLAGS, CXXFLAGS, MODFILE, iface, gnu17, pic, lines, safety, checks, solibs, res  # the engine's flags
 B = os.environ.get('SC_BUILD', f'{R}/build')
 RES = res(B)
 SR = f'{B}/sysroot'  # wasi-sdk's libc with libc++, libc++abi and libunwind built from the pin with exceptions
@@ -137,10 +139,10 @@ def one1(p, d, f, n, kind):
     obj = f'{tmp}/{n}.o'
     ub = p.startswith((f'{B}/c-testsuite/', f'{B}/gcc-ts/'))  # undefined behaviour on purpose
     fl = CXXFLAGS if cxx else gnu17(FLAGS) if ub else FLAGS
-    fl = pic(fl) if kind == 'pic' else fl
+    fl = lines(pic(fl)) if kind == 'pic' else fl
     level = kind if kind in SAFETY else None
     if level:
-        fl, kind = safety(fl, level, cxx, file=True, errors=not ub), True
+        fl, kind = lines(safety(fl, level, cxx, file=True, errors=not ub)), True
     txt, o, ok = cc1(d, f, n, fl, d == f'{R}/test/mod', level)
     if o and kind is not True:
         txt += 'obj ' + hashlib.md5(o).hexdigest() + '\n'
@@ -174,7 +176,7 @@ def repl(seq):
     for f in files:
         n = f'repl-{os.path.splitext(f)[0]}'
         cxx = f.endswith(CXXEXT)
-        t, o, ok = cc1(d, f, n, pic(CXXFLAGS if cxx else FLAGS), 'import std;' in open(f'{d}/{f}').read())
+        t, o, ok = cc1(d, f, n, lines(pic(CXXFLAGS if cxx else FLAGS)), 'import std;' in open(f'{d}/{f}').read())
         txt += f'== {f}\n' + t
         if os.path.exists(f'{tmp}/{n}.o'):
             if ok and o:
