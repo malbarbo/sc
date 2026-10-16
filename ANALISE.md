@@ -2195,3 +2195,136 @@ ao do `sc-full.wasm`.
 
 O `make test`, o `test-warn` e o `test-native` deram 0 diferença, e o
 `checkinv` deu SAME.
+
+## 34. O ASan (F3 do PLANO-VERIFICACOES.md)
+
+No `on` e no `strict`, o `sc` passa a pegar os erros de memória: o
+estouro de um bloco, de uma variável local, de um global ou de um VLA, o
+uso depois do `free` ou depois do escopo, o `free` duplo ou de algo que não
+veio do `malloc`, e o vetor que realoca debaixo de uma referência. O
+relato sai pelo `__sc_rt_report` da F2, com os frames do aluno:
+
+```
+error: heap-use-after-free: read of 4 bytes, 4 bytes into a freed block of 8 bytes
+    at libera (use-after-free.c:12:24)
+    at main (use-after-free.c:24:5)
+```
+
+**As flags** (`checks()` e `ASAN` no `flags.py`):
+- `-fsanitize=address` junto do UBSan;
+- `-fsanitize-address-use-after-scope`;
+- `-fsanitize-address-use-after-return=never`: a pilha falsa precisaria de
+  um alocador de quadros no runtime, e o caso é raro no código de aluno
+  (o `-Wreturn-stack-address` já é erro);
+- `-fsanitize-address-globals-dead-stripping`, como o driver no wasm;
+- `-mllvm -asan-use-stack-safety=0`: com a análise, o passe deixa de
+  instrumentar os acessos que ela prova seguros, e no -O0 ela custa mais
+  do que poupa;
+- `-mllvm -asan-mapping-offset=0x110000`, o layout abaixo.
+
+O `sc_inv` aceita essas flags, e com o ASan põe o `DiscardValueNames` em
+falso, como o cc1: os nomes das variáveis vão para a descrição do quadro,
+e o relato os usa. O `sc_backend` roda o `AddressSanitizerPass` depois das
+corrotinas, no mesmo ponto do pipeline do clang. O `checkinv` dá 20 SAME, e
+os objetos do engine são iguais aos do clang do pin.
+
+**A memória.** A pilha vem primeiro, em [16, 1 MiB); a *shadow*, de
+512 MiB (um byte para cada 8 dos 4 GiB), começa em 0x110000; o programa
+vem depois, em 0x20110000. Com o offset 0, a *shadow* cairia sobre a pilha
+e os dados; com a pilha primeiro, ela cabe logo depois. O `__asan_init`
+envenena a *shadow* da página nula (`fe`), e um acesso por ponteiro nulo é
+relatado como tal. O loader reserva a *shadow* quando o primeiro grupo exporta o
+`__asan_init`; os programas estáticos do corpus ligam com `--stack-first`
+e `--global-base` (`rt_static()` no `flags.py`).
+
+**O runtime** é `rt/sc_asan.c`, na `libsc_rt` (umas 700 linhas):
+- os callbacks do passe (`__asan_report_*`, `__asan_set_shadow_*`, os
+  globais, os `alloca`, o `__asan_handle_no_return`);
+- o alocador: cada bloco tem à esquerda uma zona vermelha com um cabeçalho
+  de 32 bytes e à direita uma zona vermelha que cresce com o bloco, como a
+  do compiler-rt. Um bloco liberado espera numa quarentena FIFO de 64 MiB
+  antes de voltar à libc;
+- as anotações dos contêineres da libc++ (`vector` e `deque`);
+- os interceptores que conferem os argumentos: `strcpy`, `strncpy`,
+  `strcat`, `strncat`, `sprintf`, `snprintf`, `fgets`, `fread`, `read`,
+  `getline` e `getdelim`, além de `memcpy`, `memmove` e `memset` (com a
+  sobreposição no `memcpy`);
+- o `__cxa_throw` e o `__cxa_rethrow`, que limpam a *shadow* da pilha
+  abandonada antes de lançar.
+
+**Os nomes do `--wrap`.** O runtime substitui uma função da libc com o nome
+`__wrap_X` e chama a original como `__real_X`, como o `--wrap` do wasm-ld.
+Os programas estáticos ligam com `--wrap=X`; o loader faz a mesma
+resolução para os objetos do REPL: um import de `X` vai para `__wrap_X`, se
+alguém o define, e `__real_X` vai para `X`. A libc chama o seu próprio
+`malloc` e não passa pelo wrap no REPL: um bloco que ela aloca (`strdup`)
+não tem cabeçalho, e o `free` o reconhece e o devolve direto. O runtime não
+chama o `snprintf` (seria o seu próprio wrap): usa um `format()` sobre o
+`vsnprintf`.
+
+**O REPL.** Depois de um trap, a máquina limpa a *shadow* da pilha
+abandonada (`__asan_unpoison_memory_region` de 16 ao topo). Os globais de
+cada célula são registrados ao carregar o objeto. Uma sessão continua
+depois de um relato (`test/checks/heap.c.repl`).
+
+**Um defeito do ASan com as exceções do wasm**
+(`llvm/asan-cleanupret.patch`). O passe trata todo `cleanupret` como uma
+saída da função e, em cada um, regrava a *shadow* do quadro inteiro, mesmo
+quando a exceção vai para outro bloco de limpeza da mesma função. No -O0,
+com os `always_inline` da libc++ dentro do `main`, o quadro de um programa
+com `std::format` tem 2,4 KB de *shadow*, regravados em 180 blocos de
+limpeza. O `make learn` deu timeout no `c18_cxx23.cpp`. O patch (4 linhas)
+conta só o `cleanupret` que sai da função; além do tamanho, o comportamento
+antigo tirava as zonas vermelhas de um quadro ainda vivo. No
+`c18_cxx23.cpp`, no `on`, com o clang do pin:
+
+| | só UBSan (F2) | ASan, sem o patch | ASan, com o patch |
+|---|---|---|---|
+| código | 545 KB | 2 516 KB | 1 103 KB |
+| `main` | 27 KB | 1 470 KB | 82 KB |
+| compilação | 5,9 s | 9,5 s | 6,6 s |
+| 1ª execução (o wasmtime compila) | — | 6,0 s | 2,1 s |
+
+Sem o *use-after-scope*, o `main` sem o patch ainda teria 368 KB. O que
+sobra com o patch é o custo normal do ASan no -O0: cerca de 2x o código de
+cada função.
+
+**O custo**, o melhor de 3, com o `sc`:
+
+| | `off` | `on` |
+|---|---|---|
+| `sc c3_stl.cpp` | 3,57 s | 4,12 s (+16%) |
+| `sc c1_basics.cpp` | 1,89 s | 2,12 s (+12%) |
+| `sc c18_cxx23.cpp` | 5,41 s | 9,31 s (+72%) |
+| `sc p1.c` | 0,106 s | 0,118 s |
+| REPL: 42 células pequenas com `vector`, `map` e `string`, por célula | 68 ms | 115 ms |
+
+A F2 media 61 ms contra 102 ms por célula numa máquina menos carregada: o
+ASan acrescenta pouco ao UBSan no REPL. Uma célula fica perto de 0,1 s.
+
+**Os cortes.** O `make learn` devolveu ao `sc.wasm` o objeto
+`AddressSanitizer.cpp` e 2 símbolos (`AddressSanitizerPass::run` e
+`removeASanIncompatibleFnAttributes`). O `sc.wasm` foi de 19 879 645 para
+19 957 337 bytes (+78 KB, +0,4%). O `learn-native` não mudou nada.
+
+**O aviso da regra dos três** (`-Wdeprecated-copy-with-user-provided-dtor`)
+saiu do A para o S, como o plano previa (§4): o ASan pega o `delete[]`
+duplo real (`test/checks/regra-dos-tres.cpp`). No `test/aluno`, o
+`rev-dtor.cpp` deixou de avisar no `on`.
+
+**Os testes.** O `test/checks` ganhou 12 programas, um por tipo de erro;
+cada um dá o relato com as linhas do aluno no `on` e no `strict`. O
+`test/aluno` continua sem relato nos 20 programas corretos, em nenhum
+nível. O `make test`, o `test-warn`, o `test-native` e o `test-split` deram
+0 diferença.
+
+**Fica para depois:**
+- a pilha da alocação e do `free` no relato: precisa de uma função do host
+  que devolva os frames do momento (uma F3b);
+- os vazamentos no fim do `sc FILE` (F4);
+- a libc não é instrumentada: um estouro dentro de uma função dela que não
+  tem interceptor não é visto.
+
+Um defeito antigo, de antes da F3: no `sc FILE`, um programa com `setjmp`
+e `longjmp` falha na ligação com `undefined symbol: __c_longjmp`, também
+no `off`.

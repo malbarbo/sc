@@ -106,7 +106,8 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   CG.DisableFree = true;
   CG.ClearASTBeforeBackend = true;
   CG.VerifyModule = false;
-  CG.DiscardValueNames = true;
+  // as cc1 does: ASan names the locals of a frame by their allocas
+  CG.DiscardValueNames = !LO.Sanitize.has(SanitizerKind::Address);
   CG.RelocationModel = O.PIC ? llvm::Reloc::PIC_ : llvm::Reloc::Static;
   CG.setFramePointer(CodeGenOptions::FramePointerKind::None);
   CG.BBSections = "none";
@@ -117,6 +118,10 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   CG.StrictLifetimes = true;
   CG.SanitizeAddressUseOdrIndicator = !O.NoOdrIndicator;
   CG.SanitizeMemoryParamRetval = !O.NoParamRetval;
+  CG.SanitizeAddressUseAfterScope = O.AsanUseAfterScope;
+  if (O.AsanNoUseAfterReturn)
+    CG.setSanitizeAddressUseAfterReturn(llvm::AsanDetectStackUseAfterReturnMode::Never);
+  CG.SanitizeAddressGlobalsDeadStripping = O.AsanGlobalsDeadStripping;
   Kinds(O.SanitizeTrap, CG.SanitizeTrap);
   Kinds(O.SanitizeMerge, CG.SanitizeMergeHandlers);
   CG.UseInitArray = true;
@@ -198,6 +203,7 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   FO.LLVMArgs = {"-wasm-enable-sjlj", "-wasm-use-legacy-eh=false"};
   if (O.CXX)
     FO.LLVMArgs.insert(FO.LLVMArgs.begin(), "-wasm-enable-eh");
+  FO.LLVMArgs.insert(FO.LLVMArgs.end(), O.AsanLLVMArgs.begin(), O.AsanLLVMArgs.end());
   FO.DashX = InputKind(L);
   FO.OutputFile = O.Output;
   FO.Inputs.push_back(FrontendInputFile(O.Input, InputKind(L)));
@@ -234,7 +240,11 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O, std::string &E
     llvm::StringRef A = Args[i];
     auto Next = [&]() -> const char * { return i + 1 < Args.size() ? Args[++i] : ""; };
     auto *FV = llvm::find_if(FixedValue, [&](auto &F) { return F.first == A; });
-    if (FV != std::end(FixedValue)) {
+    if (A == "-mllvm" && i + 1 < Args.size() &&
+        (llvm::StringRef(Args[i + 1]).starts_with("-asan-mapping-offset=") ||
+         llvm::StringRef(Args[i + 1]) == "-asan-use-stack-safety=0"))
+      O.AsanLLVMArgs.push_back(Next());
+    else if (FV != std::end(FixedValue)) {
       llvm::StringRef V = Next();
       if (!FV->second.contains(V)) {
         Error = ("unsupported value of " + A + ": '" + V + "'").str();
@@ -256,6 +266,9 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O, std::string &E
     else if (A == "-ftrivial-auto-var-init=pattern") O.PatternInit = true;
     else if (A == "-fno-sanitize-memory-param-retval") O.NoParamRetval = true;
     else if (A == "-fno-sanitize-address-use-odr-indicator") O.NoOdrIndicator = true;
+    else if (A == "-fsanitize-address-use-after-scope") O.AsanUseAfterScope = true;
+    else if (A == "-fsanitize-address-use-after-return=never") O.AsanNoUseAfterReturn = true;
+    else if (A == "-fsanitize-address-globals-dead-stripping") O.AsanGlobalsDeadStripping = true;
     else if (A == "-I") O.Include.push_back(Next());
     else if (A == "-D") O.Macros.push_back(Next());
     else if (A.starts_with("-fsanitize=") || A.starts_with("-fsanitize-trap=") || A.starts_with("-fsanitize-merge=")) {

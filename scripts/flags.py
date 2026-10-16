@@ -53,15 +53,15 @@ A = ['float-overflow-conversion', 'float-zero-conversion', 'string-conversion', 
      'tautological-value-range-compare', 'unreachable-code', 'implicit-fallthrough', 'comma', 'main',
      'main-return-type', 'array-bounds-pointer-arithmetic']
 A_C = ['shift-sign-overflow', 'default-const-init-var', 'default-const-init-field']
-A_CXX = ['shadow-field-in-constructor-modified', 'non-virtual-dtor', 'deprecated-copy-with-user-provided-dtor',
-         'lifetime-safety-permissive']
+A_CXX = ['shadow-field-in-constructor-modified', 'non-virtual-dtor', 'lifetime-safety-permissive']
 # §4, S: style, conversions, portability; strict only. P: the GNU and clang
 # extensions, with -Wpedantic (decision 6, §11)
 S = ['alloca', 'anon-enum-enum-conversion', 'assign-enum', 'bad-function-cast', 'c++-compat', 'c++-hidden-decl',
      'c++-keyword', 'c++-unterminated-string-initialization', 'cast-align', 'cast-function-type-strict', 'cast-qual',
      'class-varargs', 'conditional-uninitialized', 'conversion', 'ctad-maybe-unsupported',
-     'deprecated-copy-with-dtor', 'double-promotion', 'dtor-name', 'duplicate-decl-specifier', 'duplicate-enum',
-     'enum-compare-conditional', 'enum-enum-conversion', 'enum-float-conversion', 'expansion-to-defined',
+     'deprecated-copy-with-dtor', 'deprecated-copy-with-user-provided-dtor', 'double-promotion', 'dtor-name',
+     'duplicate-decl-specifier', 'duplicate-enum', 'enum-compare-conditional', 'enum-enum-conversion',
+     'enum-float-conversion', 'expansion-to-defined',
      'extra-semi', 'extra-semi-stmt', 'float-conversion', 'float-equal', 'format-nonliteral', 'format-signedness',
      'format-type-confusion', 'four-char-constants', 'header-hygiene', 'ignored-base-class-qualifiers',
      'implicit-float-conversion', 'implicit-int-conversion', 'implicit-int-conversion-on-negation',
@@ -84,17 +84,32 @@ U = ['alignment', 'array-bounds', 'bool', 'builtin', 'enum', 'float-cast-overflo
      'shift-exponent', 'signed-integer-overflow', 'unreachable', 'vla-bound']
 # §5.3: libc++'s hardening; off: none (the sysroot is built with fast)
 HARDENING = {'off': 'NONE', 'on': 'EXTENSIVE', 'strict': 'EXTENSIVE'}
+# §5.2: ASan's shadow memory is at SHADOW, after the stack: 512 MiB, the
+# shadow of the 4 GiB, and the program after it. Not a power of 2, which
+# the pass would OR in (libsc_rt and the loader know it too)
+SHADOW = 0x110000
+# what libsc_rt puts in place of libc's and libc++abi's functions (rt/sc_asan.c),
+# with the names of wasm-ld's --wrap: the allocator, the functions of libc
+# that write the program's memory, and the throws of libc++
+WRAP = ['malloc', 'free', 'calloc', 'realloc', 'reallocarray', 'aligned_alloc', 'posix_memalign',
+        'malloc_usable_size', 'getdelim', 'getline', 'strcpy', 'strncpy', 'strcat', 'strncat', 'sprintf',
+        'snprintf', 'fgets', 'fread', 'read', '__cxa_throw', '__cxa_rethrow']
+# use-after-return would take a fake stack; the stack safety analysis takes
+# ScalarEvolution, which the engine leaves out
+ASAN = ['-fsanitize-address-use-after-scope', '-fsanitize-address-use-after-return=never',
+        '-fsanitize-address-globals-dead-stripping', '-mllvm', '-asan-use-stack-safety=0',
+        '-mllvm', f'-asan-mapping-offset={SHADOW:#x}']
 
 
 def checks(fl, level, cxx):
-    """fl with the checks at run time of a level of --safety (§5): UBSan,
-    libc++'s hardening and the locals' pattern; off has none"""
+    """fl with the checks at run time of a level of --safety (§5): ASan,
+    UBSan, libc++'s hardening and the locals' pattern; off has none"""
     fl = fl + ['-D', f'_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_{HARDENING[level]}'] * cxx
     if level == 'off':
         return fl
     u = ','.join(U)
-    return fl + [f'-fsanitize={u}', f'-fsanitize-merge={u}', '-fno-sanitize-memory-param-retval',
-                 '-fno-sanitize-address-use-odr-indicator', '-ftrivial-auto-var-init=pattern']
+    return fl + [f'-fsanitize=address,{u}', f'-fsanitize-merge={u}', '-fno-sanitize-memory-param-retval',
+                 '-fno-sanitize-address-use-odr-indicator', '-ftrivial-auto-var-init=pattern'] + ASAN
 
 
 def safety(fl, level, cxx, file=False, errors=True):
@@ -140,6 +155,16 @@ def solibs(cxx, level=None):
     a level of --safety with checks, libsc_rt, their handlers"""
     return ['-L/sysroot/lib/wasm32-wasip1'] + ['-lsc_rt'] * (level in ('on', 'strict')) + ['-lc++', '-lc++abi'] * cxx + [
         '-lsetjmp', '-lc', '/res/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a']
+
+
+def rt_static(level):
+    """what a static program is linked with at a level of --safety with
+    checks (the corpus's): libsc_rt with its wraps, and the memory of the
+    REPL's loader, the stack of 1 MiB first and the data after ASan's shadow"""
+    if level not in ('on', 'strict'):
+        return []
+    return ['-lsc_rt', '--stack-first', '-z', 'stack-size=1048576', f'--global-base={SHADOW + (512 << 20)}'] + [
+        f'--wrap={x}' for x in WRAP]
 
 
 def res(build):

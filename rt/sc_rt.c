@@ -30,6 +30,18 @@ __attribute__((noinline)) _Noreturn void __sc_rt_report(const char *msg) {
 
 static _Noreturn void report(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+// snprintf, which the runtime wraps (sc_asan.c): its own calls would come
+// back to it
+static int format(char *buf, size_t n, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+
+static int format(char *buf, size_t n, const char *fmt, ...) {
+  __builtin_va_list ap;
+  __builtin_va_start(ap, fmt);
+  int r = vsnprintf(buf, n, fmt, ap);
+  __builtin_va_end(ap);
+  return r;
+}
+
 static _Noreturn void report(const char *fmt, ...) {
   char msg[512];
   __builtin_va_list ap;
@@ -69,15 +81,15 @@ static const char *text(char *buf, size_t n, const Type *t, Value v) {
     double d = width(t) == 32 ? (double)*(float *)&v
              : width(t) == 64 ? *(double *)v
              : (double)*(long double *)v;
-    snprintf(buf, n, "%g", d);
+    format(buf, n, "%g", d);
     return buf;
   }
   if (t->kind != 0) return "<unknown>";
   __int128 x = integer(t, v);
   if (x >= INT64_MIN && x <= INT64_MAX) {
-    snprintf(buf, n, "%lld", (long long)x);
+    format(buf, n, "%lld", (long long)x);
   } else if (x >= 0 && (unsigned __int128)x <= UINT64_MAX) {
-    snprintf(buf, n, "%llu", (unsigned long long)x);
+    format(buf, n, "%llu", (unsigned long long)x);
   } else { // 128 bits
     char d[48];
     int k = sizeof d;
@@ -85,7 +97,7 @@ static const char *text(char *buf, size_t n, const Type *t, Value v) {
     d[--k] = 0;
     do d[--k] = '0' + (char)(u % 10); while (u /= 10);
     if (x < 0) d[--k] = '-';
-    snprintf(buf, n, "%s", d + k);
+    format(buf, n, "%s", d + k);
   }
   return buf;
 }

@@ -614,6 +614,15 @@ aluno, com `-gline-tables-only` em toda sessão; o `test-split` com `-g`
 `repl-` e os níveis com `-gline-tables-only`, e o `learn` devolveu o DWARF
 ao `sc.wasm` (+211 KB).
 
+**A F3 está feita** (ANALISE.md §34): o passe do ASan no `sc_backend`, o
+runtime em `rt/sc_asan.c`, a *shadow* em 0x110000, o alocador com
+quarentena, os nomes do `--wrap` no loader e o `__cxa_throw`. O
+`llvm/asan-cleanupret.patch` corrige o ASan com as exceções do wasm. O
+`-Wdeprecated-copy-with-user-provided-dtor` foi para o S. Uma célula leva
+115 ms no `on` contra 68 ms no `off`, e o `sc.wasm` cresceu 78 KB. A pilha
+da alocação e do `free` no relato ficou de fora: precisa de uma função do
+host.
+
 A F1 vem primeiro, porque é o alicerce:
 
 - o `sc_inv` passa a aceitar e conferir as flags;

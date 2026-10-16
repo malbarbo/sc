@@ -289,6 +289,11 @@ impl Machine {
             Err(e) => {
                 eprintln!("{}", runtime_error(&e, &mut self.loader, &self.build));
                 let _ = self.loader.set_stack_pointer(sp);
+                // the frames the trap left below sp keep their shadow (ASan)
+                if let (true, Some(top)) = (self.loader.defines("__asan_unpoison_memory_region"), sp.i32()) {
+                    self.loader.arm();
+                    let _ = self.loader.call("__asan_unpoison_memory_region", &[Val::I32(16), Val::I32(top - 16)]);
+                }
                 Outcome::Error
             }
         }

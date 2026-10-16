@@ -1,0 +1,19 @@
+diff --git a/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp b/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+index 65ab49d4e..59c47cbe8 100644
+--- a/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
++++ b/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+@@ -1179,8 +1179,12 @@ struct FunctionStackPoisoner : public InstVisitor<FunctionStackPoisoner> {
+   /// Collect all Resume instructions.
+   void visitResumeInst(ResumeInst &RI) { RetVec.push_back(&RI); }
+ 
+-  /// Collect all CatchReturnInst instructions.
+-  void visitCleanupReturnInst(CleanupReturnInst &CRI) { RetVec.push_back(&CRI); }
++  /// Collect the CleanupReturnInst instructions that leave the function: one
++  /// that unwinds to another pad of it does not end the frame.
++  void visitCleanupReturnInst(CleanupReturnInst &CRI) {
++    if (CRI.unwindsToCaller())
++      RetVec.push_back(&CRI);
++  }
+ 
+   void unpoisonDynamicAllocasBeforeInst(Instruction *InstBefore,
+                                         Value *SavedStack) {

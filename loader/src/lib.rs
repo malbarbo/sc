@@ -24,6 +24,14 @@
 //! imports it first, so a C++ exception or a longjmp crosses modules. WASI calls go through a shim module
 //! that exports the memory, because wasmtime-wasi reads it from the caller.
 //!
+//! With ASan's runtime (libsc_rt, at the levels of `--safety` with checks),
+//! the memory has its shadow after the stack, and the modules after it: see
+//! [`SHADOW`]. The runtime puts its functions in place of libc's (the
+//! allocator, the functions that write the program's memory) with the names
+//! of wasm-ld's `--wrap`: an import of `malloc` binds to `__wrap_malloc`
+//! when a module defines it, and an import of `__real_malloc` to `malloc`.
+//! libc calls its own functions directly, so they stay libc's for it.
+//!
 //! An entry may refer to what a later entry defines, as a declaration before
 //! its definition in one file: a GOT.mem import is set when the symbol comes,
 //! and a GOT.func import or a stub gets a table slot at once, which the
@@ -41,6 +49,11 @@ use wasmtime_wasi::p1::{self, WasiP1Ctx};
 
 pub const STACK: u32 = 1 << 20; // the default; the stack is first, so an overflow traps below 0
 const PAGE: u32 = 1 << 16;
+/// ASan's shadow memory: one byte for each 8 of the 4 GiB, from here
+/// (`-asan-mapping-offset`, scripts/flags.py), after the stack. The memory
+/// starts with all of it: a check of any address reads it.
+pub const SHADOW: u32 = 0x11_0000;
+const SHADOW_END: u32 = SHADOW + (1 << 29);
 // A variable not defined yet has an address from here up, each its own MiB,
 // above the most the memory grows to: reading or writing it traps, and
 // [`Loader::undefined_at`] names it.
@@ -91,6 +104,7 @@ pub struct Loader {
     later: Vec<(String, Global)>, // GOT.mem imports of symbols not defined yet
     undefined: Vec<String>,       // what the addresses from UNDEFINED stand for
     slots: HashMap<String, u32>,  // table slots of functions not defined yet
+    asan: bool,                   // the memory has ASan's shadow
 }
 
 fn dylink(bytes: &[u8]) -> Result<Dylink> {
@@ -172,7 +186,7 @@ impl Loader {
         linker.define(&mut store, "env", "memory", memory)?;
         let mut l = Loader { engine, store, linker, memory, table, sp, wasi: HashMap::new(), libdirs,
                              loaded: HashSet::new(), bump: Some(stack), later: Vec::new(), undefined: Vec::new(),
-                             slots: HashMap::new() };
+                             slots: HashMap::new(), asan: false };
         l.define("__stack_low", Sym::Data(16), false);
         l.define("__stack_high", Sym::Data(stack), false);
         Ok(l)
@@ -208,6 +222,16 @@ impl Loader {
         let module = Module::new(&self.engine, bytes).with_context(|| name.to_string())?;
         out.push(Pending { name: name.to_string(), module, info });
         Ok(())
+    }
+
+    /// The symbol an import of `name` binds to: `__wrap_name` when a module
+    /// defines it, `name` for `__real_name` (wasm-ld's `--wrap`).
+    fn target(&self, name: &str) -> String {
+        if let Some(n) = name.strip_prefix("__real_") {
+            return n.to_string();
+        }
+        let wrap = format!("__wrap_{name}");
+        if self.store.data().syms.contains_key(&wrap) { wrap } else { name.to_string() }
     }
 
     /// Calls the function `name` the modules define.
@@ -321,7 +345,7 @@ impl Loader {
     fn stubs(&mut self, module: &Module) -> Result<HashMap<String, Func>> {
         let need: Vec<(String, FuncType)> = module.imports()
             .filter_map(|i| match (i.module(), i.ty()) {
-                ("env", ExternType::Func(ft)) if !self.defines(i.name()) =>
+                ("env", ExternType::Func(ft)) if !self.defines(&self.target(i.name())) =>
                     Some((i.name().to_string(), ft)),
                 _ => None,
             })
@@ -331,7 +355,7 @@ impl Loader {
         }
         let mut wat = String::from("(module (import \"env\" \"__indirect_function_table\" (table 0 funcref))\n");
         for (k, (n, ft)) in need.iter().enumerate() {
-            let slot = self.reserve_slot(n, Some(ft))?;
+            let slot = self.reserve_slot(&self.target(n), Some(ft))?;
             let (sig, args) = wat_sig(ft);
             wat += &format!("(type $t{k} (func {sig})) (func (export \"s{k}\") (type $t{k}) {args} i32.const {slot} call_indirect (type $t{k}))\n");
         }
@@ -390,6 +414,15 @@ impl Loader {
     pub fn load_bytes(&mut self, name: &str, bytes: &[u8], shadow: bool) -> Result<()> {
         let mut group = Vec::new();
         self.collect(name, bytes, &mut HashSet::new(), &mut group)?;
+        if group.iter().any(|p| p.module.get_export("__asan_init").is_some()) && !self.asan {
+            // the shadow, after the stack: the first group has the memory to itself
+            match self.bump {
+                Some(b) if b <= SHADOW => self.bump = Some(SHADOW_END),
+                _ => bail!("ASan's runtime comes after the first modules, or the stack is over {SHADOW} bytes"),
+            }
+            self.reserve(SHADOW_END)?;
+            self.asan = true;
+        }
         self.wasi_shim(&group)?;
         let mut got: Vec<(String, Global, bool, bool)> = Vec::new(); // name, global, func?, weak?
         let mut insts = Vec::new();
@@ -413,11 +446,11 @@ impl Loader {
                     ("env", "__table_base", _) => Global::new(&mut self.store, konst.clone(), Val::I32(table_base as i32))?.into(),
                     ("GOT.mem" | "GOT.func", _, ExternType::Global(_)) => {
                         let g = Global::new(&mut self.store, GlobalType::new(ValType::I32, Mutability::Var), Val::I32(0))?;
-                        got.push((n.to_string(), g, m == "GOT.func", weak));
+                        got.push((self.target(n), g, m == "GOT.func", weak));
                         g.into()
                     }
                     ("wasi_snapshot_preview1", _, _) => self.wasi[n].into(),
-                    ("env", _, ExternType::Func(_)) => match self.store.data().syms.get(n) {
+                    ("env", _, ExternType::Func(_)) => match self.store.data().syms.get(&self.target(n)) {
                         Some((Sym::Func(f), _)) => (*f).into(),
                         _ => stubs[n].into(),
                     },

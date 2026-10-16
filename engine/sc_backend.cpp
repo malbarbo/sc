@@ -31,6 +31,7 @@
 #include "llvm/Transforms/Coroutines/CoroSplit.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
+#include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 
 using namespace clang;
 using namespace llvm;
@@ -65,10 +66,13 @@ static void initTargetOptions(const CompilerInstance &CI, llvm::TargetOptions &O
   Options.MCOptions.PreserveAsmComments = CG.PreserveAsmComments;
 }
 
-// The end of the O0 pipeline (PassBuilder's buildCoroWrapper): lowers the
-// llvm.coro.* intrinsics of a C++20 coroutine, which the backend cannot select.
-// The analysis managers hold only what these passes ask for.
-static void runCoroPasses(llvm::Module &M, TargetMachine &TM, const TargetLibraryInfoImpl &TLII) {
+// The end of the O0 pipeline: PassBuilder's buildCoroWrapper, which lowers
+// the llvm.coro.* intrinsics of a C++20 coroutine (the backend cannot select
+// them), then ASan's pass, which BackendUtil's addSanitizers adds last
+// (PLANO-VERIFICACOES.md §5.2). The analysis managers hold only what these
+// passes ask for: ASan's stack safety analysis is off (-asan-use-stack-safety=0).
+static void runModulePasses(llvm::Module &M, TargetMachine &TM, const TargetLibraryInfoImpl &TLII,
+                            const CodeGenOptions &CG, const LangOptions &LO) {
   FunctionAnalysisManager FAM;
   CGSCCAnalysisManager CGAM;
   ModuleAnalysisManager MAM;
@@ -97,6 +101,15 @@ static void runCoroPasses(llvm::Module &M, TargetMachine &TM, const TargetLibrar
   CoroPM.addPass(GlobalDCEPass());
   ModulePassManager MPM;
   MPM.addPass(CoroConditionalWrapper(std::move(CoroPM)));
+  if (LO.Sanitize.has(SanitizerKind::Address)) {
+    AddressSanitizerOptions Opts;
+    Opts.Recover = CG.SanitizeRecover.has(SanitizerKind::Address);
+    Opts.UseAfterScope = CG.SanitizeAddressUseAfterScope;
+    Opts.UseAfterReturn = CG.getSanitizeAddressUseAfterReturn();
+    // no globals GC on wasm (BackendUtil's asanUseGlobalsGC)
+    MPM.addPass(AddressSanitizerPass(Opts, /*UseGlobalGC=*/false, CG.SanitizeAddressUseOdrIndicator,
+                                     CG.getSanitizeAddressDtor()));
+  }
   MPM.run(M, MAM);
 }
 
@@ -143,14 +156,14 @@ void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
                                          Options.EABIVersion, Options.MCOptions.ABIName,
                                          Options.VecLib));
   };
-  // the coroutine passes run after the inliner and before codegen
+  // the coroutine passes and ASan run after the inliner and before codegen
   {
     legacy::PassManager IPM;
     addImmutable(IPM);
     IPM.add(createAlwaysInlinerLegacyPass(/*InsertLifetime=*/false));
     IPM.run(*M);
   }
-  runCoroPasses(*M, *TM, TLII);
+  runModulePasses(*M, *TM, TLII, CGOpts, CI.getLangOpts());
   legacy::PassManager PM;
   addImmutable(PM);
   if (TM->addPassesToEmitFile(PM, *OS, nullptr, CodeGenFileType::ObjectFile,

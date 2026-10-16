@@ -32,7 +32,7 @@ import hashlib, re, json, os, subprocess, sys, glob
 from concurrent.futures import ThreadPoolExecutor
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
-from flags import FLAGS, CXXFLAGS, MODFILE, iface, gnu17, pic, lines, safety, checks, solibs, res  # the engine's flags
+from flags import FLAGS, CXXFLAGS, MODFILE, iface, gnu17, pic, lines, safety, checks, solibs, rt_static, res  # the engine's flags
 B = os.environ.get('SC_BUILD', f'{R}/build')
 RES = res(B)
 SR = f'{B}/sysroot'  # wasi-sdk's libc with libc++, libc++abi and libunwind built from the pin with exceptions
@@ -152,7 +152,7 @@ def one1(p, d, f, n, kind):
         if ok: os.remove(f'{tmp}/{n}.so')
     if ok and o and kind is True:
         l = subprocess.run(engine({tmp: '/o', SR: '/sysroot', RES: '/res'}, ['ld', f'/o/{n}.o', '/sysroot/lib/wasm32-wasip1/crt1-command.o',
-                            '-L/sysroot/lib/wasm32-wasip1', '-lc-printscan-long-double'] + ['-lsc_rt'] * bool(level) +
+                            '-L/sysroot/lib/wasm32-wasip1', '-lc-printscan-long-double'] + rt_static(level) +
                            (['-lc++', '-lc++abi'] if cxx else []) +
                            ['-lsetjmp', '-lc', '-lm', '/res/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a', '-o', f'/o/{n}.wasm']),
                            capture_output=True, text=True, timeout=300)

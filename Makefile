@@ -47,7 +47,8 @@ $(B)/src/llvm/CMakeLists.txt:
 	  && git fetch -q --depth 1 $(LLVM_REPO) $(LLVM_COMMIT) && git checkout -q FETCH_HEAD \
 	  && git apply $(CURDIR)/llvm/wasi-host.patch $(CURDIR)/llvm/no-veclibs.patch $(CURDIR)/llvm/dylink-weak.patch \
 	  $(CURDIR)/llvm/libcxx-locale.patch $(CURDIR)/llvm/incremental-c-scopes.patch \
-	  $(CURDIR)/llvm/incremental-stmts.patch $(CURDIR)/llvm/incremental-main-file.patch
+	  $(CURDIR)/llvm/incremental-stmts.patch $(CURDIR)/llvm/incremental-main-file.patch \
+	  $(CURDIR)/llvm/asan-cleanupret.patch
 
 $(B)/c-testsuite/.git:
 	git init -q $(B)/c-testsuite && cd $(B)/c-testsuite \
@@ -113,18 +114,20 @@ $(SR)/lib/wasm32-wasip1/libc++.so: $(B)/Toolchain-runtimes.cmake | $(B)/native/b
 	cp -a $(W)/share/wasi-sysroot/lib/wasm32-wasip1 $(SR)/lib/ && rm -f $(SR)/lib/wasm32-wasip1/libc++*
 	cmake --install $(B)/runtimes --prefix $(CURDIR)/$(SR) >/dev/null
 
-# libsc_rt: the handlers of UBSan's checks (rt/), for the levels on and strict
-# of --safety; shared for the REPL, static for the corpus's programs
+# libsc_rt: the handlers of UBSan's checks and ASan's runtime (rt/), for the
+# levels on and strict of --safety; shared for the REPL, static for the
+# corpus's programs
 RT := $(SR)/lib/wasm32-wasip1/libsc_rt
-$(B)/rt/sc_rt.o: rt/sc_rt.c | $(SR)/lib/wasm32-wasip1/libc++.so
+RT_OBJS := $(B)/rt/sc_rt.o $(B)/rt/sc_asan.o
+$(B)/rt/%.o: rt/%.c | $(SR)/lib/wasm32-wasip1/libc++.so
 	@mkdir -p $(@D)
 	$(N)/bin/clang --target=wasm32-wasip1 --sysroot $(SR) -fPIC -fvisibility=default -O2 -Wall -Wextra -Wno-unused-parameter -c $< -o $@
 
-$(RT).a: $(B)/rt/sc_rt.o
-	rm -f $@ && $(W)/bin/llvm-ar rcs $@ $<
+$(RT).a: $(RT_OBJS)
+	rm -f $@ && $(W)/bin/llvm-ar rcs $@ $^
 
-$(RT).so: $(B)/rt/sc_rt.o
-	$(N)/bin/wasm-ld -shared --experimental-pic --unresolved-symbols=import-dynamic $< -L$(SR)/lib/wasm32-wasip1 -lc -o $@
+$(RT).so: $(RT_OBJS)
+	$(N)/bin/wasm-ld -shared --experimental-pic --unresolved-symbols=import-dynamic $^ -L$(SR)/lib/wasm32-wasip1 -lc -o $@
 
 sysroot: $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(RT).so
 

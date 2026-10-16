@@ -24,6 +24,10 @@ struct ScOptions {
   // -fno-sanitize-memory-param-retval, -fno-sanitize-address-use-odr-indicator:
   // what the driver adds with any sanitizer
   bool NoParamRetval = false, NoOdrIndicator = false;
+  // -fsanitize-address-use-after-scope, -fsanitize-address-use-after-return=never,
+  // -fsanitize-address-globals-dead-stripping
+  bool AsanUseAfterScope = false, AsanNoUseAfterReturn = false, AsanGlobalsDeadStripping = false;
+  std::vector<std::string> AsanLLVMArgs; // -mllvm -asan-*: in order
 };
 
 // false, with the reason in Error, for a flag the engine does not take

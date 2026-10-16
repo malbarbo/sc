@@ -70,6 +70,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `incremental-stmts.patch` lets a REPL cell start with `-` or `+`, and
   keeps the value of an expression without its `;` at the end of a cell,
   which the REPL shows, from being discarded (`ANALISE.md` §26).
+  `asan-cleanupret.patch` keeps ASan from clearing a frame's shadow at
+  every exception cleanup inside the function, which made `main` of a C++
+  program many times bigger (`ANALISE.md` §34).
   `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the
@@ -95,6 +98,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
 - `rt/sc_rt.c` is `libsc_rt`, in the sysroot: the handlers of UBSan's
   checks and of libc++'s hardening for the levels `on` and `strict` of
   `--safety`, which say the error and trap (`ANALISE.md` §32).
+  `rt/sc_asan.c`, in the same library, is ASan's runtime: the shadow, the
+  allocator with its redzones and quarantine, and the checked libc
+  functions, named as wasm-ld's `--wrap` names them (`ANALISE.md` §34).
 - `bench/` times the engine in V8 (`cc.mjs`) and compares O0/O1/O2 code.
 - `build/` holds everything generated and is not tracked.
 
