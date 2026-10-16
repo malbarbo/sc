@@ -2503,3 +2503,44 @@ terminam com pouco no heap.
 - `leaks.c.repl`, o `:leaks` antes e depois de perder o bloco.
 
 O `test-aluno` ficou igual: nenhum dos 21 programas corretos perde memória.
+
+## 38. O `DEBUG` da libc++ no `strict` (F4)
+
+O `strict` passou do hardening `EXTENSIVE` para o `DEBUG` da libc++
+(`HARDENING` no `flags.py`). O `on` fica no `EXTENSIVE`, e o `off` no `NONE`.
+
+```
+error: Comparator does not induce a strict weak ordering
+    at main (sort-cmp.cpp:7:5)
+```
+
+**O que o `DEBUG` acrescenta.** No pin, são três coisas:
+- **o comparador:** o `__debug_less` envolve o comparador dos algoritmos e,
+  quando `comp(a, b)` é verdadeiro, confere que `comp(b, a)` é falso;
+- **a ordenação:** depois do `sort`, o `__check_strict_weak_ordering_sorted`
+  confere que o intervalo saiu ordenado e testa todos os pares dos
+  primeiros 100 elementos;
+- **as asserções internas** da libc++ (`_LIBCPP_ASSERT_INTERNAL`).
+
+O erro clássico do aluno, o `<=` como comparador do `std::sort`, passa em
+silêncio no `on` e para o programa no `strict`.
+
+**Nada mais muda.** O `DEBUG` só existe nos headers:
+- a `libc++.so` do sysroot continua com o `fast`;
+- a semântica continua `enforce`, a do sysroot;
+- a mensagem chega pelo mesmo `__libcpp_verbose_abort` da `libsc_rt` (§32).
+
+O corpus já constrói um `std.pcm` por nível (`std-pcm-strict`), e o
+`checkinv` continua SAME, porque o `-D` já era aceito.
+
+**O custo** fica nos `sort` de até 100 elementos, por causa dos pares
+testados. Medido com o `sc`, o menor de 3 tempos, compilação incluída e a
+máquina carregada:
+
+| | `on` | `strict` |
+|---|---|---|
+| um `sort` de 1 milhão de `int` | 1,58 s | 1,64 s |
+| 20 mil `sort` de 100 `int` | 3,38 s | 6,21 s |
+| `std::map` de 100 mil chaves | 5,03 s | 4,72 s |
+
+**Os testes.** O `test/checks` ganhou o `sort-cmp.cpp`, um `sort` com `<=`.

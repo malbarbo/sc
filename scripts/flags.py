@@ -82,8 +82,9 @@ LEVELS = ['off', 'on', 'strict']
 U = ['alignment', 'array-bounds', 'bool', 'builtin', 'enum', 'float-cast-overflow', 'integer-divide-by-zero',
      'nonnull-attribute', 'null', 'pointer-overflow', 'return', 'returns-nonnull-attribute', 'shift-base',
      'shift-exponent', 'signed-integer-overflow', 'unreachable', 'vla-bound']
-# §5.3: libc++'s hardening; off: none (the sysroot is built with fast)
-HARDENING = {'off': 'NONE', 'on': 'EXTENSIVE', 'strict': 'EXTENSIVE'}
+# §5.3: libc++'s hardening; off: none (the sysroot is built with fast); strict:
+# debug, which also checks the comparators of the algorithms (ANALISE.md §38)
+HARDENING = {'off': 'NONE', 'on': 'EXTENSIVE', 'strict': 'DEBUG'}
 # §5.2: ASan's shadow memory is at SHADOW, after the stack: 512 MiB, the
 # shadow of the 4 GiB, and the program after it. Not a power of 2, which
 # the pass would OR in (libsc_rt and the loader know it too)

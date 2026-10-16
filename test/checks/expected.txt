@@ -447,6 +447,13 @@ error: shift exponent 32 is too large for 32-bit type 'int'
 == shift.c strict exit=134
 error: shift exponent 32 is too large for 32-bit type 'int'
     at main (shift.c:5:26)
+== sort-cmp.cpp off exit=0
+1 2 3 3 3 5 8 9 
+== sort-cmp.cpp on exit=0
+1 2 3 3 3 5 8 9 
+== sort-cmp.cpp strict exit=134
+error: Comparator does not induce a strict weak ordering
+    at main (sort-cmp.cpp:7:5)
 == stack-overflow.c off exit=0
 0
 == stack-overflow.c on exit=134

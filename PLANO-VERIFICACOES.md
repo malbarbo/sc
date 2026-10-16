@@ -628,8 +628,11 @@ ele só no relato. Só os primeiros 20 mil blocos guardam a pilha, e o
 `setjmp`/`longjmp` também foi corrigido (§35).
 
 **Os vazamentos da F4 estão feitos** (ANALISE.md §37): no fim do `sc FILE`
-no `strict` e no `:leaks` do REPL. Faltam o libc++ `DEBUG`, o `scanf("%s")`
-e o U-estrito.
+no `strict` e no `:leaks` do REPL.
+
+**O libc++ `DEBUG` da F4 está feito** (ANALISE.md §38): o `strict` pega o
+comparador que não é uma ordem estrita fraca, como o `<=` no `std::sort`.
+Faltam o `scanf("%s")` e o U-estrito.
 
 A F1 vem primeiro, porque é o alicerce:
 
