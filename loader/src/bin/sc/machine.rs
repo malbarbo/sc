@@ -298,23 +298,33 @@ impl Machine {
 /// What stopped the code, and where: the frames of the student's code.
 fn runtime_error(e: &Error, loader: &mut Loader, build: &Path) -> String {
     let msg = message(e, loader);
-    let mut out = msg.clone();
-    for f in frames(e, build, msg != "aborted") {
-        out += &format!("\n    {f}");
-    }
-    out
+    let library = !msg.is_empty() && msg != "aborted";
+    let mut out: Vec<String> = Some(msg).filter(|m| !m.is_empty()).into_iter().collect();
+    out.extend(frames(e, build, library).iter().map(|f| format!("    {f}")));
+    out.join("\n")
 }
 
+/// What stopped the code; empty when libsc_rt has said it (a check of
+/// UBSan or of libc++'s hardening, rt/sc_rt.c).
 fn message(e: &Error, loader: &mut Loader) -> String {
-    if let Some(n) = fault_address(e).and_then(|a| loader.undefined_at(a)) {
+    let bt = e.downcast_ref::<wasmtime::WasmBacktrace>();
+    if bt.is_some_and(|bt| bt.frames().iter().any(|f| f.func_name() == Some("__sc_rt_report"))) {
+        return String::new();
+    }
+    let fault = fault_address(e);
+    if let Some(n) = fault.and_then(|a| loader.undefined_at(a)) {
         return format!("error: undefined symbol: {n}");
     }
     // the stack grows down from STACK: below 0 it wraps around
     let below = loader.stack_pointer().i32().is_some_and(|sp| sp as u32 > STACK);
+    // -ftrivial-auto-var-init=pattern's pointer, plus an offset: a local
+    // the code never set (--safety=on)
+    let uninit = fault.is_some_and(|a| (0xffff_ffff..0x1_0000_ffff).contains(&a));
     match e.downcast_ref::<Trap>() {
         Some(Trap::Interrupt) => "interrupted".into(),
         Some(Trap::StackOverflow) => "error: stack overflow (infinite recursion?)".into(),
         Some(Trap::MemoryOutOfBounds) if below => "error: stack overflow (infinite recursion?)".into(),
+        Some(Trap::MemoryOutOfBounds) if uninit => "error: invalid memory access through an uninitialized pointer".into(),
         Some(Trap::MemoryOutOfBounds) => "error: invalid memory access".into(),
         Some(Trap::IntegerDivisionByZero) => "error: division by zero".into(),
         Some(Trap::IntegerOverflow) => "error: integer overflow in a division (INT_MIN / -1)".into(),

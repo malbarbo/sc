@@ -2044,3 +2044,132 @@ depois (`proto/src/engine.rs`). Em 5 rodadas de 48, o erro não apareceu.
 - um `assert` numa instrução de célula avisa
   `-Wpredefined-identifier-outside-function` (o `__func__` do `assert.h`
   fora de função) e imprime `(cell_6: : 1)`.
+
+## 32. As verificações em execução (F2 do PLANO-VERIFICACOES.md)
+
+Nos níveis `on` e `strict`, o código do aluno agora é compilado com o
+UBSan, o hardening `EXTENSIVE` da libc++ e as locais inicializadas com um
+padrão. No `off`, nada disso: o mesmo programa roda em silêncio, como num
+compilador comum.
+
+```
+10! = 3628800
+11! = 39916800
+12! = 479001600
+error: signed integer overflow: 479001600 * 13 cannot be represented in type 'int'
+    at fatorial (overflow.c:6:15)
+    at main (overflow.c:13:33)
+```
+
+**As flags** (`checks()` no `flags.py`, chamada pelo `safety()`):
+- **U:** `-fsanitize=` com as 17 verificações que o driver liga com
+  `-fsanitize=undefined` no wasm32 (§5.1 do plano), e `-fsanitize-merge=`
+  com as mesmas, como o driver. Sem `-fsanitize-recover`: o relato para o
+  programa. O driver também passa `-fno-sanitize-memory-param-retval` e
+  `-fno-sanitize-address-use-odr-indicator` quando há um sanitizer.
+- **libc++:** `-D _LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE`
+  no `on` e no `strict` (o `DEBUG` do `strict` fica para a F4), e `NONE` no
+  `off`.
+- **Locais:** `-ftrivial-auto-var-init=pattern`.
+
+O `sc_inv` passou a aceitar essas flags e o `-D`, e recusa uma verificação
+que não conhece. O `checkinv` ganhou a interface do `std` no `on`: 20 SAME.
+
+**O modo do UBSan: handlers completos (decisão 4 do plano).** Medido com o
+clang nativo do pin, objeto PIC com `-gline-tables-only`:
+
+| | nada | handlers | minimal runtime | `trap` |
+|---|---|---|---|---|
+| `c3_stl.cpp`, tempo | 1,85 s | 2,24 s (+21%) | 2,07 s | 2,14 s |
+| `c3_stl.cpp`, objeto | 527 KB | 1 122 KB | 755 KB | 852 KB |
+| `c1_basics.cpp`, tempo | 0,82 s | 0,92 s (+13%) | 0,90 s | 0,92 s |
+
+O tempo dos handlers é quase o do `trap`: o custo está em gerar as
+verificações, não na chamada. Os handlers dão os valores
+(`479001600 * 13`), e o `trap` não daria.
+
+**A latência no `sc` (T11)**, o melhor de 3:
+
+| | `off` | `on` |
+|---|---|---|
+| `sc c3_stl.cpp` | 3,09 s | 3,74 s (+21%) |
+| `sc c1_basics.cpp` | 1,85 s | 1,99 s (+7%) |
+| `sc p1.c` | 0,098 s | 0,107 s |
+| REPL: 40 células pequenas com `vector`, `map` e `string`, por célula | 61 ms | 102 ms |
+
+Uma célula continua abaixo de 0,1 s: o REPL fica com os handlers, sem o
+recuo para o `trap` que a decisão 4 previa.
+
+**Os handlers ficam na `libsc_rt` (`rt/sc_rt.c`).**
+- É C, no sysroot: `libsc_rt.so` para o REPL e `libsc_rt.a` para os
+  programas estáticos do corpus. O `solibs()` liga `-lsc_rt` só nos níveis
+  com verificação, antes da libc++.
+- Cada handler monta a mensagem com as palavras do UBSan e chama
+  `__sc_rt_report`. Ela esvazia o `stdout` (o que o programa imprimiu vem
+  antes), escreve `error: ...` no `stderr` e dá trap.
+- O `sc` reconhece o `__sc_rt_report` nos frames: não acrescenta a
+  mensagem do trap (`aborted`) e mostra só os frames do aluno. No wasmtime
+  CLI, vem a mensagem e o backtrace dele. Não há import do host.
+- Os layouts são os do `ubsan_handlers.h` do compiler-rt para o wasm32. Um
+  valor de até 32 bits vem no argumento; um maior, por ponteiro.
+
+**A mensagem da libc++: `enforce` em vez de `quick_enforce`.**
+- No `EXTENSIVE`, a semântica padrão é `quick_enforce`:
+  `__builtin_verbose_trap`, que guarda a mensagem só no DWARF, como uma
+  função inline (`__clang_trap_msg$libc++$...`).
+- O wasmtime não a acha. O Cranelift junta o `br_if` e o `unreachable` numa
+  instrução de trap condicional e dá o endereço do `br_if`, 5 bytes antes
+  da faixa da função inline. Ler o DWARF no host não resolveria: o endereço
+  é outro.
+- Então o sysroot passou a ser construído com
+  `LIBCXX_ASSERTION_SEMANTIC=enforce`: uma verificação que falha chama
+  `std::__libcpp_verbose_abort` com a mensagem.
+- A libc++ define essa função como *weak*, justamente para o programa pôr
+  a sua no lugar. A `libsc_rt` define a sua; o loader e o wasm-ld ficam com
+  a primeira definição, e a `libsc_rt` vem antes da libc++. Ela tira o
+  prefixo (`vector.h:414: libc++ Hardening assertion __n < size() failed:`)
+  e diz `error: vector[] index out of bounds`.
+- Sem a `libsc_rt` (o nível `fast` padrão, fora do `sc`), a libc++ imprime
+  a mensagem inteira e aborta.
+
+**O ponteiro não inicializado.** No wasm32, o `pattern` põe 0xFFFFFFFF num
+ponteiro. Um acesso por ele cai no `alignment` do UBSan (um `int` em
+0xFFFFFFFF está desalinhado). O handler diz
+`store to uninitialized pointer 0xffffffff of type 'int'`, e a aritmética
+sobre ele, `pointer arithmetic on uninitialized pointer`. Um `char *` não
+tem alinhamento a verificar: o acesso cai fora da memória, e o `sc` diz
+`invalid memory access through an uninitialized pointer` quando o endereço
+da falta está em [0xFFFFFFFF, 0x1_0000_FFFF).
+
+**Um `std.pcm` por nível no corpus.** O módulo guarda as macros com que foi
+construído (§5.3 do plano). O `corpus.py` constrói o `std-pcm-on` e o
+`std-pcm-strict` com as flags de `checks()`, e os programas do `test/mod`
+de cada nível importam o seu. O REPL não usa `import std` (§22).
+
+**O `test/checks`** ganhou 9 programas:
+
+| Programa | `off` | `on` |
+|---|---|---|
+| `overflow.c` | `13! = 1932053504` | `signed integer overflow: 479001600 * 13 ...` |
+| `shift.c` | `1` | `shift exponent 32 is too large for 32-bit type 'int'` |
+| `array-index.c` | `6` | `index 3 out of bounds for type 'int[3]'` |
+| `null.c` | `0` | `member access within null pointer of type 'struct no'` |
+| `uninit-pointer.c` | `42` | `store to uninitialized pointer 0xffffffff of type 'int'` |
+| `uninit-string.c` | um byte nulo | `invalid memory access through an uninitialized pointer` |
+| `float-cast.c` | `2147483647` | `8.1e+09 is outside the range of representable values of type 'int'` |
+| `optional.cpp` | `4352` | `optional operator* called on a disengaged value` |
+| `string-index.cpp` | `abc` e lixo | `string index out of bounds` |
+
+O `test/aluno` (o portão do `on`, §9 do plano) não mudou: nenhum relato
+nos 20 programas corretos, em nenhum nível.
+
+**Os cortes.** O corpus nos níveis passa a gerar as verificações, e o
+`make learn` devolveu ao `sc.wasm` só 1 objeto (`NSAPI.cpp`) e 2 símbolos
+(`SanitizerMetadata::disableSanitizerForGlobal` e
+`hasBranchWeightOrigin`). O `sc.wasm` tem 19 668 486 bytes. O DWARF da F0
+continua cortado (F2b): o corpus não usa `-g`.
+
+E o `int-min.c` e o `vector-index.cpp` mudaram: no `on`, o primeiro diz
+`division of -2147483648 by -1 cannot be represented in type 'int'` (o
+UBSan pega antes do trap), e o segundo, `vector[] index out of bounds`. No
+`off`, o `v[5]` agora imprime 0 em silêncio (`NONE`).

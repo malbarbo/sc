@@ -76,14 +76,34 @@ S = ['alloca', 'anon-enum-enum-conversion', 'assign-enum', 'bad-function-cast', 
      'unneeded-member-function', 'unreachable-code-break', 'unreachable-code-return', 'unused-exception-parameter',
      'unused-macros', 'unused-member-function', 'unused-template', 'vla', 'zero-as-null-pointer-constant']
 LEVELS = ['off', 'on', 'strict']
+# §5.1, U: the checks of -fsanitize=undefined on wasm32, as the driver lists
+# them; a report stops the program (no -fsanitize-recover). The handlers are
+# libsc_rt's (rt/)
+U = ['alignment', 'array-bounds', 'bool', 'builtin', 'enum', 'float-cast-overflow', 'integer-divide-by-zero',
+     'nonnull-attribute', 'null', 'pointer-overflow', 'return', 'returns-nonnull-attribute', 'shift-base',
+     'shift-exponent', 'signed-integer-overflow', 'unreachable', 'vla-bound']
+# §5.3: libc++'s hardening; off: none (the sysroot is built with fast)
+HARDENING = {'off': 'NONE', 'on': 'EXTENSIVE', 'strict': 'EXTENSIVE'}
+
+
+def checks(fl, level, cxx):
+    """fl with the checks at run time of a level of --safety (§5): UBSan,
+    libc++'s hardening and the locals' pattern; off has none"""
+    fl = fl + ['-D', f'_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_{HARDENING[level]}'] * cxx
+    if level == 'off':
+        return fl
+    u = ','.join(U)
+    return fl + [f'-fsanitize={u}', f'-fsanitize-merge={u}', '-fno-sanitize-memory-param-retval',
+                 '-fno-sanitize-address-use-odr-indicator', '-ftrivial-auto-var-init=pattern']
 
 
 def safety(fl, level, cxx, file=False, errors=True):
     """fl at a level of --safety: off has clang's warnings, on and strict
-    those of their sets; file: in a whole program, not in the REPL. Without
-    errors, E stays warnings: for the tests that have undefined behaviour on
-    purpose, which would stop in the frontend"""
-    fl = [x for x in fl if x not in ('-Wall', '-Wextra')]
+    those of their sets, and the checks at run time; file: in a whole
+    program, not in the REPL. Without errors, E stays warnings: for the
+    tests that have undefined behaviour on purpose, which would stop in the
+    frontend"""
+    fl = checks([x for x in fl if x not in ('-Wall', '-Wextra')], level, cxx)
     if level == 'off':
         return fl
     w = ['all', 'extra'] + A + (A_CXX if cxx else A_C + ['shadow'] * file)
@@ -115,9 +135,10 @@ def pic(fl):
     return fl + ['-pic-level', '2', '-target-feature', '+mutable-globals']
 
 
-def solibs(cxx):
-    """what a shared object is linked with, as the REPL links each input"""
-    return ['-L/sysroot/lib/wasm32-wasip1'] + ['-lc++', '-lc++abi'] * cxx + [
+def solibs(cxx, level=None):
+    """what a shared object is linked with, as the REPL links each input; at
+    a level of --safety with checks, libsc_rt, their handlers"""
+    return ['-L/sysroot/lib/wasm32-wasip1'] + ['-lsc_rt'] * (level in ('on', 'strict')) + ['-lc++', '-lc++abi'] * cxx + [
         '-lsetjmp', '-lc', '/res/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a']
 
 
@@ -138,7 +159,7 @@ def session(cxx, build, c17=False, mod=False, pcm=None, level=None, file=False):
     the engine's flags. With the lines of the code, for where a trap is"""
     fl = pic(CXXFLAGS if cxx else gnu17(FLAGS) if c17 else FLAGS)[1:] + MODFILE * mod
     fl = lines(safety(fl, level, cxx, file) if level else fl)
-    return real(fl + ['-x', 'c++' if cxx else 'c', '--'] + solibs(cxx), build, pcm)
+    return real(fl + ['-x', 'c++' if cxx else 'c', '--'] + solibs(cxx, level), build, pcm)
 
 
 if __name__ == '__main__':

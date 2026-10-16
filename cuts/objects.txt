@@ -199,3 +199,5 @@ tools/lld/wasm/CMakeFiles/.*/LTO\.cpp
 !tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/TemplateArgumentHasher\.cpp\.obj$
 # put back by link.py --learn
 !tools/clang/lib/Analysis/LifetimeSafety/CMakeFiles/obj\.clangAnalysisLifetimeSafety\.dir/Facts\.cpp\.obj$
+# put back by link.py --learn
+!tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/NSAPI\.cpp\.obj$

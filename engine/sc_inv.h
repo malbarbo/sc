@@ -9,6 +9,9 @@ struct ScOptions {
   std::string Input, Output = "-", Sysroot, ResourceDir;
   std::string Std;             // -std=, for the corpus only (default gnu23, gnu++26)
   std::vector<std::string> ISystem, ExternCISystem, Include, Warnings;
+  std::vector<std::string> Macros; // -D
+  // -fsanitize=, -fsanitize-trap=, -fsanitize-merge=: the checks' names
+  std::vector<std::string> Sanitize, SanitizeTrap, SanitizeMerge;
   std::vector<std::pair<std::string, std::string>> ModuleFiles; // -fmodule-file=<name>=<pcm>
   bool CXX = false;
   bool PIC = false;            // -mrelocation-model pic -pic-level 2 (a shared object)
@@ -17,6 +20,10 @@ struct ScOptions {
   bool Colors = false;         // -fcolor-diagnostics
   bool OneCell = false;        // -sc-one-cell: a session of one cell, the whole program
   bool LineTables = false;     // -debug-info-kind=line-tables-only: where a trap is
+  bool PatternInit = false;    // -ftrivial-auto-var-init=pattern
+  // -fno-sanitize-memory-param-retval, -fno-sanitize-address-use-odr-indicator:
+  // what the driver adds with any sanitizer
+  bool NoParamRetval = false, NoOdrIndicator = false;
 };
 
 // false, with the reason in Error, for a flag the engine does not take

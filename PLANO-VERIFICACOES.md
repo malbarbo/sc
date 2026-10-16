@@ -605,6 +605,11 @@ Cada fase fecha com o `make test` com 0 diferenças, o `test-split`, o
 aluno, com `-gline-tables-only` em toda sessão; o `test-split` com `-g`
 (T8) e o `make test-checks`.
 
+**A F2 está feita** (ANALISE.md §32): o UBSan com handlers na `libsc_rt`
+(`rt/`), o `EXTENSIVE` da libc++ com a semântica `enforce` no sysroot, o
+`pattern`, e um `std.pcm` por nível no corpus. Uma célula leva 102 ms no
+`on` contra 61 ms no `off`.
+
 A F1 vem primeiro, porque é o alicerce:
 
 - o `sc_inv` passa a aceitar e conferir as flags;

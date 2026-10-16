@@ -78,14 +78,17 @@ llvm: $(B)/wasm/lib/libclangSema.a
 
 # --- the sysroot: wasi-sdk's libc, with libc++, libc++abi and libunwind built
 # from the pin with exceptions (-fwasm-exceptions, the standard form, exnref);
-# libunwind goes inside libc++abi, which the wasm unwinder calls back
+# libunwind goes inside libc++abi, which the wasm unwinder calls back. A
+# failed check of the hardening calls __libcpp_verbose_abort with its reason
+# (enforce), which libsc_rt says in its words; quick_enforce's trap keeps it
+# only in the debug info, where wasmtime does not find it (ANALISE.md §32)
 SR := $(B)/sysroot
 RT_EH := -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false -resource-dir $(W)/lib/clang/21
 RT_OPTS := -DCMAKE_BUILD_TYPE=MinSizeRel -DLLVM_COMPILER_CHECKED=ON -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
   -DCMAKE_C_FLAGS="$(RT_EH)" -DCMAKE_CXX_FLAGS="$(RT_EH)" \
   -DLIBCXX_ABI_VERSION=2 -DLIBCXX_HAS_MUSL_LIBC=ON -DLIBCXX_ENABLE_THREADS=ON -DLIBCXX_HAS_PTHREAD_API=ON \
   -DLIBCXX_ENABLE_SHARED=ON -DLIBCXX_ENABLE_STATIC=ON -DLIBCXX_ENABLE_EXCEPTIONS=ON -DLIBCXX_ENABLE_TIME_ZONE_DATABASE=OFF \
-  -DLIBCXX_ENABLE_ABI_LINKER_SCRIPT=OFF -DLIBCXX_CXX_ABI=libcxxabi -DLIBCXX_HARDENING_MODE=fast \
+  -DLIBCXX_ENABLE_ABI_LINKER_SCRIPT=OFF -DLIBCXX_CXX_ABI=libcxxabi -DLIBCXX_HARDENING_MODE=fast -DLIBCXX_ASSERTION_SEMANTIC=enforce \
   -DLIBCXX_INCLUDE_TESTS=OFF -DLIBCXX_INCLUDE_BENCHMARKS=OFF -DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=OFF -DLIBCXX_INSTALL_MODULES=ON \
   -DLIBCXXABI_ENABLE_EXCEPTIONS=ON -DLIBCXXABI_ENABLE_SHARED=ON -DLIBCXXABI_ENABLE_THREADS=ON -DLIBCXXABI_HAS_PTHREAD_API=ON \
   -DLIBCXXABI_USE_LLVM_UNWINDER=ON -DLIBCXXABI_ENABLE_STATIC_UNWINDER=ON -DLIBCXXABI_SILENT_TERMINATE=OFF \
@@ -110,7 +113,20 @@ $(SR)/lib/wasm32-wasip1/libc++.so: $(B)/Toolchain-runtimes.cmake | $(B)/native/b
 	cp -a $(W)/share/wasi-sysroot/lib/wasm32-wasip1 $(SR)/lib/ && rm -f $(SR)/lib/wasm32-wasip1/libc++*
 	cmake --install $(B)/runtimes --prefix $(CURDIR)/$(SR) >/dev/null
 
-sysroot: $(SR)/lib/wasm32-wasip1/libc++.so
+# libsc_rt: the handlers of UBSan's checks (rt/), for the levels on and strict
+# of --safety; shared for the REPL, static for the corpus's programs
+RT := $(SR)/lib/wasm32-wasip1/libsc_rt
+$(B)/rt/sc_rt.o: rt/sc_rt.c | $(SR)/lib/wasm32-wasip1/libc++.so
+	@mkdir -p $(@D)
+	$(N)/bin/clang --target=wasm32-wasip1 --sysroot $(SR) -fPIC -fvisibility=default -O2 -Wall -Wextra -Wno-unused-parameter -c $< -o $@
+
+$(RT).a: $(B)/rt/sc_rt.o
+	rm -f $@ && $(W)/bin/llvm-ar rcs $@ $<
+
+$(RT).so: $(B)/rt/sc_rt.o
+	$(N)/bin/wasm-ld -shared --experimental-pic --unresolved-symbols=import-dynamic $< -L$(SR)/lib/wasm32-wasip1 -lc -o $@
+
+sysroot: $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(RT).so
 
 # --- the engine
 $(B)/engine/%.o: engine/%.cpp engine/sc.h engine/sc_inv.h | $(B)/wasm/lib/libclangSema.a
@@ -227,7 +243,7 @@ $(B)/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/repl
 	scripts/flags.py --session $(firstword $(subst -, ,$*)) $(CURDIR)/$(B) $(wordlist 2,3,$(subst -, ,$*)) > $@
 
-repl: $(SC_REPL) $(B)/sc-engine-full $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so
+repl: $(SC_REPL) $(B)/sc-engine-full $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so
 
 # a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
 test-aluno: repl
@@ -237,11 +253,11 @@ test-checks: repl
 	test/checks.py
 
 # --- tests: the corpus against the uncut engine
-$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a
 	test/corpus.py $< $(B)/res/base
 
 # the same with every warning on, so the cuts keep the code of all warnings
-$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/wev-base
 
 baseline: $(B)/res/base/summary.json
@@ -254,10 +270,10 @@ test-small: $(B)/sc.wasm $(B)/res/base/summary.json $(SCLOAD)
 
 # the native engine against the uncut native engine (sc.wasm and the native
 # engine differ where the host does: stack depth, memory, the sandbox)
-$(B)/res/native-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+$(B)/res/native-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a
 	test/corpus.py $< $(B)/res/native-base
 
-$(B)/res/native-wev-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
+$(B)/res/native-wev-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/native-wev-base
 
 test-native: $(B)/sc $(B)/res/native-base/summary.json $(SCLOAD)
@@ -299,6 +315,7 @@ checkinv: $(B)/checkinv
 	done
 	$< $$(scripts/flags.py pic on g) -o - /c/x.c
 	$< $$(scripts/flags.py c++ pic mod on g) -o - /c/x.cpp
+	$< $$(scripts/flags.py c++ pcm on) -o - /c/std.cppm
 
 size: $(B)/sc.wasm
 	@for f in $(wildcard $(B)/sc.wasm $(B)/sc); do printf '%s: %s raw, %s gzip, %s zstd\n' $$f $$(stat -c %s $$f) \

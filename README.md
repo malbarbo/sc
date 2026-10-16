@@ -92,6 +92,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   memory and one function table. A definition in an input hides an older one
   for the inputs after it, and an input may use what a later one defines.
   `ANALISE.md` §18 has the design.
+- `rt/sc_rt.c` is `libsc_rt`, in the sysroot: the handlers of UBSan's
+  checks and of libc++'s hardening for the levels `on` and `strict` of
+  `--safety`, which say the error and trap (`ANALISE.md` §32).
 - `bench/` times the engine in V8 (`cc.mjs`) and compares O0/O1/O2 code.
 - `build/` holds everything generated and is not tracked.
 

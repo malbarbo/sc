@@ -21,14 +21,16 @@ sequences of REPL inputs, each loaded on top of the ones before (repl-).
 The programs run again at each level of --safety but off (<name>-on,
 <name>-strict; PLANO-VERIFICACOES.md §9): those that have undefined
 behaviour on purpose (c-testsuite, the gcc torture tests) with the errors of
-the levels as warnings.
+the levels as warnings. Their checks at run time take libsc_rt, and the
+programs in test/mod a std module of their level (std-pcm-on...): it keeps
+the macros it was built with, libc++'s hardening among them.
 """
 from corpuslib import norm_hash, diff
 import hashlib, re, json, os, subprocess, sys, glob
 from concurrent.futures import ThreadPoolExecutor
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
-from flags import FLAGS, CXXFLAGS, MODFILE, iface, gnu17, pic, safety, solibs, res  # the engine's flags
+from flags import FLAGS, CXXFLAGS, MODFILE, iface, gnu17, pic, safety, checks, solibs, res  # the engine's flags
 B = os.environ.get('SC_BUILD', f'{R}/build')
 RES = res(B)
 SR = f'{B}/sysroot'  # wasi-sdk's libc with libc++, libc++abi and libunwind built from the pin with exceptions
@@ -99,9 +101,10 @@ def one(pr):
     except subprocess.TimeoutExpired:
         open(f'{out}/{n}.txt', 'w').write('TIMEOUT\n'); return n, 'TIMEOUT'
 
-def cc1(d, f, n, fl, mod):
-    """compiles d/f to tmp/n.o: the result text, the object and whether it succeeded"""
-    dirs = {d: '/c', tmp: '/o', SR: '/sysroot', RES: '/res'} | ({M: '/m'} if mod else {})
+def cc1(d, f, n, fl, mod, level=None):
+    """compiles d/f to tmp/n.o: the result text, the object and whether it
+    succeeded; mod: with the std module of the level"""
+    dirs = {d: '/c', tmp: '/o', SR: '/sysroot', RES: '/res'} | ({pcm_dir(level): '/m'} if mod else {})
     r = subprocess.run(engine(dirs, fl + MODFILE * mod + W_EXTRA + ['-o', f'/o/{n}.o', f'/c/{f}']),
                        capture_output=True, timeout=300)
     obj = f'{tmp}/{n}.o'
@@ -135,9 +138,10 @@ def one1(p, d, f, n, kind):
     ub = p.startswith((f'{B}/c-testsuite/', f'{B}/gcc-ts/'))  # undefined behaviour on purpose
     fl = CXXFLAGS if cxx else gnu17(FLAGS) if ub else FLAGS
     fl = pic(fl) if kind == 'pic' else fl
-    if kind in SAFETY:
-        fl, kind = safety(fl, kind, cxx, file=True, errors=not ub), True
-    txt, o, ok = cc1(d, f, n, fl, d == f'{R}/test/mod')
+    level = kind if kind in SAFETY else None
+    if level:
+        fl, kind = safety(fl, level, cxx, file=True, errors=not ub), True
+    txt, o, ok = cc1(d, f, n, fl, d == f'{R}/test/mod', level)
     if o and kind is not True:
         txt += 'obj ' + hashlib.md5(o).hexdigest() + '\n'
     if ok and o and kind == 'pic':  # the shared object, run by the REPL's loader
@@ -146,7 +150,8 @@ def one1(p, d, f, n, kind):
         if ok: os.remove(f'{tmp}/{n}.so')
     if ok and o and kind is True:
         l = subprocess.run(engine({tmp: '/o', SR: '/sysroot', RES: '/res'}, ['ld', f'/o/{n}.o', '/sysroot/lib/wasm32-wasip1/crt1-command.o',
-                            '-L/sysroot/lib/wasm32-wasip1', '-lc-printscan-long-double'] + (['-lc++', '-lc++abi'] if cxx else []) +
+                            '-L/sysroot/lib/wasm32-wasip1', '-lc-printscan-long-double'] + ['-lsc_rt'] * bool(level) +
+                           (['-lc++', '-lc++abi'] if cxx else []) +
                            ['-lsetjmp', '-lc', '-lm', '/res/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a', '-o', f'/o/{n}.wasm']),
                            capture_output=True, text=True, timeout=300)
         txt += l.stderr
@@ -187,20 +192,29 @@ def repl(seq):
     open(f'{out}/repl-{seq}.txt', 'w').write(txt)
     return f'repl-{seq}', norm_hash(txt)
 
-def std_pcm():
-    """libc++'s std module, without <csignal>, which WASI's libc rejects"""
+def pcm_dir(level):
+    """the directory of the std module of a level of --safety, or of none"""
+    return M + (f'-{level}' if level else '')
+
+def std_pcm(level=None):
+    """libc++'s std module, without <csignal>, which WASI's libc rejects; at
+    a level, with its checks"""
+    m = pcm_dir(level)
+    os.makedirs(m, exist_ok=True)
     src = [l for l in open(STD_CPPM) if 'csignal' not in l]
-    open(f'{M}/std.cppm', 'w').writelines(src)
-    os.utime(f'{M}/std.cppm', (0, 0))  # the .pcm records it
-    if os.path.exists(f'{M}/std.pcm'):
-        os.remove(f'{M}/std.pcm')
-    r = subprocess.run(engine({M: '/m', SR: '/sysroot', RES: '/res'}, iface(CXXFLAGS) + W_EXTRA + ['-o', '/m/std.pcm', '/m/std.cppm']),
+    open(f'{m}/std.cppm', 'w').writelines(src)
+    os.utime(f'{m}/std.cppm', (0, 0))  # the .pcm records it
+    if os.path.exists(f'{m}/std.pcm'):
+        os.remove(f'{m}/std.pcm')
+    fl = iface(checks(CXXFLAGS, level, True) if level else CXXFLAGS)
+    r = subprocess.run(engine({m: '/m', SR: '/sysroot', RES: '/res'}, fl + W_EXTRA + ['-o', '/m/std.pcm', '/m/std.cppm']),
                        capture_output=True, timeout=600)
     txt = r.stderr.decode(errors='replace') + f'cc1 exit={r.returncode}\n'
-    if os.path.exists(f'{M}/std.pcm'):
-        txt += 'pcm ' + hashlib.md5(open(f'{M}/std.pcm', 'rb').read()).hexdigest() + '\n'
-    open(f'{out}/std-pcm.txt', 'w').write(txt)
-    return norm_hash(txt)
+    if os.path.exists(f'{m}/std.pcm'):
+        txt += 'pcm ' + hashlib.md5(open(f'{m}/std.pcm', 'rb').read()).hexdigest() + '\n'
+    n = 'std-pcm' + (f'-{level}' if level else '')
+    open(f'{out}/{n}.txt', 'w').write(txt)
+    return n, norm_hash(txt)
 
 SKIP = ('warn-date-time', 'SOURCE_DATE_EPOCH', 'pr133574', 'builtin_redef')  # depend on the clock
 progs = [p for p in progs if not p[0].endswith(tuple(x + '.c' for x in SKIP))]
@@ -209,8 +223,8 @@ if os.environ.get('ONLY'):  # ONLY=<file>: only the results named there, one per
     only = set(open(os.environ['ONLY']).read().split())
     progs = [pr for pr in progs if name(pr) in only]
     seqs = [s for s in seqs if f'repl-{s}' in only]
-res = {'std-pcm': std_pcm()}
 with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
+    res = dict(ex.map(std_pcm, (None,) + SAFETY))
     res.update(ex.map(one, progs))
     res.update(ex.map(repl, seqs))
 if not NATIVE:

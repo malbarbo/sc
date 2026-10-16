@@ -6,8 +6,10 @@
 #include "sc_inv.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/LangStandard.h"
+#include "clang/Basic/Sanitizers.h"
 #include "clang/Basic/TargetOptions.h"
 #include "clang/Lex/HeaderSearchOptions.h"
+#include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/StaticAnalyzer/Core/AnalyzerOptions.h"
 #include "clang/Frontend/FrontendOptions.h"
@@ -92,6 +94,13 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
     LO.Deprecated = true;
     LO.SkipODRCheckInGMF = true;
   }
+  if (O.PatternInit)
+    LO.setTrivialAutoVarInit(LangOptions::TrivialAutoVarInitKind::Pattern);
+  auto Kinds = [](const std::vector<std::string> &Names, SanitizerSet &S) {
+    for (const auto &N : Names)
+      S.set(parseSanitizerValue(N, /*AllowGroups=*/false), true);
+  };
+  Kinds(O.Sanitize, LO.Sanitize);
 
   CodeGenOptions &CG = Inv.getCodeGenOpts();
   CG.DisableFree = true;
@@ -106,8 +115,10 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   CG.MergeAllConstants = false;
   CG.DirectAccessExternalData = !O.PIC;
   CG.StrictLifetimes = true;
-  CG.SanitizeAddressUseOdrIndicator = true;
-  CG.SanitizeMemoryParamRetval = true;
+  CG.SanitizeAddressUseOdrIndicator = !O.NoOdrIndicator;
+  CG.SanitizeMemoryParamRetval = !O.NoParamRetval;
+  Kinds(O.SanitizeTrap, CG.SanitizeTrap);
+  Kinds(O.SanitizeMerge, CG.SanitizeMergeHandlers);
   CG.UseInitArray = true;
   CG.AsmVerbose = true;
   CG.RegisterGlobalDtorsWithAtExit = false;
@@ -158,6 +169,9 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   AO.ShouldEmitErrorsOnInvalidConfigValue = true;
   AO.InlineMaxStackDepth = 5;
   AO.maxBlockVisitOnPath = 4;
+
+  for (const auto &M : O.Macros)
+    Inv.getPreprocessorOpts().addMacroDef(M);
 
   HeaderSearchOptions &HS = Inv.getHeaderSearchOpts();
   HS.Sysroot = O.Sysroot;
@@ -239,7 +253,24 @@ bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O, std::string &E
     else if (A == "-fcolor-diagnostics") O.Colors = true;
     else if (A == "-sc-one-cell") O.OneCell = true;
     else if (A == "-debug-info-kind=line-tables-only") O.LineTables = true;
+    else if (A == "-ftrivial-auto-var-init=pattern") O.PatternInit = true;
+    else if (A == "-fno-sanitize-memory-param-retval") O.NoParamRetval = true;
+    else if (A == "-fno-sanitize-address-use-odr-indicator") O.NoOdrIndicator = true;
     else if (A == "-I") O.Include.push_back(Next());
+    else if (A == "-D") O.Macros.push_back(Next());
+    else if (A.starts_with("-fsanitize=") || A.starts_with("-fsanitize-trap=") || A.starts_with("-fsanitize-merge=")) {
+      auto [Flag, List] = A.split('=');
+      auto &To = Flag == "-fsanitize" ? O.Sanitize : Flag == "-fsanitize-trap" ? O.SanitizeTrap : O.SanitizeMerge;
+      llvm::SmallVector<llvm::StringRef> Names;
+      List.split(Names, ',', -1, false);
+      for (llvm::StringRef N : Names) {
+        if (parseSanitizerValue(N, /*AllowGroups=*/false) == SanitizerMask()) {
+          Error = ("unsupported value of " + Flag + "=: '" + N + "'").str();
+          return false;
+        }
+        To.push_back(N.str());
+      }
+    }
     else if (A == "-x") {
       llvm::StringRef X = Next();
       if (X != "c" && X != "c++") {
