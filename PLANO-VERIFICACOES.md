@@ -619,9 +619,13 @@ runtime em `rt/sc_asan.c`, a *shadow* em 0x110000, o alocador com
 quarentena, os nomes do `--wrap` no loader e o `__cxa_throw`. O
 `llvm/asan-cleanupret.patch` corrige o ASan com as exceções do wasm. O
 `-Wdeprecated-copy-with-user-provided-dtor` foi para o S. Uma célula leva
-115 ms no `on` contra 68 ms no `off`, e o `sc.wasm` cresceu 78 KB. A pilha
-da alocação e do `free` no relato ficou de fora: precisa de uma função do
-host.
+115 ms no `on` contra 68 ms no `off`, e o `sc.wasm` cresceu 78 KB.
+
+**A F3b está feita** (ANALISE.md §36). O relato diz onde o bloco foi
+liberado e alocado, com pilhas capturadas pelo loader e simbolizadas por
+ele só no relato. Só os primeiros 20 mil blocos guardam a pilha, e o
+`std::map` de 100 mil chaves fica no tempo de antes (R12). O `sc FILE` com
+`setjmp`/`longjmp` também foi corrigido (§35).
 
 A F1 vem primeiro, porque é o alicerce:
 

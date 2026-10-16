@@ -89,6 +89,10 @@ error: vector[] index out of bounds
 == dangling.cpp on exit=134
 error: heap-use-after-free: read of 4 bytes, at the start of a freed block of 12 bytes
     at main (dangling.cpp:10:18)
+the block was freed
+    at main (dangling.cpp:8:11)
+and allocated
+    at main (dangling.cpp:5:26)
 == dangling.cpp strict exit=134
 dangling.cpp:6:21: warning: local variable 'v' is later invalidated [-Wlifetime-safety-invalidation]
     6 |     int &primeiro = v[0];
@@ -101,6 +105,10 @@ dangling.cpp:10:18: note: later used here
       |                  ^~~~~~~~
 error: heap-use-after-free: read of 4 bytes, at the start of a freed block of 12 bytes
     at main (dangling.cpp:10:18)
+the block was freed
+    at main (dangling.cpp:8:11)
+and allocated
+    at main (dangling.cpp:5:26)
 == div-zero.c off exit=134
 antes
 error: division by zero
@@ -120,12 +128,20 @@ error: division by zero
 == double-free.c on exit=134
 error: double-free: free of a block of 10 bytes already freed
     at main (double-free.c:8:5)
+the block was freed
+    at main (double-free.c:7:5)
+and allocated
+    at main (double-free.c:5:18)
 == double-free.c strict exit=134
 double-free.c:5:11: warning: implicit conversion when initializing 'char *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
     5 |     char *nome = malloc(10);
       |           ^      ~~~~~~~~~~
 error: double-free: free of a block of 10 bytes already freed
     at main (double-free.c:8:5)
+the block was freed
+    at main (double-free.c:7:5)
+and allocated
+    at main (double-free.c:5:18)
 == fgets.c off exit=0
 == fgets.c on exit=134
 error: stack-buffer-overflow: write of up to 100 bytes by fgets, 0 bytes past the end of the variable 'nome' (10 bytes)
@@ -163,6 +179,8 @@ error: global-buffer-overflow: read of 4 bytes, 0 bytes past the end of the glob
 == heap-overflow.c on exit=134
 error: heap-buffer-overflow: write of 4 bytes, 0 bytes past the end of a block of 20 bytes
     at main (heap-overflow.c:8:22)
+the block was allocated
+    at main (heap-overflow.c:6:22)
 == heap-overflow.c strict exit=134
 heap-overflow.c:6:10: warning: implicit conversion when initializing 'int *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
     6 |     int *quadrados = malloc(n * sizeof(int));
@@ -172,6 +190,8 @@ heap-overflow.c:6:29: warning: implicit conversion changes signedness: 'int' to 
       |                             ^ ~
 error: heap-buffer-overflow: write of 4 bytes, 0 bytes past the end of a block of 20 bytes
     at main (heap-overflow.c:8:22)
+the block was allocated
+    at main (heap-overflow.c:6:22)
 == heap.c.repl off exit=0
 (int) 3
 (int) 17
@@ -180,8 +200,14 @@ error: heap-buffer-overflow: write of 4 bytes, 0 bytes past the end of a block o
 error: heap-buffer-overflow: write of 4 bytes, 0 bytes past the end of a block of 16 bytes
     at enche (cell_3:1:63)
     at cell_5:1:1
+the block was allocated
+    at cell_4:1:5
 error: heap-use-after-free: read of 4 bytes, 12 bytes into a freed block of 16 bytes
     at cell_9:1:1
+the block was freed
+    at cell_8:1:1
+and allocated
+    at cell_4:1:5
 == heap.c.repl strict exit=1
 (int) 3
 cell_4:1:3: warning: implicit conversion when assigning to 'int *' from type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
@@ -190,8 +216,14 @@ cell_4:1:3: warning: implicit conversion when assigning to 'int *' from type 'vo
 error: heap-buffer-overflow: write of 4 bytes, 0 bytes past the end of a block of 16 bytes
     at enche (cell_3:1:63)
     at cell_5:1:1
+the block was allocated
+    at cell_4:1:5
 error: heap-use-after-free: read of 4 bytes, 12 bytes into a freed block of 16 bytes
     at cell_9:1:1
+the block was freed
+    at cell_8:1:1
+and allocated
+    at cell_4:1:5
 == in-libc.c off exit=134
 error: invalid memory access
     in strlen
@@ -335,6 +367,12 @@ ana
 error: double-free: free of a block of 4 bytes already freed
     at Nome::~Nome() (regra-dos-tres.cpp:8:15)
     at main (regra-dos-tres.cpp:16:1)
+the block was freed
+    at Nome::~Nome() (regra-dos-tres.cpp:8:15)
+    at main (regra-dos-tres.cpp:16:1)
+and allocated
+    at Nome::Nome(char const*) (regra-dos-tres.cpp:7:33)
+    at main (regra-dos-tres.cpp:13:10)
 == regra-dos-tres.cpp strict exit=134
 ana
 regra-dos-tres.cpp:8:5: warning: definition of implicit copy constructor for 'Nome' is deprecated because it has a user-provided destructor [-Wdeprecated-copy-with-user-provided-dtor]
@@ -346,6 +384,12 @@ regra-dos-tres.cpp:14:14: note: in implicit copy constructor for 'Nome' first re
 error: double-free: free of a block of 4 bytes already freed
     at Nome::~Nome() (regra-dos-tres.cpp:8:15)
     at main (regra-dos-tres.cpp:16:1)
+the block was freed
+    at Nome::~Nome() (regra-dos-tres.cpp:8:15)
+    at main (regra-dos-tres.cpp:16:1)
+and allocated
+    at Nome::Nome(char const*) (regra-dos-tres.cpp:7:33)
+    at main (regra-dos-tres.cpp:13:10)
 == shift.c off exit=0
 1
 == shift.c on exit=134
@@ -370,12 +414,18 @@ maria
 error: heap-buffer-overflow: write of 6 bytes by strcpy, 0 bytes past the end of a block of 5 bytes
     at copia (strcpy.c:7:5)
     at main (strcpy.c:12:18)
+the block was allocated
+    at copia (strcpy.c:6:15)
+    at main (strcpy.c:12:18)
 == strcpy.c strict exit=134
 strcpy.c:6:11: warning: implicit conversion when initializing 'char *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
     6 |     char *c = malloc(strlen(s));
       |           ^   ~~~~~~~~~~~~~~~~~
 error: heap-buffer-overflow: write of 6 bytes by strcpy, 0 bytes past the end of a block of 5 bytes
     at copia (strcpy.c:7:5)
+    at main (strcpy.c:12:18)
+the block was allocated
+    at copia (strcpy.c:6:15)
     at main (strcpy.c:12:18)
 == string-index.cpp off exit=0
 abc  
@@ -464,6 +514,11 @@ ok
 error: heap-use-after-free: read of 4 bytes, 4 bytes into a freed block of 8 bytes
     at libera (use-after-free.c:12:24)
     at main (use-after-free.c:24:5)
+the block was freed
+    at libera (use-after-free.c:11:9)
+    at main (use-after-free.c:24:5)
+and allocated
+    at main (use-after-free.c:19:24)
 == use-after-free.c strict exit=134
 use-after-free.c:19:20: warning: implicit conversion when initializing 'struct no *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
    19 |         struct no *n = malloc(sizeof(struct no));
@@ -471,6 +526,11 @@ use-after-free.c:19:20: warning: implicit conversion when initializing 'struct n
 error: heap-use-after-free: read of 4 bytes, 4 bytes into a freed block of 8 bytes
     at libera (use-after-free.c:12:24)
     at main (use-after-free.c:24:5)
+the block was freed
+    at libera (use-after-free.c:11:9)
+    at main (use-after-free.c:24:5)
+and allocated
+    at main (use-after-free.c:19:24)
 == use-after-scope.c off exit=0
 10
 == use-after-scope.c on exit=134

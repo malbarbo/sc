@@ -112,10 +112,29 @@ typedef struct Block {
   uint32_t magic, size; // LIVE or DEAD; the size the program asked for
   uint32_t left, total; // the block libc gave: user - left, total bytes
   struct Block *next;   // in the quarantine
-  uint32_t pad[3];
+  uint32_t allocated, freed; // where: the numbers of their stacks (stack)
+  uint32_t pad;
 } Block;
 
 _Static_assert(sizeof(Block) == 32, "the header is 4 granules");
+
+// the loader's (sc): __sc_rt_stack keeps the stack of its caller under a
+// number, and __sc_rt_blame names the stacks of the block of the report
+// that follows. Weak: a program run without them (the corpus's) has none
+__attribute__((weak)) uint32_t __sc_rt_stack(void);
+__attribute__((weak)) void __sc_rt_blame(uint32_t allocated, uint32_t freed);
+
+// Only the first STACKS blocks keep their stacks: each costs a few
+// microseconds, and a std::map of 100 thousand keys took 5 times as long
+// with all of them (ANALISE.md)
+#define STACKS 20000
+static uint32_t stacks;
+
+static uint32_t stack(void) { return __sc_rt_stack ? __sc_rt_stack() : 0; }
+
+static void blame(const Block *b) {
+  if (__sc_rt_blame) __sc_rt_blame(b->allocated, b->magic == DEAD ? b->freed : 0);
+}
 
 static Block *header(uintptr_t user) { return (Block *)(user - sizeof(Block)); }
 
@@ -227,6 +246,7 @@ static _Noreturn void access_error(uintptr_t a, uintptr_t n, int write, uintptr_
     else
       format(msg, sizeof msg, "heap-buffer-overflow: %s, %s a block of %s", acc,
                where(w, sizeof w, bad, user, blk->size), bytes(b, sizeof b, blk->size));
+    blame(blk);
     __sc_rt_report(msg);
   }
   case STACK_LEFT: case STACK_MID: case STACK_RIGHT: case STACK_SCOPE: {
@@ -461,7 +481,7 @@ static void *alloc(size_t n, size_t align) {
   unpoison(user, n);
   fill(up8(user + n), real + total - up8(user + n), HEAP_RIGHT);
   Block *b = header(user);
-  *b = (Block){.magic = LIVE, .size = n, .left = left, .total = total};
+  *b = (Block){.magic = LIVE, .size = n, .left = left, .total = total, .allocated = stacks < STACKS ? (stacks++, stack()) : 0};
   return (void *)user;
 }
 
@@ -470,9 +490,11 @@ static _Noreturn void bad_free(const char *fn, uintptr_t p) {
   uintptr_t user;
   const Global *g;
   Block *blk = block_near(p, FREED, &user, 1 << 20);
-  if (blk && p - user < blk->size)
+  if (blk && p - user < blk->size) {
     format(msg, sizeof msg, "invalid-free: %s of an address %s a block of %s", fn, where(w, sizeof w, p, user, blk->size),
              bytes(b, sizeof b, blk->size));
+    blame(blk);
+  }
   else if (in_stack(p))
     format(msg, sizeof msg, "invalid-free: %s of the address of a local variable", fn);
   else if ((g = global_at(p)))
@@ -489,6 +511,7 @@ static Block *owned(void *p, const char *fn) {
   if (b && b->magic == DEAD) {
     char msg[128], s[32];
     format(msg, sizeof msg, "double-free: %s of a block of %s already freed", fn, bytes(s, sizeof s, b->size));
+    blame(b);
     __sc_rt_report(msg);
   }
   if (b) return b;
@@ -501,6 +524,7 @@ static Block *owned(void *p, const char *fn) {
 static void release(Block *b) {
   uintptr_t user = (uintptr_t)b + sizeof(Block);
   b->magic = DEAD;
+  b->freed = b->allocated ? stack() : 0;
   fill(user, up8(b->size), FREED);
   b->next = 0;
   if (quarantine_end) quarantine_end->next = b;

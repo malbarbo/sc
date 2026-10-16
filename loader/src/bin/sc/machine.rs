@@ -142,6 +142,7 @@ impl Machine {
         wasi.inherit_stdio().inherit_env().args(&argv);
         let libdir = b.join("sysroot/lib/wasm32-wasip1");
         let mut loader = Loader::new(wasi.build_p1(), vec![libdir], STACK, interactive)?;
+        loader.keep_stacks();
         let shown = Arc::new(Mutex::new(None));
         let (s, null) = (Arc::clone(&shown), if lang == Lang::C { "NULL" } else { "nullptr" });
         loader.host("__sc_show_int", &[ValType::I32, ValType::I32, ValType::I64], move |mem, a| {
@@ -305,7 +306,18 @@ fn runtime_error(e: &Error, loader: &mut Loader, build: &Path) -> String {
     let msg = message(e, loader);
     let library = !msg.is_empty() && msg != "aborted";
     let mut out: Vec<String> = Some(msg).filter(|m| !m.is_empty()).into_iter().collect();
-    out.extend(frames(e, build, library).iter().map(|f| format!("    {f}")));
+    let bt = e.downcast_ref::<wasmtime::WasmBacktrace>();
+    out.extend(bt.map(|bt| frames(bt, loader, build, library)).unwrap_or_default().iter().map(|f| format!("    {f}")));
+    // the block of a report of ASan's: where it was freed and allocated
+    let (allocated, freed) = loader.blamed();
+    let and = if freed.is_some() { "and allocated" } else { "the block was allocated" };
+    for (what, bt) in [("the block was freed", freed), (and, allocated)] {
+        let fs = bt.map(|bt| frames(&bt, loader, build, false)).unwrap_or_default();
+        if !fs.is_empty() {
+            out.push(what.into());
+            out.extend(fs.iter().map(|f| format!("    {f}")));
+        }
+    }
     out.join("\n")
 }
 
@@ -342,24 +354,23 @@ fn message(e: &Error, loader: &mut Loader) -> String {
     }
 }
 
-/// The frames of `e`, innermost first, as `at f (file:line:column)`: those
+/// The frames of `bt`, innermost first, as `at f (file:line:column)`: those
 /// of the student's code, after the innermost frame if it is not (a
 /// function of the libraries, where the code stopped; not when `abort`
 /// stopped it, which says it was called). A frame repeated in a row, as in
 /// a recursion, comes once, with how many times; a cycle of 2 to 4 frames
 /// too. A long list keeps its start and its end.
-fn frames(e: &Error, build: &Path, library: bool) -> Vec<String> {
-    let Some(bt) = e.downcast_ref::<wasmtime::WasmBacktrace>() else { return Vec::new() };
+fn frames(bt: &wasmtime::WasmBacktrace, loader: &Loader, build: &Path, library: bool) -> Vec<String> {
     let build = build.to_string_lossy();
     // (function, where in the student's code), inlined functions first
     let entries = bt.frames().iter().flat_map(|f| {
         let name = f.func_name().map(source_name).unwrap_or_default();
-        let syms: Vec<_> = f.symbols().iter().map(|s| {
+        let syms: Vec<_> = loader.symbols(f).into_iter().map(|s| {
             // the libraries' own sources are wasi-sdk's (wasisdk://...)
-            let user = s.file().is_some_and(|f| !f.starts_with(&*build) && !f.contains("://"));
-            let at = s.line().filter(|_| user)
-                .map(|l| format!("{}:{l}:{}", s.file().unwrap_or_default(), s.column().unwrap_or(0)));
-            (s.name().map(source_name).unwrap_or_else(|| name.clone()), at)
+            let file = s.file.unwrap_or_default();
+            let user = !file.is_empty() && !file.starts_with(&*build) && !file.contains("://");
+            let at = s.line.filter(|_| user).map(|l| format!("{file}:{l}:{}", s.column.unwrap_or(0)));
+            (s.name.as_deref().map(source_name).unwrap_or_else(|| name.clone()), at)
         }).collect();
         if syms.is_empty() { vec![(name, None)] } else { syms }
     });

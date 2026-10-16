@@ -41,7 +41,9 @@
 
 use wasmtime::error::Context;
 use wasmtime::{bail, format_err, Result};
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use wasmparser::{Dylink0Subsection, KnownCustom, Parser, Payload, SymbolFlags};
 use wasmtime::*;
@@ -70,6 +72,17 @@ enum Sym {
 struct Host {
     wasi: WasiP1Ctx,
     syms: HashMap<String, (Sym, Option<u32>)>, // the symbol and its table slot
+    stacks: Stacks,
+}
+
+/// The stacks that libsc_rt asks the loader to keep ([`Loader::keep_stacks`]):
+/// where each block of its allocator was allocated and freed. Each is kept
+/// once, under a number from 1.
+#[derive(Default)]
+struct Stacks {
+    ids: HashMap<Vec<(usize, usize)>, u32>, // (module, offset in it) of each frame
+    traces: Vec<Arc<WasmBacktrace>>,
+    blamed: Option<(u32, u32)>, // the stacks of the block of a report: allocated, freed
 }
 
 /// What the `dylink.0` section says.
@@ -88,6 +101,7 @@ struct Pending {
     name: String,
     module: Module,
     info: Dylink,
+    debug: Option<Debug>,
 }
 
 pub struct Loader {
@@ -105,6 +119,42 @@ pub struct Loader {
     undefined: Vec<String>,       // what the addresses from UNDEFINED stand for
     slots: HashMap<String, u32>,  // table slots of functions not defined yet
     asan: bool,                   // the memory has ASan's shadow
+    debug: Vec<Debug>,            // of the modules with DWARF
+}
+
+type Dwarf = gimli::EndianArcSlice<gimli::LittleEndian>;
+
+/// The DWARF of a module, for the file and line of its frames
+/// ([`Loader::symbols`]). wasmtime's (`wasm_backtrace_details`) parses it
+/// again at each frame of each backtrace, which made keeping the stacks of
+/// ASan's blocks hundreds of times slower.
+struct Debug {
+    module: Module,
+    code: u64, // where the code section's contents start, which DWARF's addresses count from
+    sections: HashMap<String, Arc<[u8]>>,
+    cx: OnceCell<Option<addr2line::Context<Dwarf>>>, // made at the first frame
+}
+
+/// A frame's function (an inlined one first), file and line, from DWARF.
+pub struct Symbol {
+    pub name: Option<String>,
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+fn debug(module: &Module, bytes: &[u8]) -> Result<Option<Debug>> {
+    let (mut code, mut sections) = (0, HashMap::new());
+    for p in Parser::new(0).parse_all(bytes) {
+        match p? {
+            Payload::CodeSectionStart { range, .. } => code = range.start as u64,
+            Payload::CustomSection(c) if c.name().starts_with(".debug_") => {
+                sections.insert(c.name().to_string(), Arc::from(c.data()));
+            }
+            _ => {}
+        }
+    }
+    Ok((!sections.is_empty()).then(|| Debug { module: module.clone(), code, sections, cx: OnceCell::new() }))
 }
 
 fn dylink(bytes: &[u8]) -> Result<Dylink> {
@@ -170,14 +220,17 @@ impl Loader {
     pub fn new(wasi: WasiP1Ctx, libdirs: Vec<PathBuf>, stack: u32, interruptible: bool) -> Result<Loader> {
         let mut config = Config::new();
         config.epoch_interruption(interruptible);
-        // a trap's frames with their file and line, from the modules' DWARF
-        config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
-        config.wasm_backtrace_max_frames(std::num::NonZeroUsize::new(1 << 20));
+        // a trap's file and line come from Loader::symbols. Frames: the
+        // default of 20 would lose the main of a recursion. A frame takes 16
+        // bytes or more of max_wasm_stack's 512 KiB; more would make each
+        // backtrace reserve memory that malloc takes from mmap
+        config.wasm_backtrace_details(WasmBacktraceDetails::Disable);
+        config.wasm_backtrace_max_frames(std::num::NonZeroUsize::new(1 << 15));
         if let Ok(c) = Cache::from_file(None) {
             config.cache(Some(c));
         }
         let engine = Engine::new(&config)?;
-        let mut store = Store::new(&engine, Host { wasi, syms: HashMap::new() });
+        let mut store = Store::new(&engine, Host { wasi, syms: HashMap::new(), stacks: Stacks::default() });
         let memory = Memory::new(&mut store, MemoryType::new(stack.div_ceil(PAGE), Some(UNDEFINED / PAGE)))?;
         let table = Table::new(&mut store, TableType::new(RefType::FUNCREF, 1, None), Ref::Func(None))?;
         let sp = Global::new(&mut store, GlobalType::new(ValType::I32, Mutability::Var), Val::I32(stack as i32))?;
@@ -186,7 +239,7 @@ impl Loader {
         linker.define(&mut store, "env", "memory", memory)?;
         let mut l = Loader { engine, store, linker, memory, table, sp, wasi: HashMap::new(), libdirs,
                              loaded: HashSet::new(), bump: Some(stack), later: Vec::new(), undefined: Vec::new(),
-                             slots: HashMap::new(), asan: false };
+                             slots: HashMap::new(), asan: false, debug: Vec::new() };
         l.define("__stack_low", Sym::Data(16), false);
         l.define("__stack_high", Sym::Data(stack), false);
         Ok(l)
@@ -220,7 +273,8 @@ impl Loader {
             self.collect(n, &lib, seen, out)?;
         }
         let module = Module::new(&self.engine, bytes).with_context(|| name.to_string())?;
-        out.push(Pending { name: name.to_string(), module, info });
+        let debug = debug(&module, bytes).with_context(|| name.to_string())?;
+        out.push(Pending { name: name.to_string(), module, info, debug });
         Ok(())
     }
 
@@ -414,6 +468,7 @@ impl Loader {
     pub fn load_bytes(&mut self, name: &str, bytes: &[u8], shadow: bool) -> Result<()> {
         let mut group = Vec::new();
         self.collect(name, bytes, &mut HashSet::new(), &mut group)?;
+        self.debug.extend(group.iter_mut().filter_map(|p| p.debug.take()));
         if group.iter().any(|p| p.module.get_export("__asan_init").is_some()) && !self.asan {
             // the shadow, after the stack: the first group has the memory to itself
             match self.bump {
@@ -568,6 +623,72 @@ impl Loader {
             Ok(())
         });
         self.define(name, Sym::Func(func), true);
+    }
+
+    /// libsc_rt's imports for the stacks of its blocks:
+    /// `uint32_t __sc_rt_stack(void)` keeps the stack of its caller and
+    /// says its number, and `void __sc_rt_blame(uint32_t allocated,
+    /// uint32_t freed)` names the stacks of the block of the report that
+    /// follows ([`Loader::blamed`]); 0 is none.
+    pub fn keep_stacks(&mut self) {
+        let ty = FuncType::new(&self.engine, [], [ValType::I32]);
+        let f = Func::new(&mut self.store, ty, |mut caller: Caller<'_, Host>, _, r| {
+            let bt = WasmBacktrace::capture(&caller);
+            let key: Vec<(usize, usize)> = bt.frames().iter()
+                .map(|f| (f.module().image_range().start as usize, f.module_offset().unwrap_or(0))).collect();
+            let st = &mut caller.data_mut().stacks;
+            let n = st.traces.len() as u32 + 1;
+            let id = *st.ids.entry(key).or_insert(n);
+            if id == n {
+                st.traces.push(Arc::new(bt));
+            }
+            r[0] = Val::I32(id as i32);
+            Ok(())
+        });
+        self.define("__sc_rt_stack", Sym::Func(f), true);
+        let ty = FuncType::new(&self.engine, [ValType::I32, ValType::I32], []);
+        let f = Func::new(&mut self.store, ty, |mut caller: Caller<'_, Host>, a, _| {
+            caller.data_mut().stacks.blamed = Some((a[0].unwrap_i32() as u32, a[1].unwrap_i32() as u32));
+            Ok(())
+        });
+        self.define("__sc_rt_blame", Sym::Func(f), true);
+    }
+
+    /// The stacks where the block of libsc_rt's last report was allocated
+    /// and freed, if it named them ([`Loader::keep_stacks`]).
+    pub fn blamed(&mut self) -> (Option<Arc<WasmBacktrace>>, Option<Arc<WasmBacktrace>>) {
+        let st = &mut self.store.data_mut().stacks;
+        let (a, f) = st.blamed.take().unwrap_or((0, 0));
+        let get = |id: u32| id.checked_sub(1).and_then(|i| st.traces.get(i as usize)).cloned();
+        (get(a), get(f))
+    }
+
+    /// The function, file and line of `frame`, inlined functions first,
+    /// from its module's DWARF; none without it.
+    pub fn symbols(&self, frame: &FrameInfo) -> Vec<Symbol> {
+        let Some(d) = self.debug.iter().find(|d| Module::same(&d.module, frame.module())) else { return Vec::new() };
+        let cx = d.cx.get_or_init(|| {
+            let empty: Arc<[u8]> = Arc::from([]);
+            let dwarf = gimli::Dwarf::load(|id| -> Result<Dwarf, gimli::Error> {
+                let data = d.sections.get(id.name()).unwrap_or(&empty);
+                Ok(Dwarf::new(Arc::clone(data), gimli::LittleEndian))
+            }).ok()?;
+            addr2line::Context::from_dwarf(dwarf).ok()
+        });
+        let (Some(cx), Some(at)) = (cx, frame.module_offset()) else { return Vec::new() };
+        let mut out = Vec::new();
+        if let Ok(mut fs) = cx.find_frames(at as u64 - d.code).skip_all_loads() {
+            while let Ok(Some(f)) = fs.next() {
+                let loc = f.location.as_ref();
+                out.push(Symbol {
+                    name: f.function.as_ref().and_then(|n| n.raw_name().ok()).map(|n| n.to_string()),
+                    file: loc.and_then(|l| l.file).map(str::to_string),
+                    line: loc.and_then(|l| l.line),
+                    column: loc.and_then(|l| l.column),
+                });
+            }
+        }
+        out
     }
 
     /// Whether the modules define the function `name`.

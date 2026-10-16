@@ -2320,11 +2320,105 @@ nível. O `make test`, o `test-warn`, o `test-native` e o `test-split` deram
 
 **Fica para depois:**
 - a pilha da alocação e do `free` no relato: precisa de uma função do host
-  que devolva os frames do momento (uma F3b);
+  que devolva os frames do momento (uma F3b, feita no §36);
 - os vazamentos no fim do `sc FILE` (F4);
 - a libc não é instrumentada: um estouro dentro de uma função dela que não
   tem interceptor não é visto.
 
 Um defeito antigo, de antes da F3: no `sc FILE`, um programa com `setjmp`
 e `longjmp` falha na ligação com `undefined symbol: __c_longjmp`, também
-no `off`.
+no `off`. Ele foi corrigido no §35.
+
+## 35. O `__c_longjmp` no `sc FILE`
+
+O `sc FILE` liga cada célula com `--unresolved-symbols=report-all`, e um
+programa com `setjmp`/`longjmp` falhava em todos os níveis com
+`undefined symbol: __c_longjmp`. Esse é o *tag* das exceções do wasm que o
+`longjmp` lança. A `libsetjmp.so` da wasi-sdk importa o *tag* e não o
+define. O REPL não via o defeito: ele liga com `import-dynamic`, e o loader
+cria o *tag* que ninguém define.
+
+Religar a `libsetjmp.a` com o nosso wasm-ld não bastava. A `libsetjmp.a`
+define o *tag* como fraco, e o `dylink-weak.patch` faz o wasm-ld exportá-lo.
+A biblioteca, porém, lança o próprio *tag* local, e não o que o loader dá
+aos outros módulos, e o `setjmp` não pegava o `longjmp`.
+
+**A correção:** `rt/c_longjmp.s` define o *tag* forte, em assembly, e o
+Makefile refaz a `libsetjmp.so` do sysroot a partir dele e da `libsetjmp.a`
+da wasi-sdk (`$(SR)/.setjmp`). As funções ficam exportadas com `--export`,
+porque são ocultas no objeto. O `test/aluno` ganhou o `erros.c`, uma
+calculadora que trata os erros com `setjmp`/`longjmp`, e ele roda nos três
+níveis.
+
+## 36. A pilha do bloco no relato do ASan (F3b)
+
+Um relato do heap agora diz também onde o bloco foi liberado e onde foi
+alocado:
+
+```
+error: heap-use-after-free: read of 4 bytes, 4 bytes into a freed block of 8 bytes
+    at libera (use-after-free.c:12:24)
+    at main (use-after-free.c:24:5)
+the block was freed
+    at libera (use-after-free.c:11:9)
+    at main (use-after-free.c:24:5)
+and allocated
+    at main (use-after-free.c:19:24)
+```
+
+**As peças:**
+- **O runtime.** O cabeçalho de 32 bytes do bloco usa dois dos campos
+  livres para os números das pilhas da alocação e do `free`. O
+  `sc_asan.c` importa duas funções do host, fracas:
+  - `__sc_rt_stack()` guarda a pilha de quem chamou e devolve um número
+    para ela;
+  - `__sc_rt_blame(alocado, liberado)` vem antes do `__sc_rt_report`. Ela
+    diz as pilhas do bloco nos erros de acesso ao heap, no `free` duplo e
+    no `free` de um endereço no meio de um bloco.
+
+  Sem o loader do `sc`, como no corpus, o número é 0.
+- **O loader** (`Loader::keep_stacks`). Ele captura um `WasmBacktrace` e
+  guarda cada pilha uma vez, pela chave (módulo, offset) dos frames. O
+  `machine.rs` mostra as pilhas com o mesmo filtro dos frames do erro.
+
+**O custo, e o que o resolveu.** Os programas são uma lista de 300 mil nós
+(`malloc` e `free` de cada um) e um `std::map<string, int>` de 100 mil
+chaves, no `on`:
+
+| | lista | `std::map` |
+|---|---|---|
+| sem as pilhas | 0,49 s | 4,61 s |
+| com o `wasm_backtrace_details` do wasmtime, 2^16 frames | 10,0 s | 1 529 s |
+| sem os detalhes, 2^16 frames | 2,74 s | 22,7 s |
+| a forma final, sem limite de blocos | 2,32 s | 11,3 s |
+| **a forma final** (20 mil blocos) | **0,36 s** | **4,74 s** |
+
+O tempo da forma final é o de outra rodada: o `off` deu 0,22 s e 3,45 s.
+
+Três coisas pesavam:
+- **A simbolização.** Com os detalhes ligados, o wasmtime 48 refaz o
+  contexto do addr2line a partir do DWARF em cada frame de cada captura.
+  - Agora os detalhes ficam desligados, e o loader simboliza sozinho
+    (`Loader::symbols`, com os crates `addr2line` e `gimli` nas versões do
+    wasmtime).
+  - Ele guarda as seções `.debug_*` de cada módulo e faz o contexto uma vez
+    por módulo, na primeira consulta.
+  - Só se simboliza ao mostrar um relato.
+  - Os frames do erro também passaram por aqui, e o `test/checks` deu as
+    mesmas linhas nos 108 casos.
+- **O `max_frames`.** Cada captura reserva um vetor de `max_frames`
+  entradas. Com 2^20, o vetor passa do limite de 32 MB em que a glibc ainda
+  reaproveita o heap, e cada captura vai ao `mmap`.
+  - Ele foi para 2^15. Um frame ocupa ao menos 16 bytes dos 512 KiB do
+    `max_wasm_stack`, então 2^15 frames ainda cobrem a pilha inteira, e o
+    `main` de uma recursão não se perde (§31).
+- **A captura.** Mesmo assim, cada uma custa alguns microssegundos.
+  - Só os primeiros 20 mil blocos guardam a pilha (`STACKS` no
+    `sc_asan.c`), e o `free` só a guarda para um bloco que tem a da
+    alocação.
+  - Um programa de aluno quase nunca passa disso, e um que passa só perde
+    as pilhas dos blocos depois do limite. O relato continua igual.
+
+**Os testes.** O `test/checks/expected.txt` ganhou as linhas das pilhas
+nos 7 programas com erro de heap, no `on` e no `strict`. No REPL, a pilha
+aponta para a célula (`at cell_4:1:5`).

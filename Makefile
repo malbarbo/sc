@@ -129,7 +129,18 @@ $(RT).a: $(RT_OBJS)
 $(RT).so: $(RT_OBJS)
 	$(N)/bin/wasm-ld -shared --experimental-pic --unresolved-symbols=import-dynamic $^ -L$(SR)/lib/wasm32-wasip1 -lc -o $@
 
-sysroot: $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(RT).so
+# libsetjmp.so again from wasi-sdk's libsetjmp.a, with the tag of
+# rt/c_longjmp.s; the stamp goes with the sysroot
+$(SR)/.setjmp: rt/c_longjmp.s | $(SR)/lib/wasm32-wasip1/libc++.so
+	@mkdir -p $(B)/rt
+	$(N)/bin/clang --target=wasm32-wasip1 -mexception-handling -c $< -o $(B)/rt/c_longjmp.o
+	$(N)/bin/wasm-ld -shared --experimental-pic --unresolved-symbols=import-dynamic $(B)/rt/c_longjmp.o \
+	  $(W)/share/wasi-sysroot/lib/wasm32-wasip1/libsetjmp.a -u __wasm_setjmp \
+	  $(foreach f,__wasm_setjmp __wasm_setjmp_test __wasm_longjmp,--export=$(f)) \
+	  -L$(SR)/lib/wasm32-wasip1 -lc -o $(SR)/lib/wasm32-wasip1/libsetjmp.so
+	touch $@
+
+sysroot: $(SR)/lib/wasm32-wasip1/libc++.so $(SR)/.setjmp $(RT).a $(RT).so
 
 # --- the engine
 $(B)/engine/%.o: engine/%.cpp engine/sc.h engine/sc_inv.h | $(B)/wasm/lib/libclangSema.a
@@ -246,7 +257,7 @@ $(B)/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/repl
 	scripts/flags.py --session $(firstword $(subst -, ,$*)) $(CURDIR)/$(B) $(wordlist 2,3,$(subst -, ,$*)) > $@
 
-repl: $(SC_REPL) $(B)/sc-engine-full $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so
+repl: $(SC_REPL) $(B)/sc-engine-full $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp
 
 # a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
 test-aluno: repl
@@ -256,11 +267,11 @@ test-checks: repl
 	test/checks.py
 
 # --- tests: the corpus against the uncut engine
-$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a
+$(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp
 	test/corpus.py $< $(B)/res/base
 
 # the same with every warning on, so the cuts keep the code of all warnings
-$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a
+$(B)/res/wev-base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/wev-base
 
 baseline: $(B)/res/base/summary.json
@@ -273,10 +284,10 @@ test-small: $(B)/sc.wasm $(B)/res/base/summary.json $(SCLOAD)
 
 # the native engine against the uncut native engine (sc.wasm and the native
 # engine differ where the host does: stack depth, memory, the sandbox)
-$(B)/res/native-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a
+$(B)/res/native-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp
 	test/corpus.py $< $(B)/res/native-base
 
-$(B)/res/native-wev-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a
+$(B)/res/native-wev-base/summary.json: $(B)/sc-host-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp
 	WFLAGS=-Weverything test/corpus.py $< $(B)/res/native-wev-base
 
 test-native: $(B)/sc $(B)/res/native-base/summary.json $(SCLOAD)

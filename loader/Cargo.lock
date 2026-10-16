@@ -1491,9 +1491,11 @@ dependencies = [
 name = "scload"
 version = "0.1.0"
 dependencies = [
+ "addr2line",
  "bpaf",
  "cpp_demangle",
  "dirs",
+ "gimli",
  "libc",
  "rustyline",
  "sc-proto",
