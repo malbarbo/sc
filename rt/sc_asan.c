@@ -15,7 +15,7 @@
 // of the code linked with libsc_rt, and __real_malloc libc's. The static
 // programs are linked with --wrap; the REPL's loader does the same for the
 // shared objects. libc calls its own malloc, so a block that libc allocates
-// (strdup) has no header, and free passes it on. The live blocks are in a
+// (a FILE's buffer) has no header, and free passes it on. The live blocks are in a
 // list, for __sc_rt_leaks.
 #include <stdarg.h>
 #include <stddef.h>
@@ -301,8 +301,45 @@ static void check_room(uintptr_t a, uintptr_t n, const char *fn) {
   if (bad) access_error(a, n, 1, bad, fn, 1);
 }
 
-static void check_str(const char *s, int write, const char *fn) { // a string and its 0
-  check((uintptr_t)s, strlen(s) + 1, write, fn);
+// the length of the string at s, read as libc reads it, a byte at a time and
+// at most max bytes: each byte it reads, its 0 among them, must be
+// addressable. Not with libc's strlen, which the program's calls are wrapped
+// to (and libsc_rt's own). Inlined: a fault in it is one in the function of
+// libc it checks, for the frames of the report
+static inline __attribute__((always_inline)) size_t read_str(const char *s, size_t max, const char *fn) {
+  uintptr_t a = (uintptr_t)s;
+  size_t i = 0;
+  while (i < max) {
+    uintptr_t p = a + i;
+    int8_t v = (int8_t)*shadow(p);
+    if (v == 0) { // the granule's bytes, the 8 at once if it has no 0
+      size_t end = (p | 7) + 1 - a < max ? (p | 7) + 1 - a : max;
+      uint64_t w;
+      if (!(p & 7) && end - i == 8 && (memcpy(&w, s + i, 8),
+                                       !((w - 0x0101010101010101u) & ~w & 0x8080808080808080u))) {
+        i = end;
+        continue;
+      }
+      for (; i < end; i++)
+        if (!s[i]) return i;
+    } else if (v > 0 && (int)(p & 7) < v) {
+      if (!s[i]) return i;
+      i++;
+    } else {
+      access_error(a, i + 1, 0, p ? p : 1, fn, 0);
+    }
+  }
+  return i;
+}
+
+static inline __attribute__((always_inline)) size_t read_wcs(const wchar_t *s, size_t max, const char *fn) { // max in bytes
+  uintptr_t a = (uintptr_t)s, bad;
+  size_t i = 0;
+  for (; (i + 1) * sizeof *s <= max; i++) {
+    if ((bad = first_bad(a + i * sizeof *s, sizeof *s))) access_error(a, (i + 1) * sizeof *s, 0, bad, fn, 0);
+    if (!s[i]) break;
+  }
+  return i;
 }
 
 #define REPORT(n)                                                                                                     \
@@ -725,34 +762,86 @@ size_t __real_fread(void *, size_t, size_t, FILE *);
 ssize_t __real_read(int, void *, size_t);
 
 char *__wrap_strcpy(char *d, const char *s) {
-  check_str(s, 0, "strcpy");
-  check((uintptr_t)d, strlen(s) + 1, 1, "strcpy");
+  check((uintptr_t)d, read_str(s, SIZE_MAX, "strcpy") + 1, 1, "strcpy");
   return __real_strcpy(d, s);
 }
 
 char *__wrap_strncpy(char *d, const char *s, size_t n) {
-  check((uintptr_t)s, strnlen(s, n) + (strnlen(s, n) < n), 0, "strncpy");
+  read_str(s, n, "strncpy");
   check((uintptr_t)d, n, 1, "strncpy");
   return __real_strncpy(d, s, n);
 }
 
 char *__wrap_strcat(char *d, const char *s) {
-  check_str(s, 0, "strcat");
-  check_str(d, 0, "strcat");
-  check((uintptr_t)d + strlen(d), strlen(s) + 1, 1, "strcat");
+  size_t m = read_str(s, SIZE_MAX, "strcat");
+  check((uintptr_t)d + read_str(d, SIZE_MAX, "strcat"), m + 1, 1, "strcat");
   return __real_strcat(d, s);
 }
 
 char *__wrap_strncat(char *d, const char *s, size_t n) {
-  size_t m = strnlen(s, n);
-  check((uintptr_t)s, m + (m < n), 0, "strncat");
-  check_str(d, 0, "strncat");
-  check((uintptr_t)d + strlen(d), m + 1, 1, "strncat");
+  size_t m = read_str(s, n, "strncat");
+  check((uintptr_t)d + read_str(d, SIZE_MAX, "strncat"), m + 1, 1, "strncat");
   return __real_strncat(d, s, n);
+}
+
+// --- printf: libc reads a %s's string, as far as its precision, and writes
+// through a %n's pointer
+int __real_vfprintf(FILE *, const char *, va_list);
+char *__real_strchr(const char *, int);
+size_t __real_strlen(const char *);
+
+static int digit(char c) { return c >= '0' && c <= '9'; }
+
+// the arguments of fmt's conversions. A positional argument (%1$d) stops
+// the check
+static void print_args(const char *fn, const char *fmt, va_list ap) {
+  read_str(fmt, SIZE_MAX, fn);
+  for (const char *f = fmt; *f; f++) {
+    if (*f != '%') continue;
+    if (*++f == '%') continue;
+    while (*f && __real_strchr("-+ #0'", *f)) f++;
+    if (*f == '*') f++, (void)va_arg(ap, int);
+    while (digit(*f)) f++;
+    if (*f == '$') return;
+    size_t prec = SIZE_MAX;
+    if (*f == '.') {
+      int p = 0;
+      if (*++f == '*') f++, p = va_arg(ap, int);
+      else while (digit(*f)) p = p * 10 + (*f++ - '0');
+      if (*f == '$') return;
+      if (p >= 0) prec = (size_t)p;
+    }
+    int len = 0; // as in scan_args
+    if (*f == 'h') len = f[1] == 'h' ? (f += 2, -2) : (f++, -1);
+    else if (*f == 'l') len = f[1] == 'l' ? (f += 2, 2) : (f++, 1);
+    else if (*f == 'j' || *f == 'L' || *f == 'q') len = 2, f++;
+    else if (*f == 'z' || *f == 't') f++;
+    char c = *f;
+    if (!c) return;
+    if (c == 's' || c == 'S') {
+      void *p = va_arg(ap, void *);
+      if (len == 1 || c == 'S') read_wcs(p, prec == SIZE_MAX ? prec : prec * sizeof(wchar_t), fn);
+      else read_str(p, prec, fn);
+    } else if (c == 'n') {
+      void *p = va_arg(ap, void *);
+      check((uintptr_t)p, len == 2 ? sizeof(long long) : len == 1 ? sizeof(long) : len == -1 ? sizeof(short)
+                        : len == -2 ? 1 : sizeof(int), 1, fn);
+    } else if (__real_strchr("aAeEfFgG", c)) {
+      if (len == 2) (void)va_arg(ap, long double);
+      else (void)va_arg(ap, double);
+    } else if (c == 'p') (void)va_arg(ap, void *);
+    else if (__real_strchr("diouxXcC", c)) {
+      if (len == 2) (void)va_arg(ap, long long);
+      else (void)va_arg(ap, int);
+    } else if (c != 'm') return;
+  }
 }
 
 static int checked_vsprintf(char *d, const char *fmt, va_list ap) {
   va_list aq;
+  va_copy(aq, ap);
+  print_args("sprintf", fmt, aq);
+  va_end(aq);
   va_copy(aq, ap);
   int n = vsnprintf(0, 0, fmt, aq);
   va_end(aq);
@@ -762,6 +851,9 @@ static int checked_vsprintf(char *d, const char *fmt, va_list ap) {
 
 static int checked_vsnprintf(char *d, size_t cap, const char *fmt, va_list ap) {
   va_list aq;
+  va_copy(aq, ap);
+  print_args("snprintf", fmt, aq);
+  va_end(aq);
   va_copy(aq, ap);
   int n = vsnprintf(0, 0, fmt, aq);
   va_end(aq);
@@ -842,7 +934,7 @@ static void scan_args(const char *fn, const char *fmt, va_list ap, int done) {
     if (done >= 0) {
       if (c != 'n' && done-- == 0) return;
       if ((c == 's' || c == '[' || c == 'S') && !width && !alloc)
-        check(a, esz == 1 ? strlen(p) + 1 : (wcslen(p) + 1) * esz, 1, fn);
+        check(a, esz == 1 ? __real_strlen(p) + 1 : (wcslen(p) + 1) * esz, 1, fn);
       continue;
     }
     if (alloc && str) n = sizeof(char *);
@@ -850,7 +942,7 @@ static void scan_args(const char *fn, const char *fmt, va_list ap, int done) {
     else if (str) {
       if (width) check_room(a, (width + 1) * esz, fn);
       continue;
-    } else if (strchr("aAeEfFgG", c)) n = len == 2 ? sizeof(long double) : len == 1 ? sizeof(double) : sizeof(float);
+    } else if (__real_strchr("aAeEfFgG", c)) n = len == 2 ? sizeof(long double) : len == 1 ? sizeof(double) : sizeof(float);
     else if (c == 'p') n = sizeof(void *);
     else n = len == 2 ? sizeof(long long) : len == 1 ? sizeof(long) : len == -1 ? sizeof(short) : len == -2 ? 1 : sizeof(int);
     check(a, n, 1, fn);
@@ -859,7 +951,7 @@ static void scan_args(const char *fn, const char *fmt, va_list ap, int done) {
 
 static int checked_vfscanf(const char *fn, FILE *s, const char *str, const char *fmt, va_list ap) {
   va_list before, after;
-  if (str) check_str(str, 0, fn);
+  if (str) read_str(str, SIZE_MAX, fn);
   va_copy(before, ap);
   va_copy(after, ap);
   scan_args(fn, fmt, before, -1);
@@ -885,6 +977,173 @@ int __wrap_vsscanf(const char *str, const char *fmt, va_list ap) { return checke
 int __wrap_scanf(const char *fmt, ...) SCANF("scanf", stdin, 0)
 int __wrap_fscanf(FILE *s, const char *fmt, ...) SCANF("fscanf", s, 0)
 int __wrap_sscanf(const char *str, const char *fmt, ...) SCANF("sscanf", 0, str)
+
+int __wrap_vfprintf(FILE *f, const char *fmt, va_list ap) {
+  va_list aq;
+  va_copy(aq, ap);
+  print_args("fprintf", fmt, aq);
+  va_end(aq);
+  return __real_vfprintf(f, fmt, ap);
+}
+
+int __wrap_vprintf(const char *fmt, va_list ap) {
+  va_list aq;
+  va_copy(aq, ap);
+  print_args("printf", fmt, aq);
+  va_end(aq);
+  return __real_vfprintf(stdout, fmt, ap);
+}
+
+#define PRINTF(name, f)                                                                                                \
+  {                                                                                                                    \
+    va_list ap, aq;                                                                                                    \
+    va_start(ap, fmt);                                                                                                 \
+    va_copy(aq, ap);                                                                                                   \
+    print_args(name, fmt, aq);                                                                                         \
+    va_end(aq);                                                                                                        \
+    int r = __real_vfprintf(f, fmt, ap);                                                                               \
+    va_end(ap);                                                                                                        \
+    return r;                                                                                                          \
+  }
+int __wrap_printf(const char *fmt, ...) PRINTF("printf", stdout)
+int __wrap_fprintf(FILE *f, const char *fmt, ...) PRINTF("fprintf", f)
+
+// --- libc's functions that read the program's strings and memory, checked
+// as far as libc reads: strchr up to the character, strcmp up to the first
+// difference; memcmp all n bytes, as compiler-rt's strict_memcmp
+int __real_puts(const char *);
+int __real_fputs(const char *, FILE *);
+int __real_strcmp(const char *, const char *);
+int __real_strncmp(const char *, const char *, size_t);
+char *__real_strrchr(const char *, int);
+char *__real_strstr(const char *, const char *);
+size_t __real_strspn(const char *, const char *);
+size_t __real_strcspn(const char *, const char *);
+char *__real_strpbrk(const char *, const char *);
+char *__real_strtok(char *, const char *);
+int __real_memcmp(const void *, const void *, size_t);
+void *__real_memchr(const void *, int, size_t);
+
+size_t __wrap_strlen(const char *s) { return read_str(s, SIZE_MAX, "strlen"); }
+size_t __wrap_strnlen(const char *s, size_t n) { return read_str(s, n, "strnlen"); }
+int __wrap_puts(const char *s) { return read_str(s, SIZE_MAX, "puts"), __real_puts(s); }
+int __wrap_fputs(const char *s, FILE *f) { return read_str(s, SIZE_MAX, "fputs"), __real_fputs(s, f); }
+
+// the bytes of a and b that a comparison of at most n reads
+static inline __attribute__((always_inline)) void compared(const char *a, const char *b, size_t n, const char *fn) {
+  size_t i = 0;
+  while (i < n && first_bad((uintptr_t)a + i, 1) == 0 && first_bad((uintptr_t)b + i, 1) == 0 && a[i] == b[i] && a[i])
+    i++;
+  if (i < n) read_str(a, i + 1, fn), read_str(b, i + 1, fn);
+}
+
+int __wrap_strcmp(const char *a, const char *b) { return compared(a, b, SIZE_MAX, "strcmp"), __real_strcmp(a, b); }
+
+int __wrap_strncmp(const char *a, const char *b, size_t n) {
+  return compared(a, b, n, "strncmp"), __real_strncmp(a, b, n);
+}
+
+char *__wrap_strchr(const char *s, int c) {
+  size_t i = 0;
+  while (first_bad((uintptr_t)s + i, 1) == 0 && s[i] != (char)c && s[i]) i++;
+  read_str(s, i + 1, "strchr");
+  return __real_strchr(s, c);
+}
+
+char *__wrap_strrchr(const char *s, int c) { return read_str(s, SIZE_MAX, "strrchr"), __real_strrchr(s, c); }
+
+#define TWO_STRINGS(T, name)                                                                                           \
+  T __wrap_##name(const char *a, const char *b) {                                                                      \
+    read_str(a, SIZE_MAX, #name);                                                                                      \
+    read_str(b, SIZE_MAX, #name);                                                                                      \
+    return __real_##name(a, b);                                                                                        \
+  }
+TWO_STRINGS(char *, strstr)
+TWO_STRINGS(size_t, strspn)
+TWO_STRINGS(size_t, strcspn)
+TWO_STRINGS(char *, strpbrk)
+
+char *__wrap_strtok(char *s, const char *sep) {
+  if (s) read_str(s, SIZE_MAX, "strtok");
+  read_str(sep, SIZE_MAX, "strtok");
+  return __real_strtok(s, sep);
+}
+
+int __wrap_memcmp(const void *a, const void *b, size_t n) {
+  check((uintptr_t)a, n, 0, "memcmp");
+  check((uintptr_t)b, n, 0, "memcmp");
+  return __real_memcmp(a, b, n);
+}
+
+void *__wrap_memchr(const void *s, int c, size_t n) {
+  const unsigned char *p = s;
+  size_t i = 0;
+  while (i < n && first_bad((uintptr_t)p + i, 1) == 0 && p[i] != (unsigned char)c) i++;
+  if (i < n) check((uintptr_t)p, i + 1, 0, "memchr");
+  return __real_memchr(s, c, n);
+}
+
+// a copy in a block of the allocator, with its redzones; libc's would be
+// libc's malloc's
+char *__wrap_strdup(const char *s) {
+  size_t n = read_str(s, SIZE_MAX, "strdup");
+  char *p = __wrap_malloc(n + 1);
+  if (p) memcpy(p, s, n + 1);
+  return p;
+}
+
+char *__wrap_strndup(const char *s, size_t m) {
+  size_t n = read_str(s, m, "strndup");
+  char *p = __wrap_malloc(n + 1);
+  if (p) memcpy(p, s, n), p[n] = 0;
+  return p;
+}
+
+// the numbers: libc reads up to the first character that is not of the
+// number, where it ends
+long __real_strtol(const char *, char **, int);
+long long __real_strtoll(const char *, char **, int);
+unsigned long __real_strtoul(const char *, char **, int);
+unsigned long long __real_strtoull(const char *, char **, int);
+float __real_strtof(const char *, char **);
+double __real_strtod(const char *, char **);
+long double __real_strtold(const char *, char **);
+int __real_atoi(const char *);
+long __real_atol(const char *);
+long long __real_atoll(const char *);
+double __real_atof(const char *);
+
+static void number(const char *s, const char *e, const char *fn) { check((uintptr_t)s, (size_t)(e - s) + 1, 0, fn); }
+
+#define STRTO(T, name, ...)                                                                                            \
+  T __wrap_##name(const char *s, char **end __VA_OPT__(, int base)) {                                                  \
+    read_str(s, 1, #name);                                                                                             \
+    char *e;                                                                                                           \
+    T r = __real_##name(s, &e __VA_OPT__(, base));                                                                     \
+    number(s, e, #name);                                                                                               \
+    if (end) *end = e;                                                                                                 \
+    return r;                                                                                                          \
+  }
+STRTO(long, strtol, int)
+STRTO(long long, strtoll, int)
+STRTO(unsigned long, strtoul, int)
+STRTO(unsigned long long, strtoull, int)
+STRTO(float, strtof)
+STRTO(double, strtod)
+STRTO(long double, strtold)
+
+#define ATO(T, name, strto, ...)                                                                                       \
+  T __wrap_##name(const char *s) {                                                                                     \
+    read_str(s, 1, #name);                                                                                             \
+    char *e;                                                                                                           \
+    __real_##strto(s, &e __VA_OPT__(, ) __VA_ARGS__);                                                                  \
+    number(s, e, #name);                                                                                               \
+    return __real_##name(s);                                                                                           \
+  }
+ATO(int, atoi, strtol, 10)
+ATO(long, atol, strtol, 10)
+ATO(long long, atoll, strtoll, 10)
+ATO(double, atof, strtod)
 
 // --- C++: a throw from libc++ (at, stoi) leaves frames without the pass's
 // __asan_handle_no_return

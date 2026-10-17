@@ -458,10 +458,12 @@ fn frames(bt: &wasmtime::WasmBacktrace, loader: &Loader, build: &Path, library: 
 
 /// A function as the source names it: `main` for libc's names of it,
 /// without the `.sc` of a static of a REPL cell, and without libc++'s
-/// inline namespace and ABI tags. A lambda is one in the function around it.
+/// inline namespace and ABI tags. A lambda is one in the function around it,
+/// and libsc_rt's `__wrap_strlen` is the `strlen` it checks.
 fn source_name(name: &str) -> String {
     // wasm-ld demangles _Z1fi.sc as `f(int) (.sc)`
     let n = name.strip_suffix(" (.sc)").or(name.strip_suffix(".sc")).unwrap_or(name);
+    let n = n.strip_prefix("__wrap_").unwrap_or(n);
     match n {
         "__original_main" | "__main_argc_argv" => "main".into(),
         _ if n.contains("::$_") => format!("a lambda in {}", source_name(&n[..n.find("::$_").unwrap()])),

@@ -407,7 +407,8 @@ ganho dos handlers.
 
 **Para depois: a libc instrumentada.** Construir a wasi-libc com ASan e
 `MALLOC_IMPL=none` pegaria `scanf` e `printf("%s")` dentro da libc. Isso exige
-construir a libc a partir do fonte.
+construir a libc a partir do fonte. Na F4, ficou nos interceptores das
+funções que leem (ANALISE.md §41).
 
 ### 5.3 libc++ (R4, R5)
 
@@ -638,8 +639,12 @@ comparador que não é uma ordem estrita fraca, como o `<=` no `std::sort`.
 
 **O U-estrito da F4 está feito** (ANALISE.md §40): no `strict`, fora dos
 headers do sysroot (uma ignorelist), e sem as macros `isdigit`... da musl,
-que dão a volta no código do aluno. Da F4 falta só a libc instrumentada, que
-é opcional.
+que dão a volta no código do aluno.
+
+**A libc instrumentada da F4 ficou nos interceptores** (ANALISE.md §41): as
+funções que leem as strings do programa (`strlen`, `strcmp`, `printf("%s")`,
+`puts`, `atoi`...) conferem o que leem, com o `--wrap` de antes, sem uma
+segunda libc. A F4 está feita.
 
 A F1 vem primeiro, porque é o alicerce:
 

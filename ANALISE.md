@@ -2674,3 +2674,82 @@ O C++ quase não muda: o código dos headers fica fora.
 - O `test/aluno` ganhou o `sorteio.cpp`, um código correto com `mt19937`,
   `shuffle`, `uniform_int_distribution` e um `unordered_map<char, int>` com
   "Fábio". Ele não pode parar no `strict`.
+
+## 41. As leituras da libc (F4)
+
+O plano deixava como opcional a libc instrumentada (§5.2 do plano), para
+pegar o que a libc lê e escreve por conta própria. Hoje, uma string sem o
+`'\0'` passa em silêncio pelo `strlen`, pelo `printf("%s")`, pelo `strcmp` e
+pelo `puts`. É um erro comum do aluno: `char nome[5] = "Maria"`.
+
+**Decidido: mais interceptores, não uma libc nova.** Construir a wasi-libc
+com ASan exigiria:
+- o fonte e um build novo;
+- duas libcs no sysroot, uma por nível;
+- o loader e o corpus escolherem entre elas.
+
+Os interceptores usam o `--wrap` que já existe, como o compiler-rt faz. A
+`libsc_rt` passou a conferir o que estas funções leem:
+
+| Funções | Até onde |
+|---|---|
+| `strlen`, `strnlen`, `puts`, `fputs`, `strrchr`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strtok` | a string inteira, com o 0 (o `strnlen`, até `n`) |
+| `strcmp`, `strncmp` | até a primeira diferença ou o 0 |
+| `strchr`, `memchr` | até o caractere (o C11 garante que o `memchr` para nele) |
+| `memcmp` | os `n` bytes dos dois, como o `strict_memcmp` do compiler-rt |
+| `printf`, `fprintf`, `vprintf`, `vfprintf`, e o `%s` do `sprintf` e do `snprintf` | o formato, cada `%s` até a precisão (`%.3s` lê no máximo 3), o `%ls`; o `%n` é uma escrita |
+| `atoi`, `atol`, `atoll`, `atof`, `strtol`... `strtold` | até o caractere que termina o número, que a libc diz no `endptr` |
+| `strdup`, `strndup` | a string; a cópia agora é um bloco do alocador, com redzones e no `:leaks` |
+
+Os interceptores de antes também passaram a ler a string fonte desse jeito:
+`strcpy`, `strcat`, `strncpy`, `strncat` e o `sscanf`.
+
+```
+error: stack-buffer-overflow: read of 6 bytes by strcmp, 0 bytes past the end of the variable 'nome' (5 bytes)
+    at main (unterminated.c:6:9)
+```
+
+No C++, o `std::cout << sigla` e o `std::string(sigla)` chamam o `strlen` no
+código do aluno, a partir dos headers, e são pegos também.
+
+**Como lê.** A `libsc_rt` não pode chamar o `strlen` da libc: a chamada iria
+para o `__wrap_strlen`, tanto no `--wrap` do wasm-ld quanto no loader.
+
+O `read_str` percorre a string como a libc, mas conferindo a *shadow* de cada
+grânulo antes de ler:
+- num grânulo todo válido, testa os 8 bytes de uma vez à procura do 0, o
+  truque da musl;
+- o relato diz quantos bytes foram lidos até o primeiro inválido.
+
+Ele é `always_inline`, e o nome do frame perde o `__wrap_`. Um ponteiro fora
+da memória, como no `in-libc.c`, continua sendo relatado `in strlen`.
+
+**O custo.** Um laço com o `strlen` na condição, sobre 20 mil caracteres (4·10⁸
+bytes lidos):
+
+| Versão | `on` |
+|---|---|
+| sem os interceptores novos | 0,19 s |
+| conferindo byte a byte | 0,78 s |
+| 8 bytes de uma vez | 0,19 a 0,25 s |
+
+Com 200 mil `snprintf`, `atoi` e `strcmp`, ficou em 0,20 a 0,24 s, contra
+0,23 s antes.
+
+**Os limites.**
+- Uma função sem interceptor não é vista: `fopen`, `getenv`, as `wcs*`.
+- O `strstr` e o `strspn` conferem as duas strings inteiras, mesmo que a
+  libc pare antes.
+- Uma chamada de dentro da libc não é conferida (o `printf` que chama o
+  `strlen`, por exemplo). A conferência é do argumento que o programa passa.
+- Um argumento posicional (`%1$s`) para a conferência do formato, como no
+  `scanf`.
+
+**No corpus**, nenhuma das execuções do `on` e do `strict` passou a ter um
+relato dessas funções. O `test/aluno` também segue sem relato.
+
+**Os testes.** O `test/checks` ganhou:
+- `unterminated.c`, um `strcmp` com `char nome[5] = "Maria"`;
+- `unterminated.cpp`, um `std::cout << sigla` de um `char[3]`.
+
+No `off`, o primeiro diz "não achou" e o segundo imprime "UEM" por sorte.

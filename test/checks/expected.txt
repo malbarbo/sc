@@ -612,6 +612,31 @@ saldo: 4294967286
 == unsigned.c strict exit=134
 error: unsigned integer overflow: 10 - 20 cannot be represented in type 'unsigned int'
     at main (unsigned.c:5:19)
+== unterminated.c off exit=0
+não achou
+== unterminated.c on exit=134
+unterminated.c:5:20: warning: initializer-string for character array is too long, array size is 5 but initializer has size 6 (including the null terminating character); did you mean to use the 'nonstring' attribute? [-Wunterminated-string-initialization]
+    5 |     char nome[5] = "Maria";
+      |                    ^~~~~~~
+error: stack-buffer-overflow: read of 6 bytes by strcmp, 0 bytes past the end of the variable 'nome' (5 bytes)
+    at main (unterminated.c:6:9)
+== unterminated.c strict exit=134
+unterminated.c:5:20: warning: initializer-string for character array is too long, array size is 5 but initializer has size 6 (including the null terminating character); did you mean to use the 'nonstring' attribute? [-Wunterminated-string-initialization]
+    5 |     char nome[5] = "Maria";
+      |                    ^~~~~~~
+unterminated.c:5:20: warning: initializer-string for character array is too long for C++, array size is 5 but initializer has size 6 (including the null terminating character) [-Wc++-unterminated-string-initialization]
+    5 |     char nome[5] = "Maria";
+      |                    ^~~~~~~
+error: stack-buffer-overflow: read of 6 bytes by strcmp, 0 bytes past the end of the variable 'nome' (5 bytes)
+    at main (unterminated.c:6:9)
+== unterminated.cpp off exit=0
+Universidade: UEM
+== unterminated.cpp on exit=134
+Universidade: error: stack-buffer-overflow: read of 4 bytes by strlen, 0 bytes past the end of the variable 'sigla' (3 bytes)
+    at main (unterminated.cpp:5:35)
+== unterminated.cpp strict exit=134
+Universidade: error: stack-buffer-overflow: read of 4 bytes by strlen, 0 bytes past the end of the variable 'sigla' (3 bytes)
+    at main (unterminated.cpp:5:35)
 == use-after-free.c off exit=0
 ok
 == use-after-free.c on exit=134

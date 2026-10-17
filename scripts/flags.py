@@ -98,11 +98,14 @@ HARDENING = {'off': 'NONE', 'on': 'EXTENSIVE', 'strict': 'DEBUG'}
 SHADOW = 0x110000
 # what libsc_rt puts in place of libc's and libc++abi's functions (rt/sc_asan.c),
 # with the names of wasm-ld's --wrap: the allocator, the functions of libc
-# that write the program's memory, and the throws of libc++
+# that write or read the program's memory, and the throws of libc++
 WRAP = ['malloc', 'free', 'calloc', 'realloc', 'reallocarray', 'aligned_alloc', 'posix_memalign',
         'malloc_usable_size', 'getdelim', 'getline', 'strcpy', 'strncpy', 'strcat', 'strncat', 'sprintf',
         'snprintf', 'fgets', 'fread', 'read', 'scanf', 'fscanf', 'sscanf', 'vscanf', 'vfscanf', 'vsscanf',
-        '__cxa_throw', '__cxa_rethrow']
+        'printf', 'fprintf', 'vprintf', 'vfprintf', 'puts', 'fputs', 'strlen', 'strnlen', 'strcmp', 'strncmp',
+        'strchr', 'strrchr', 'strstr', 'strspn', 'strcspn', 'strpbrk', 'strtok', 'memcmp', 'memchr', 'strdup',
+        'strndup', 'strtol', 'strtoll', 'strtoul', 'strtoull', 'strtof', 'strtod', 'strtold', 'atoi', 'atol',
+        'atoll', 'atof', '__cxa_throw', '__cxa_rethrow']
 # use-after-return would take a fake stack; the stack safety analysis takes
 # ScalarEvolution, which the engine leaves out
 ASAN = ['-fsanitize-address-use-after-scope', '-fsanitize-address-use-after-return=never',
