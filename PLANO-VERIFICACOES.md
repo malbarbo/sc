@@ -448,7 +448,9 @@ de 32 bits fazem o `PatternInit.cpp:17-20` escolher `0xFF…`:
 
 O -1 é menos visível que um padrão. Um patch de uma linha poria 0xAAAAAAAA
 nos inteiros e deixaria o ponteiro em 0xFFFFFFFF. Ele fica para depois de
-medir.
+medir. **Medido e feito** (ANALISE.md §42): o contador que o aluno esqueceu
+de zerar saía com um a menos; o `llvm/pattern-init.patch` põe 0xAA… nos
+inteiros, sem mudar o tamanho do código.
 
 **O trap perto de 0xFFFFFFxx é ambíguo.** Pode ser um ponteiro não
 inicializado ou o estouro da pilha linear abaixo de 0. O `runtime_error`

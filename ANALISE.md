@@ -2753,3 +2753,48 @@ relato dessas funções. O `test/aluno` também segue sem relato.
 - `unterminated.cpp`, um `std::cout << sigla` de um `char[3]`.
 
 No `off`, o primeiro diz "não achou" e o segundo imprime "UEM" por sorte.
+
+## 42. O padrão dos inteiros não inicializados (§5.4 do plano)
+
+O `on` e o `strict` usam `-ftrivial-auto-var-init=pattern`. Num alvo de 32
+bits, o `PatternInit.cpp` do clang usa 0xFF… para os ponteiros, porque só a
+página 0 é garantidamente inválida em todo sistema. Ele usa o mesmo valor
+para os inteiros, por simplicidade. Um `int` não inicializado vale então -1,
+e o -1 parece um valor certo.
+
+O compilador já pega a local escalar não inicializada (`-Wuninitialized`,
+erro no E). O que sobra para o padrão são os arrays, os campos de struct e
+as inicializações condicionais:
+
+| Caso | Correto | `on` com -1 | `on` com 0xAA… |
+|---|---|---|---|
+| `int votos[3]; votos[k]++` | 1 1 3 | 0 0 2 | -1431655765 -1431655765 -1431655763 |
+| `soma[i] += 10 * (i + 1)` | 10 20 | 9 19 | -1431655756 -1431655746 |
+| `struct aluno a; a.faltas++` | 1 | 0 | -1431655765 |
+
+Com -1, o contador esquecido sai com um a menos, e o `faltas` sai 0, que
+parece certo.
+
+**O `llvm/pattern-init.patch`** (4 linhas) separa os dois valores:
+- os inteiros e os `char` ficam 0xAA… em todo alvo, como nos de 64 bits
+  (-1431655766, `170`, `-21846`);
+- os ponteiros continuam 0xFFFFFFFF. A `libsc_rt` reconhece esse valor como
+  "uninitialized pointer" (§32).
+
+Os `double` já eram NaN e continuam NaN.
+
+Foi preciso um patch, não um corte, porque é uma mudança de comportamento do
+CodeGen. O engine cortado não precisou de `make learn`.
+
+**O tamanho do código não muda.** Medido com o clang sem o patch
+(`build/native`) contra o engine com ele, no `on`:
+- `aluno/matriz.c`, `alunos.c`, `lista.c`, `vetor.cpp` e `grafo.cpp` ficam
+  com os mesmos bytes;
+- o `cxx/c1_basics.cpp` ganha 4 bytes.
+
+O `memset` do padrão só troca o byte.
+
+**Os testes.** O `make test`, o `test-warn`, o `test-native`, o
+`test-split` e o `test-aluno` deram 0 diferença. O `test/checks` ganhou o
+`uninit-count.c`, o contador de votos sem `= {0}`. O `uninit-pointer.c`
+continua dizendo "uninitialized pointer".

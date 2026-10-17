@@ -1,0 +1,28 @@
+diff --git a/clang/lib/CodeGen/PatternInit.cpp b/clang/lib/CodeGen/PatternInit.cpp
+index b5716e72d..a4ecedb8c 100644
+--- a/clang/lib/CodeGen/PatternInit.cpp
++++ b/clang/lib/CodeGen/PatternInit.cpp
+@@ -21,10 +21,13 @@ llvm::Constant *clang::CodeGen::initializationPatternFor(CodeGenModule &CGM,
+   // For 32-bit platforms it's a bit trickier because, across systems, only the
+   // zero page can reasonably be expected to be unmapped. We use max 0xFFFFFFFF
+   // assuming that memory access will overlap into zero page.
+-  const uint64_t IntValue =
++  // On 32-bit platforms only the pointers take 0xFFFFFFFF: an integer of -1
++  // looks initialized, a counter that starts there one short of the count.
++  const uint64_t PtrValue =
+       CGM.getContext().getTargetInfo().getMaxPointerWidth() < 64
+           ? 0xFFFFFFFFFFFFFFFFull
+           : 0xAAAAAAAAAAAAAAAAull;
++  const uint64_t IntValue = 0xAAAAAAAAAAAAAAAAull;
+   // Floating-point values are initialized as NaNs because they propagate. Using
+   // a repeated byte pattern means that it will be easier to initialize
+   // all-floating-point aggregates and arrays with memset. Further, aggregates
+@@ -49,7 +52,7 @@ llvm::Constant *clang::CodeGen::initializationPatternFor(CodeGenModule &CGM,
+     if (PtrWidth > 64)
+       llvm_unreachable("pattern initialization of unsupported pointer width");
+     llvm::Type *IntTy = llvm::IntegerType::get(CGM.getLLVMContext(), PtrWidth);
+-    auto *Int = llvm::ConstantInt::get(IntTy, IntValue, /*IsSigned=*/false,
++    auto *Int = llvm::ConstantInt::get(IntTy, PtrValue, /*IsSigned=*/false,
+                                        /*ImplicitTrunc=*/true);
+     return llvm::ConstantExpr::getIntToPtr(Int, PtrTy);
+   }

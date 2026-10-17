@@ -72,7 +72,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   which the REPL shows, from being discarded (`ANALISE.md` §26).
   `asan-cleanupret.patch` keeps ASan from clearing a frame's shadow at
   every exception cleanup inside the function, which made `main` of a C++
-  program many times bigger (`ANALISE.md` §34).
+  program many times bigger (`ANALISE.md` §34). `pattern-init.patch`
+  gives an uninitialized integer 0xAA… on wasm32 too, where clang gives
+  it -1, which looks initialized; a pointer keeps 0xFFFFFFFF (§42).
   `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the
