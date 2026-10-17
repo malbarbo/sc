@@ -446,6 +446,54 @@ the block was freed
 and allocated
     at Nome::Nome(char const*) (regra-dos-tres.cpp:7:33)
     at main (regra-dos-tres.cpp:13:10)
+== return.c.repl off exit=0
+(int) 3
+cell_2:1:1: error: 'return' cannot be used outside a function
+    1 | return 1;
+      | ^
+cell_2:1:12: error: 'return' cannot be used outside a function
+    1 | if (x > 1) return 2;
+      |            ^
+== return.c.repl on exit=0
+(int) 3
+cell_2:1:1: error: 'return' cannot be used outside a function
+    1 | return 1;
+      | ^
+cell_2:1:12: error: 'return' cannot be used outside a function
+    1 | if (x > 1) return 2;
+      |            ^
+== return.c.repl strict exit=0
+(int) 3
+cell_2:1:1: error: 'return' cannot be used outside a function
+    1 | return 1;
+      | ^
+cell_2:1:12: error: 'return' cannot be used outside a function
+    1 | if (x > 1) return 2;
+      |            ^
+== return.cpp.repl off exit=0
+(int) 3
+cell_2:1:1: error: 'return' cannot be used outside a function
+    1 | return 1;
+      | ^
+cell_2:1:12: error: 'return' cannot be used outside a function
+    1 | if (x > 1) return 2;
+      |            ^
+== return.cpp.repl on exit=0
+(int) 3
+cell_2:1:1: error: 'return' cannot be used outside a function
+    1 | return 1;
+      | ^
+cell_2:1:12: error: 'return' cannot be used outside a function
+    1 | if (x > 1) return 2;
+      |            ^
+== return.cpp.repl strict exit=0
+(int) 3
+cell_2:1:1: error: 'return' cannot be used outside a function
+    1 | return 1;
+      | ^
+cell_2:1:12: error: 'return' cannot be used outside a function
+    1 | if (x > 1) return 2;
+      |            ^
 == scanf-width.c off exit=0
 UEM
 == scanf-width.c on exit=134
@@ -533,11 +581,17 @@ truncation.c:5:23: warning: implicit conversion loses integer precision: 'int' t
 error: implicit conversion from type 'int' of value 50000 (32-bit, signed) to type 'short' changed the value to -15536 (16-bit, signed)
     at main (truncation.c:5:23)
 == uninit-count.c off exit=0
-votos: 1 1 4525
+candidato 0: 1 votos
+candidato 1: 1 votos
+candidato 2: contagem impossível
 == uninit-count.c on exit=0
-votos: -1431655765 -1431655765 -1431655763
+candidato 0: contagem impossível
+candidato 1: contagem impossível
+candidato 2: contagem impossível
 == uninit-count.c strict exit=0
-votos: -1431655765 -1431655765 -1431655763
+candidato 0: contagem impossível
+candidato 1: contagem impossível
+candidato 2: contagem impossível
 == uninit-pointer.c off exit=0
 42
 == uninit-pointer.c on exit=134

@@ -335,8 +335,8 @@ iguala o `pic-` em 1.941 dos 1.947 programas do corpus. Os 6 restantes são
 limites conhecidos (`KNOWN` no `test/split.py`). Para chegar lá, a sessão
 ganhou quatro correções (§3.8) e o loader, as referências para a frente.
 Ainda faltam o §3.4 (o aviso de não usado só na célula que define e a nota
-da redefinição), as combinações incrementais no
-`checkinv` (§3.5) e o `return` no topo (§3.7). O `#include` depois de uma
+da redefinição) e as combinações incrementais no `checkinv` (§3.5). O
+`return` no topo foi resolvido por um patch no Sema (§3.7). O `#include` depois de uma
 célula que falhou foi resolvido pelo snapshot por `fork` (§3.3).
 
 ### 3.1 Montagem (C-B3, C-m1, C-m3)
@@ -512,7 +512,7 @@ traz três correções de que a sessão precisa:
 | reemissão de `static` | aberto | §3.2 (pós-passo de IR, sem patch) |
 | entrada que falha vaza IR | #226252, aberto | §3.3 (snapshot por `fork`) |
 | `#include` depois de uma entrada que falhou ou de `undo` | aberto | resolvido: snapshot por `fork` (§3.3); o `undo` já era repasse |
-| `return` no topo derruba o compilador | aberto | teste `seq-` + diagnóstico nosso antes do CodeGen |
+| `return` no topo derruba o compilador | aberto | resolvido: `llvm/repl-return.patch` dá o erro no Sema (ANALISE.md §43) |
 
 A cópia do `IncrementalParser` (§3.1) é feita a partir do 23.1.3, não do pin
 atual.

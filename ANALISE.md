@@ -2798,3 +2798,29 @@ O `memset` do padrão só troca o byte.
 `test-split` e o `test-aluno` deram 0 diferença. O `test/checks` ganhou o
 `uninit-count.c`, o contador de votos sem `= {0}`. O `uninit-pointer.c`
 continua dizendo "uninitialized pointer".
+
+## 43. O `return` no topo de uma célula (§3.7 do PLANO-REPL)
+
+Numa célula do REPL, o `return 1;` no topo, ou dentro de um `if` no topo,
+derrubava o engine. O `Sema::BuildReturnStmt` vê que não há função e
+devolve `StmtError()` **sem diagnóstico**: num arquivo isso não acontece,
+porque o parser nunca aceita um comando fora de uma função. Sem erro
+emitido, a célula segue, o `TopLevelStmtDecl` fica com o comando nulo e o
+CodeGen cai nele.
+
+**O `llvm/repl-return.patch`** (3 linhas) emite o erro nesse ramo,
+reaproveitando o `err_coroutine_outside_function` ("'return' cannot be
+used outside a function"), que já existe com esse texto. A célula falha
+como qualquer outra com erro e a sessão continua, em C e em C++. Um corte
+não resolveria: falta código, não sobra.
+
+O plano previa um diagnóstico nosso antes do CodeGen, mas ali a informação
+de onde está o `return` já se perdeu; o Sema é o lugar de dar o erro.
+
+**Os testes.** O `test/checks` ganhou o `return.c.repl` e o
+`return.cpp.repl`: o `return` no topo e no `if` dão o erro e a célula
+seguinte mostra o valor. O `uninit-count.c` (§42) imprimia o lixo da pilha
+no `off`, que mudou com o novo engine (4525, 4513); agora ele imprime
+"contagem impossível" para um valor fora de 0..5, e a saída fica estável.
+O `make test`, o `test-native`, o `test-split`, o
+`test-aluno` e o `test-checks` deram 0 diferença.
