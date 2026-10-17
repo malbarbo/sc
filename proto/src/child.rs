@@ -2,10 +2,13 @@
 //! that recreates the session after it is lost ([`Repl`], PLANO-REPL.md §3.6).
 use crate::{msg, sys, wire, Mode, Status};
 use std::fmt;
-use std::io::{self, BufReader, BufWriter};
+use std::io::{self, BufReader, BufWriter, Read};
+use std::os::fd::AsRawFd;
+use std::os::raw::{c_int, c_short};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, ChildStdin, ChildStdout, Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// The answer to a request, owned.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,10 +42,18 @@ impl Answer {
 /// The engine in a child process (`sc-engine session`). Its stderr is the
 /// parent's: what the engine writes there directly (a crash, "LLVM ERROR").
 /// An `Err` is a child that ended or does not follow the protocol.
+///
+/// After a failed cell the process spawned hands the session over to its
+/// copy ([`crate::serve`]) and ends with 0: the copy, which is not ours to
+/// wait for, is reached through the process group, which they share.
 pub struct Child {
     proc: process::Child,
-    to: BufWriter<ChildStdin>,
+    /// None once closed, in [`Drop`].
+    to: Option<BufWriter<ChildStdin>>,
     from: BufReader<ChildStdout>,
+    /// Set by [`Child::ended`]: the process spawned is reaped, and its
+    /// process group may be gone, its id free for another.
+    gone: bool,
 }
 
 impl Child {
@@ -54,7 +65,7 @@ impl Child {
             .process_group(0).spawn()?;
         let to = BufWriter::new(proc.stdin.take().unwrap());
         let from = BufReader::new(proc.stdout.take().unwrap());
-        Ok(Child { proc, to, from })
+        Ok(Child { proc, to: Some(to), from, gone: false })
     }
 
     fn call(&mut self, kind: u32, status: u32, part: &[u8]) -> io::Result<Answer> {
@@ -62,7 +73,11 @@ impl Child {
     }
 
     fn request(&mut self, kind: u32, status: u32, part: &[u8]) -> io::Result<wire::Msg> {
-        let res = wire::write(&mut self.to, kind, status, [part, b"", b""]).and_then(|_| wire::read(&mut self.from));
+        if self.gone {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "the engine ended"));
+        }
+        let to = self.to.as_mut().expect("open until dropped");
+        let res = wire::write(to, kind, status, [part, b"", b""]).and_then(|_| wire::read(&mut self.from));
         match res {
             Ok(Some(m)) if m.kind == msg::SC_MSG_REPLY => Ok(m),
             Ok(_) => Err(self.ended()),
@@ -71,11 +86,11 @@ impl Child {
         }
     }
 
-    /// The child is gone: how it ended.
+    /// The child is gone: how it ended. If the copy was serving, how it
+    /// ended is not known.
     fn ended(&mut self) -> io::Error {
-        // after a failed cell the process spawned may have handed over to
-        // its copy ([`crate::serve`]) and ended with 0
-        let _ = self.proc.kill();
+        self.kill();
+        self.gone = true;
         let how = match self.proc.wait() {
             Ok(s) if s.success() => String::new(),
             Ok(s) => format!(" ({s})"),
@@ -106,16 +121,60 @@ impl Child {
     pub fn depth(&mut self, src: &[u8]) -> io::Result<u32> {
         Ok(self.request(msg::SC_MSG_DEPTH, 0, src)?.status)
     }
+
+    /// Kills the process spawned and its copy, if any.
+    fn kill(&mut self) {
+        unsafe { kill(-(self.proc.id() as c_int), SIGKILL) };
+    }
+
+    /// Whether the child closed its output within `ms` milliseconds, which
+    /// it does when it ends. What it writes until then is dropped.
+    fn closes_within(&mut self, ms: u64) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(ms);
+        let mut buf = [0; 4096];
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now()).as_millis() as c_int;
+            let mut p = PollFd { fd: self.from.get_ref().as_raw_fd(), events: POLLIN, revents: 0 };
+            match unsafe { poll(&mut p, 1, left) } {
+                0 => return false,
+                n if n < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted => continue,
+                n if n < 0 => return false,
+                _ => match self.from.get_mut().read(&mut buf) {
+                    Ok(0) => return true,
+                    Ok(_) => {}
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(_) => return false,
+                },
+            }
+        }
+    }
 }
 
 impl Drop for Child {
     fn drop(&mut self) {
-        // the end of its input ends the child; a lost one is killed
-        if matches!(self.proc.try_wait(), Ok(None)) {
-            let _ = self.proc.kill();
+        // the end of its input ends the child, which frees its session (and
+        // its temporary directory); one that does not end in time is killed
+        drop(self.to.take());
+        if !self.gone && !self.closes_within(5000) {
+            self.kill();
         }
         let _ = self.proc.wait();
     }
+}
+
+#[repr(C)]
+struct PollFd {
+    fd: c_int,
+    events: c_short,
+    revents: c_short,
+}
+
+const POLLIN: c_short = 1;
+const SIGKILL: c_int = 9;
+
+extern "C" {
+    fn poll(fds: *mut PollFd, nfds: u64, timeout: c_int) -> c_int;
+    fn kill(pid: c_int, sig: c_int) -> c_int;
 }
 
 /// Why a [`Repl`] cannot go on.
@@ -181,15 +240,18 @@ impl Repl {
         Ok(child)
     }
 
-    /// A new child replays the log.
+    /// A new child replays the log. It replaces the one before only once
+    /// the whole log is replayed: on an error, the child and the log are
+    /// as they were.
     fn restart(&mut self) -> Result<(), ReplError> {
-        self.child = Repl::start(&self.program, &self.args)?;
+        let mut child = Repl::start(&self.program, &self.args)?;
         for (i, e) in self.log.iter().enumerate() {
-            let a = self.child.cell(&e.src, Mode::Replay)?;
+            let a = child.cell(&e.src, Mode::Replay)?;
             if a.status != Status::Ok || a.syms != e.syms {
                 return Err(ReplError::Diverged(i));
             }
         }
+        self.child = child;
         Ok(())
     }
 
@@ -249,11 +311,14 @@ impl Repl {
     /// Undoes the last accepted cell: [`Status::Ok`] once the session is
     /// back without it, [`Status::Error`] if there is none.
     pub fn undo(&mut self) -> Result<Answer, ReplError> {
-        if self.log.pop().is_none() {
+        let Some(last) = self.log.pop() else {
             return Ok(Answer::bare(Status::Error, "sc: no cell to undo\n".into()));
-        }
+        };
         // the generated code cannot be undone in the session (§3.3)
-        self.restart()?;
+        if let Err(e) = self.restart() {
+            self.log.push(last);
+            return Err(e);
+        }
         Ok(Answer::bare(Status::Ok, String::new()))
     }
 }

@@ -521,7 +521,8 @@ traz três correções de que a sessão precisa:
 | reemissão de `static` | aberto | §3.2 (pós-passo de IR, sem patch) |
 | entrada que falha vaza IR | #226252, aberto | §3.3 (snapshot por `fork`) |
 | `#include` depois de uma entrada que falhou ou de `undo` | aberto | resolvido: snapshot por `fork` (§3.3); o `undo` já era repasse |
-| `return` no topo derruba o compilador | aberto | resolvido: `llvm/repl-return.patch` dá o erro no Sema (ANALISE.md §43) |
+| `return` no topo derruba o compilador | aberto | resolvido: `llvm/repl-outside-function.patch` dá o erro no Sema (ANALISE.md §43) |
+| `static` local e lambda num comando de topo derrubam o compilador (C++) | aberto | resolvido: `llvm/repl-outside-function.patch` (ANALISE.md §45) |
 
 A cópia do `IncrementalParser` (§3.1) é feita a partir do 23.1.3, não do pin
 atual.

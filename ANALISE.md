@@ -2808,7 +2808,7 @@ porque o parser nunca aceita um comando fora de uma função. Sem erro
 emitido, a célula segue, o `TopLevelStmtDecl` fica com o comando nulo e o
 CodeGen cai nele.
 
-**O `llvm/repl-return.patch`** (3 linhas) emite o erro nesse ramo,
+**O `llvm/repl-return.patch`** (3 linhas; hoje no `repl-outside-function.patch`, §45) emite o erro nesse ramo,
 reaproveitando o `err_coroutine_outside_function` ("'return' cannot be
 used outside a function"), que já existe com esse texto. A célula falha
 como qualquer outra com erro e a sessão continua, em C e em C++. Um corte
@@ -2864,3 +2864,95 @@ link (depois de `--`) e as duas flags, e acrescenta
 `scIncremental` do lado do sc. As 12 dão SAME. Com o `-disable-free`
 deixado no lado do parser, o resultado é DIFFERENT, então a comparação vê
 esses campos. O `TU_Incremental` continua fora: não é flag de cc1.
+
+## 45. A revisão da fase 2 do REPL
+
+Uma revisão do código da fase 2 (de `4b0325d` a `8425ca8`) achou oito
+problemas.
+
+**O engine deixava o diretório temporário (`proto/src/child.rs`).** O
+`Drop` do `Child` matava o engine com SIGKILL enquanto ele esperava no
+stdin. O destrutor da sessão não rodava, e o `/tmp/sc-XXXXXX` dela ficava.
+Isso acontecia a cada sessão, a cada `:undo` e a cada `:safety`, e o
+`/tmp` já tinha mais de 31 mil desses diretórios. Agora o `Drop`:
+- fecha o stdin;
+- espera o engine fechar o stdout, até 5 s;
+- só então mata o processo.
+
+Uma célula que falha passa a sessão para a cópia do `fork` (§3.3), que
+não é filha do REPL. Por isso o `Child` mata o **grupo de processos**:
+antes, a cópia ficava órfã. Depois que o processo é colhido, o grupo pode
+ter sumido e o número estar livre, então o `Child` marca `gone` e não
+manda mais sinal. O `test-split` (10541 células) e as outras baterias
+agora deixam o número de `/tmp/sc-*` igual.
+
+**`static` local e lambda num comando de topo.** Em C++, a célula
+`{ static int n = 5; }` derrubava o engine. Um lambda num `for` de topo
+também, como `for (...) [&] { ... }();`. O mangler do Itanium subia pelos
+contextos até o `TopLevelStmtDecl` e tentava dar nome a ele, que não tem
+nome. Em C a célula funcionava por acaso: o nome do `static` caía num
+`llvm_unreachable` do `getStaticDeclName`, que no release é comportamento
+indefinido. O `llvm/repl-return.patch` virou o
+`llvm/repl-outside-function.patch`, com mais duas partes.
+
+- **Sema (`ActOnVariableDeclarator`).** Uma variável `static` ou
+  `thread_local` cujo contexto é um `TopLevelStmtDecl` é erro, com o mesmo
+  `err_coroutine_outside_function` do `return` ("'static' cannot be used
+  outside a function"). Num comando de topo não há função para dar nome à
+  variável. Uma variável `static` dentro de uma função ou de um lambda
+  continua valendo.
+- **Mangler (`ItaniumMangle.cpp`).** O `TopLevelStmtDecl` é um contêiner
+  local, como uma função chamada `__stmts_N`, onde N é a codificação da
+  posição do comando. Cada célula é um arquivo novo no `SourceManager`
+  da sessão, então N é único na sessão. Ele também se repete no repasse,
+  porque uma célula que falha não deixa nada na cópia que continua.
+
+  A alternativa mais simples era pular o contexto e tratar como se
+  estivesse no topo do arquivo. Ela foi tentada e descartada: dois
+  `struct S` locais, de células ou blocos diferentes, colidiam em
+  `_ZN1S1fEv`.
+
+O loader tira o `__stmts_N()::` dos nomes dos frames, então um erro
+mostra `at S::f(int)`. O `test/checks` ganhou três testes:
+- o `static-stmt.c.repl` e o `static-stmt.cpp.repl`, com o erro;
+- o `cells-local.cpp.repl`, com lambdas, um `static` em lambda e
+  `struct S` locais repetidos, terminando num trap dentro do método.
+
+**Um slot sem função (`loader/src/lib.rs`).** Um `&g` reservava o slot
+de `g` (GOT.func) vazio. Uma chamada a `g` numa célula seguinte reusava
+esse slot sem pôr nele a função que diz "undefined symbol: g". O erro
+saía como "call through a null function pointer". Agora o
+`reserve_slot` preenche um slot vazio quando a chamada traz o tipo.
+
+**Uma célula que falha no loader (`machine.rs`).** Uma célula que o
+compilador aceita e que falha depois continuava no log do compilador.
+Decidido:
+- se o loader nem instancia a célula, o REPL a desfaz no compilador, e o
+  aluno pode reescrevê-la. O `Loader::is_loaded` diz se a célula foi
+  instanciada;
+- se o trap vem depois, por exemplo num inicializador, a célula fica:
+  os nomes existem, e o que ela fez fica feito. Uma nova `int y = 5;`
+  dá "redefinition", e o aluno usa `:undo`.
+
+Não achamos um caso que chegue ao primeiro ramo: o wasm-ld já recusa
+uma assinatura diferente da da libc.
+
+**`Repl::restart` não era atômico (`child.rs`).** Ele trocava o filho
+antes do repasse. Um repasse que divergisse deixava um filho com parte do
+log, enquanto o log tinha tudo. Agora o filho novo só substitui o antigo
+depois do repasse inteiro. Se o `:undo` falha, a célula volta para o log.
+
+**`retypeDecls` antes de `scPromoteInternals` (`sc_session.cpp`).** O
+`Types` guarda os nomes exportados, como `f.sc` para um `static f`, mas
+a declaração só ganha esse nome na promoção. A ordem agora é: promover,
+depois retipar. Não reproduzimos a falha prevista: o clang dá à chamada
+o tipo da definição K&R, mesmo numa célula depois.
+
+**As duas `source_name`.** Havia duas, com regras diferentes: uma no
+`lib.rs` e outra no `machine.rs`. Agora é uma só, `scload::source_name`.
+Ela recebe o símbolo ou o nome que o wasm-ld demangla.
+
+**Os testes.** Com o patch, o `make test` e o `test-native` deram 0
+diferença em 17715 arquivos, e o corpus não muda. O `test-split`, o
+`test-aluno` e o `test-proto` passaram, e o `test-checks` ganhou só as
+entradas novas.

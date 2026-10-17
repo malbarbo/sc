@@ -1,0 +1,68 @@
+diff --git a/clang/lib/Sema/SemaDecl.cpp b/clang/lib/Sema/SemaDecl.cpp
+--- a/clang/lib/Sema/SemaDecl.cpp
++++ b/clang/lib/Sema/SemaDecl.cpp
+@@ -8145,6 +8145,20 @@ NamedDecl *Sema::ActOnVariableDeclarator(
+       NewVD->setTSCSpec(TSCS);
+   }
+ 
++  // An incremental top-level statement is not a function: a static local
++  // in it has no function to be named after.
++  if (isa<TopLevelStmtDecl>(DC) && NewVD->isStaticLocal()) {
++    if (SCSpec != DeclSpec::SCS_unspecified)
++      Diag(D.getDeclSpec().getStorageClassSpecLoc(),
++           diag::err_coroutine_outside_function)
++          << DeclSpec::getSpecifierName(SCSpec);
++    else
++      Diag(D.getDeclSpec().getThreadStorageClassSpecLoc(),
++           diag::err_coroutine_outside_function)
++          << DeclSpec::getSpecifierName(D.getDeclSpec().getThreadStorageClassSpec());
++    NewVD->setInvalidDecl();
++  }
++
+   switch (D.getDeclSpec().getConstexprSpecifier()) {
+   case ConstexprSpecKind::Unspecified:
+     break;
+diff --git a/clang/lib/Sema/SemaStmt.cpp b/clang/lib/Sema/SemaStmt.cpp
+index 4d12b6c72..da4af1289 100644
+--- a/clang/lib/Sema/SemaStmt.cpp
++++ b/clang/lib/Sema/SemaStmt.cpp
+@@ -4114,8 +4114,11 @@ StmtResult Sema::BuildReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp,
+       RelatedRetType = Context.getObjCInterfaceType(MD->getClassInterface());
+       RelatedRetType = Context.getObjCObjectPointerType(RelatedRetType);
+     }
+-  } else // If we don't have a function/method context, bail.
++  } else { // If we don't have a function/method context, bail: at the top
++    // of an incremental input, with a diagnostic
++    Diag(ReturnLoc, diag::err_coroutine_outside_function) << "return";
+     return StmtError();
++  }
+ 
+   if (RetValExp) {
+     const auto *ATy = dyn_cast<ArrayType>(RetValExp->getType());
+diff --git a/clang/lib/AST/ItaniumMangle.cpp b/clang/lib/AST/ItaniumMangle.cpp
+index 172a19f8f..ba60c41d7 100644
+--- a/clang/lib/AST/ItaniumMangle.cpp
++++ b/clang/lib/AST/ItaniumMangle.cpp
+@@ -45,7 +45,8 @@ namespace UnsupportedItaniumManglingKind =
+ namespace {
+ 
+ static bool isLocalContainerContext(const DeclContext *DC) {
+-  return isa<FunctionDecl, ObjCMethodDecl, BlockDecl, CXXExpansionStmtDecl>(DC);
++  return isa<FunctionDecl, ObjCMethodDecl, BlockDecl, CXXExpansionStmtDecl,
++             TopLevelStmtDecl>(DC);
+ }
+ 
+ static const FunctionDecl *getStructor(const FunctionDecl *fn) {
+@@ -1899,6 +1900,12 @@ void CXXNameMangler::mangleLocalName(GlobalDecl GD,
+       mangleObjCMethodName(MD);
+     } else if (const BlockDecl *BD = dyn_cast<BlockDecl>(DC)) {
+       mangleBlockForPrefix(BD);
++    } else if (const auto *TD = dyn_cast<TopLevelStmtDecl>(DC)) {
++      // an incremental top-level statement, as a function named after
++      // where it begins, which no other statement of the input shares
++      std::string Name =
++          "__stmts_" + llvm::utostr(TD->getBeginLoc().getRawEncoding());
++      Out << Name.size() << Name << 'v';
+     } else {
+       mangleFunctionEncoding(getParentOfLocalEntity(DC));
+     }

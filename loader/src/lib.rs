@@ -207,10 +207,28 @@ fn dylink(bytes: &[u8]) -> Result<Dylink> {
 
 /// A symbol as the source names it: without the `.sc` of a static a REPL
 /// cell exports for the cells after it, and demangled.
-fn source_name(name: &str) -> String {
-    let n = name.strip_suffix(".sc").unwrap_or(name);
+/// A function as the source names it, from a symbol (`_Z1fi.sc`) or from
+/// wasm-ld's demangled name (`f(int) (.sc)`): demangled, `main` for libc's
+/// names of it, without the `.sc` of a static of a REPL cell, the function
+/// a REPL statement is in (`__stmts_N()::`), libc++'s inline namespace and
+/// ABI tags. A lambda is one in the function around it, and libsc_rt's
+/// `__wrap_strlen` is the `strlen` it checks.
+pub fn source_name(name: &str) -> String {
+    let n = name.strip_suffix(" (.sc)").or(name.strip_suffix(".sc")).unwrap_or(name);
+    let n = n.strip_prefix("__wrap_").unwrap_or(n);
     let demangled = || cpp_demangle::Symbol::new(n).ok()?.demangle().ok();
-    n.starts_with("_Z").then(demangled).flatten().unwrap_or_else(|| n.to_string())
+    let n = n.starts_with("_Z").then(demangled).flatten().unwrap_or_else(|| n.to_string());
+    let n = match n.strip_prefix("__stmts_").and_then(|r| r.split_once("()::")) {
+        Some((_, rest)) => rest,
+        None => &n,
+    };
+    match n {
+        "__original_main" | "__main_argc_argv" => "main".into(),
+        _ if n.contains("::$_") => format!("a lambda in {}", source_name(&n[..n.find("::$_").unwrap()])),
+        _ => n.replace("std::__2::", "std::").split("[abi:").enumerate()
+            .map(|(k, p)| if k == 0 { p } else { p.split_once(']').map_or("", |x| x.1) })
+            .collect(),
+    }
 }
 
 fn align(x: u32, a: u32) -> u32 {
@@ -397,17 +415,24 @@ impl Loader {
         self.later.iter().any(|(l, _)| l == n).then(|| source_name(n))
     }
 
-    /// The table slot reserved for a function not defined yet.
+    /// The table slot reserved for a function not defined yet. Its type,
+    /// if known (a call, not only an address), fills it.
     fn reserve_slot(&mut self, name: &str, ft: Option<&FuncType>) -> Result<u32> {
+        // until the function comes, a call says which one is missing
+        let init = |store: &mut Store<Host>| ft.map(|ft| {
+            let n = source_name(name);
+            Func::new(store, ft.clone(), move |_, _, _| bail!("undefined symbol: {n}"))
+        });
         if let Some(&s) = self.slots.get(name) {
+            // reserved by an address (GOT.func), which left it null
+            if ft.is_some() && matches!(self.table.get(&mut self.store, s as u64), Some(Ref::Func(None))) {
+                let f = init(&mut self.store);
+                self.table.set(&mut self.store, s as u64, Ref::Func(f))?;
+            }
             return Ok(s);
         }
-        // until the function comes, a call says which one is missing
-        let init = ft.map(|ft| {
-            let n = source_name(name);
-            Func::new(&mut self.store, ft.clone(), move |_, _, _| bail!("undefined symbol: {n}"))
-        });
-        let s = self.table.grow(&mut self.store, 1, Ref::Func(init))? as u32;
+        let f = init(&mut self.store);
+        let s = self.table.grow(&mut self.store, 1, Ref::Func(f))? as u32;
         self.slots.insert(name.to_string(), s);
         Ok(s)
     }
@@ -775,6 +800,12 @@ impl Loader {
             }
         }
         out
+    }
+
+    /// Whether the module `name` is loaded: instantiated, even if its
+    /// constructors then stopped with an error.
+    pub fn is_loaded(&self, name: &str) -> bool {
+        self.loaded.contains(name)
     }
 
     /// Whether the modules define the function `name`.

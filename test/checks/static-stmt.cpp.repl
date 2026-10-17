@@ -1,0 +1,4 @@
+int n = 0;
+for (int i = 0; i < 3; i++) { static int c = 0; n = ++c; }
+int f(void) { static int c = 0; return ++c; }
+f() + f()

@@ -75,8 +75,11 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   program many times bigger (`ANALISE.md` §34). `pattern-init.patch`
   gives an uninitialized integer 0xAA… on wasm32 too, where clang gives
   it -1, which looks initialized; a pointer keeps 0xFFFFFFFF (§42).
-  `repl-return.patch` gives an error for a `return` at the top of a REPL
-  cell, which clang dropped without one, crashing CodeGen (§43).
+  `repl-outside-function.patch` is for what a REPL cell has outside a
+  function: an error for a `return` there, which clang dropped without
+  one, crashing CodeGen (§43), and for a `static` local there, which has
+  no function to be named after; a lambda or a class local to a statement
+  there is mangled as one in a function `__stmts_N` (§45).
   `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the

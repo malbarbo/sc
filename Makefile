@@ -48,7 +48,7 @@ $(B)/src/llvm/CMakeLists.txt:
 	  && git apply $(CURDIR)/llvm/wasi-host.patch $(CURDIR)/llvm/no-veclibs.patch $(CURDIR)/llvm/dylink-weak.patch \
 	  $(CURDIR)/llvm/libcxx-locale.patch $(CURDIR)/llvm/incremental-c-scopes.patch \
 	  $(CURDIR)/llvm/incremental-stmts.patch $(CURDIR)/llvm/incremental-main-file.patch \
-	  $(CURDIR)/llvm/asan-cleanupret.patch $(CURDIR)/llvm/pattern-init.patch $(CURDIR)/llvm/repl-return.patch
+	  $(CURDIR)/llvm/asan-cleanupret.patch $(CURDIR)/llvm/pattern-init.patch $(CURDIR)/llvm/repl-outside-function.patch
 
 $(B)/c-testsuite/.git:
 	git init -q $(B)/c-testsuite && cd $(B)/c-testsuite \

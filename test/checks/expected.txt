@@ -39,6 +39,21 @@ error: invalid memory access
 == bad-address.c strict exit=134
 error: invalid memory access
     at main (bad-address.c:5:20)
+== cells-local.cpp.repl off exit=1
+(int) 116
+error: division by zero
+    at S::f(int) (cell_7:1:38)
+    at cell_7:1:52
+== cells-local.cpp.repl on exit=1
+(int) 116
+error: division by zero
+    at S::f(int) (cell_7:1:38)
+    at cell_7:1:52
+== cells-local.cpp.repl strict exit=1
+(int) 116
+error: division by zero
+    at S::f(int) (cell_7:1:38)
+    at cell_7:1:52
 == cells-static.cpp.repl off exit=1
 error: division by zero
     at f(int) (cell_1:1:32)
@@ -543,6 +558,36 @@ error: stack-buffer-overflow: write of 4 bytes, 0 bytes past the end of the vari
 error: stack-buffer-overflow: write of 4 bytes, 0 bytes past the end of the variable 'notas' (16 bytes)
     at preenche (stack-overflow.c:5:14)
     at main (stack-overflow.c:11:5)
+== static-stmt.c.repl off exit=0
+(int) 3
+cell_2:1:31: error: 'static' cannot be used outside a function
+    1 | for (int i = 0; i < 3; i++) { static int c = 0; n = ++c; }
+      |                               ^
+== static-stmt.c.repl on exit=0
+(int) 3
+cell_2:1:31: error: 'static' cannot be used outside a function
+    1 | for (int i = 0; i < 3; i++) { static int c = 0; n = ++c; }
+      |                               ^
+== static-stmt.c.repl strict exit=0
+(int) 3
+cell_2:1:31: error: 'static' cannot be used outside a function
+    1 | for (int i = 0; i < 3; i++) { static int c = 0; n = ++c; }
+      |                               ^
+== static-stmt.cpp.repl off exit=0
+(int) 3
+cell_2:1:31: error: 'static' cannot be used outside a function
+    1 | for (int i = 0; i < 3; i++) { static int c = 0; n = ++c; }
+      |                               ^
+== static-stmt.cpp.repl on exit=0
+(int) 3
+cell_2:1:31: error: 'static' cannot be used outside a function
+    1 | for (int i = 0; i < 3; i++) { static int c = 0; n = ++c; }
+      |                               ^
+== static-stmt.cpp.repl strict exit=0
+(int) 3
+cell_2:1:31: error: 'static' cannot be used outside a function
+    1 | for (int i = 0; i < 3; i++) { static int c = 0; n = ++c; }
+      |                               ^
 == strcpy.c off exit=0
 maria
 == strcpy.c on exit=134

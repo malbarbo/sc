@@ -752,9 +752,9 @@ ScStatus ScSession::cell(llvm::StringRef Src, bool Backend, std::string &Obj,
   CG->StartModule("sc_cell_" + std::to_string(++I.N + 1), I.Ctx);
   if (!M)
     return ScLost;
-  retypeDecls(*M, I.Types);
   if (!I.IP->OneCell) // for the cells after
     scPromoteInternals(*M, I.Known, [&](llvm::StringRef Name) { return CG->GetDeclForMangledName(Name); });
+  retypeDecls(*M, I.Types); // by the names promoted: Types has f.sc for a static f
   Syms = scExports(*M);
   I.Known.insert(Syms.begin(), Syms.end());
   for (const std::string &N : Syms)

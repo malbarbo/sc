@@ -4,7 +4,7 @@
 //! statements at the top level, which the session's incremental mode accepts.
 use sc_proto::{Answer, Repl, Status};
 use crate::show;
-use scload::{Loader, STACK};
+use scload::{source_name, Loader, STACK};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -238,7 +238,13 @@ impl Machine {
         }
         self.loaded += 1;
         let name = format!("cell {}", self.loaded);
-        Ok(self.exec(|l| l.load_bytes(&name, &a.so, true)))
+        let out = self.exec(|l| l.load_bytes(&name, &a.so, true));
+        if !self.loader.is_loaded(&name) {
+            // nothing of it is in the loader (an import of another type):
+            // nor is it in the compiler, so that it can be written again
+            self.repl.undo()?;
+        }
+        Ok(out)
     }
 
     /// Undoes the last accepted cell in the compiler: its names can be
@@ -454,23 +460,6 @@ fn frames(bt: &wasmtime::WasmBacktrace, loader: &Loader, build: &Path, library: 
         out.splice(HEAD..out.len() - TAIL, [format!("... {more} more")]);
     }
     out
-}
-
-/// A function as the source names it: `main` for libc's names of it,
-/// without the `.sc` of a static of a REPL cell, and without libc++'s
-/// inline namespace and ABI tags. A lambda is one in the function around it,
-/// and libsc_rt's `__wrap_strlen` is the `strlen` it checks.
-fn source_name(name: &str) -> String {
-    // wasm-ld demangles _Z1fi.sc as `f(int) (.sc)`
-    let n = name.strip_suffix(" (.sc)").or(name.strip_suffix(".sc")).unwrap_or(name);
-    let n = n.strip_prefix("__wrap_").unwrap_or(n);
-    match n {
-        "__original_main" | "__main_argc_argv" => "main".into(),
-        _ if n.contains("::$_") => format!("a lambda in {}", source_name(&n[..n.find("::$_").unwrap()])),
-        _ => n.replace("std::__2::", "std::").split("[abi:").enumerate()
-            .map(|(k, p)| if k == 0 { p } else { p.split_once(']').map_or("", |x| x.1) })
-            .collect(),
-    }
 }
 
 /// The address of an access out of the memory, from wasmtime's description
