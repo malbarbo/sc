@@ -108,21 +108,95 @@ index 892715a6d..fbf759d67 100644
    }
  
 diff --git a/clang/lib/Lex/PPLexerChange.cpp b/clang/lib/Lex/PPLexerChange.cpp
-index b44bf2cd3..0ee6d46eb 100644
+index b44bf2cd3..97ffa8909 100644
 --- a/clang/lib/Lex/PPLexerChange.cpp
 +++ b/clang/lib/Lex/PPLexerChange.cpp
-@@ -531,7 +531,13 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
+@@ -531,7 +531,15 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
    Result.startToken();
    CurLexer->BufferPtr = EndPos;
  
 -  if (getLangOpts().IncrementalExtensions) {
-+  // the end of a REPL input, which the parser lexes a few times; lexed again
-+  // and again, it is the end of the file, where the loops that lex stop
++  // The end of a REPL input, which the parser lexes a few times. A loop
++  // that only stops at the end of the file would lex it forever: lexed
++  // 65536 times, it is the end of the file. A safety net: the loops known
++  // stop at annot_repl_input_end too (Pragma.cpp, PPMacroExpansion.cpp).
 +  if (EndPos != ReplInputEndAt) {
 +    ReplInputEndAt = EndPos;
 +    ReplInputEnds = 0;
 +  }
-+  if (getLangOpts().IncrementalExtensions && ++ReplInputEnds <= 64) {
++  if (getLangOpts().IncrementalExtensions && ++ReplInputEnds <= 65536) {
      CurLexer->FormTokenWithChars(Result, EndPos, tok::annot_repl_input_end);
      Result.setAnnotationEndLoc(Result.getLocation());
      Result.setAnnotationValue(nullptr);
+diff --git a/clang/lib/Lex/PPMacroExpansion.cpp b/clang/lib/Lex/PPMacroExpansion.cpp
+index e09e80a06..6baef6890 100644
+--- a/clang/lib/Lex/PPMacroExpansion.cpp
++++ b/clang/lib/Lex/PPMacroExpansion.cpp
+@@ -765,7 +765,8 @@ MacroArgs *Preprocessor::ReadMacroCallArgumentList(Token &MacroName,
+       // an argument value in a macro could expand to ',' or '(' or ')'.
+       LexUnexpandedToken(Tok);
+ 
+-      if (Tok.isOneOf(tok::eof, tok::eod)) { // "#if f(<eof>" & "#if f(\n"
++      // "#if f(<eof>" & "#if f(\n"; and "f(" at the end of a REPL input
++      if (Tok.isOneOf(tok::eof, tok::eod, tok::annot_repl_input_end)) {
+         if (!ContainsCodeCompletionTok) {
+           Diag(MacroName, diag::err_unterm_macro_invoc);
+           Diag(MI->getDefinitionLoc(), diag::note_macro_here)
+@@ -1384,7 +1385,7 @@ static void EvaluateFeatureLikeBuiltinMacro(llvm::raw_svector_ostream& OS,
+                                                             << tok::l_paren;
+ 
+     // Provide a dummy '0' value on output stream to elide further errors.
+-    if (!Tok.isOneOf(tok::eof, tok::eod)) {
++    if (!Tok.isOneOf(tok::eof, tok::eod, tok::annot_repl_input_end)) {
+       OS << 0;
+       Tok.setKind(tok::numeric_constant);
+     }
+@@ -1397,7 +1398,7 @@ static void EvaluateFeatureLikeBuiltinMacro(llvm::raw_svector_ostream& OS,
+ 
+   Token ResultTok;
+   bool SuppressDiagnostic = false;
+-  while (Tok.isNoneOf(tok::eod, tok::eof)) {
++  while (Tok.isNoneOf(tok::eod, tok::eof, tok::annot_repl_input_end)) {
+     // Parse next token.
+     if (ExpandArgs)
+       PP.Lex(Tok);
+@@ -1408,6 +1409,7 @@ already_lexed:
+     switch (Tok.getKind()) {
+       case tok::eof:
+       case tok::eod:
++      case tok::annot_repl_input_end:
+         // Don't provide even a dummy value if the eod or eof marker is
+         // reached.  Simply provide a diagnostic.
+         PP.Diag(Tok.getLocation(), diag::err_unterm_macro_invoc);
+diff --git a/clang/lib/Lex/Pragma.cpp b/clang/lib/Lex/Pragma.cpp
+index 9b48a45ad..1094c6c9c 100644
+--- a/clang/lib/Lex/Pragma.cpp
++++ b/clang/lib/Lex/Pragma.cpp
+@@ -221,11 +221,12 @@ void Preprocessor::Handle_Pragma(Token &Tok) {
+   if (!tok::isStringLiteral(Tok.getKind())) {
+     Diag(PragmaLoc, diag::err__Pragma_malformed);
+     // Skip bad tokens, and the ')', if present.
+-    if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::eof) && Tok.isNot(tok::eod))
++    if (Tok.isNoneOf(tok::r_paren, tok::eof, tok::eod,
++                     tok::annot_repl_input_end))
+       Lex(Tok);
+     while (Tok.isNot(tok::r_paren) &&
+            !Tok.isAtStartOfLine() &&
+-           Tok.isNot(tok::eof) && Tok.isNot(tok::eod))
++           Tok.isNoneOf(tok::eof, tok::eod, tok::annot_repl_input_end))
+       Lex(Tok);
+     if (Tok.is(tok::r_paren))
+       Lex(Tok);
+diff --git a/clang/lib/Parse/Parser.cpp b/clang/lib/Parse/Parser.cpp
+--- a/clang/lib/Parse/Parser.cpp
++++ b/clang/lib/Parse/Parser.cpp
+@@ -679,6 +679,9 @@
+ 
+   case tok::eof:
+   case tok::annot_repl_input_end:
++    // The next REPL input starts outside any bracket, also after one that
++    // ended inside a bracket (Parser::LexTok)
++    ParenCount = BracketCount = BraceCount = 0;
+     // Check whether -fmax-tokens= was reached.
+     if (PP.getMaxTokens() != 0 && PP.getTokenCount() > PP.getMaxTokens()) {
+       PP.Diag(Tok.getLocation(), diag::warn_max_tokens_total)

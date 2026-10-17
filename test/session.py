@@ -32,10 +32,10 @@ Writes <outdir>/<name>.txt and <outdir>/summary.json (ses-, seq- and crash-,
 normalized as the corpus's); with a base summary, lists the results that
 differ from it. Fails if a slice's own check fails.
 """
-import difflib, glob, json, os, re, shutil, struct, subprocess, sys, threading, time
+import difflib, glob, json, os, re, shutil, statistics, struct, subprocess, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from corpuslib import diff, norm_hash, run_all, sources, source_name
+from corpuslib import diff, kill_session, norm_hash, run_all, sources, source_name
 from spike import expected, run, same, std_pcm
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -86,42 +86,10 @@ SKIP = {C + 'CodeGenCXX_mangle-ms-back-references-pr13207', C + 'CodeGenCXX_pr29
 
 
 def flags(p):
+    """the session's flags for the source p"""
     cxx = p.endswith(('.cpp', '.cc', '.cxx'))
     c17 = p.startswith((f'{B}/c-testsuite/', f'{B}/gcc-ts/'))
-    return cxx, session(cxx, B, c17, '/test/mod/' in p or 'import std;' in open(p, errors='replace').read(), f'{OUT}/std.pcm')
-
-
-def repl(d, cells, p, fl):
-    """the cells (files, %undo, %restart) through `<engine> repl` in d: its
-    output, and whether the session went on to the end. It runs in the
-    source's directory, where a cell's "..." includes are"""
-    try:
-        r = run_all([ENG, 'repl', d] + cells + ['--'] + fl, 120, cwd=os.path.dirname(p))
-        # what the engine writes on a crash (a backtrace) is not the session's
-        txt = r.stdout.decode(errors='replace') + f'repl exit={r.returncode}\n'
-        return txt, r.returncode == 0
-    except subprocess.TimeoutExpired:
-        return 'repl TIMEOUT\n', False
-
-
-def write(d, cells, ext):
-    """the cells (bytes: a source's \\r\\n as it is) as files d/c001.ext...,
-    the steps (str) as they are"""
-    files = []
-    for i, c in enumerate(cells):
-        if c in ('%undo', '%restart'):
-            files.append(c)
-            continue
-        files.append(f'{d}/c{i + 1:03}{ext}')
-        open(files[-1], 'wb').write(c)
-    return files
-
-
-def fresh(name):
-    d = f'{OUT}/{name}'
-    shutil.rmtree(d, ignore_errors=True)
-    os.makedirs(d)
-    return d
+    return session(cxx, B, c17, '/test/mod/' in p or 'import std;' in open(p, errors='replace').read(), f'{OUT}/std.pcm')
 
 
 def status(txt):
@@ -129,11 +97,33 @@ def status(txt):
     return re.findall(r'^== \S+ (\w+)$', txt, re.M)
 
 
-def finish(name, d, txt):
-    txt = txt.replace(d + '/', '').replace(OUT + '/', 'OUT/')
+def repl(name, p, cells, runs):
+    """the cells (bytes: a source's \\r\\n as it is; or the steps %undo and
+    %restart) through `<engine> repl`, in the source's directory, where a
+    cell's "..." includes are. When runs(txt, ok) (ok: the session went on
+    to the end), the shared objects run. The output, ok and what the run
+    printed (None if not run); the output is <OUT>/<name>.txt"""
+    d = f'{OUT}/{name}'
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    files = []
+    for i, c in enumerate(cells):
+        if c in ('%undo', '%restart'):
+            files.append(c)
+            continue
+        files.append(f'{d}/c{i + 1:03}{os.path.splitext(p)[1]}')
+        open(files[-1], 'wb').write(c)
+    try:
+        r = run_all([ENG, 'repl', d] + files + ['--'] + flags(p), 120, cwd=os.path.dirname(p))
+        # what the engine writes on a crash (a backtrace) is not the session's
+        txt, ok = r.stdout.decode(errors='replace') + f'repl exit={r.returncode}\n', r.returncode == 0
+    except subprocess.TimeoutExpired:
+        txt, ok = 'repl TIMEOUT\n', False
+    out = run(sorted(glob.glob(f'{d}/*.so'))) if runs(txt, ok) else None
+    txt = (txt + (out or '')).replace(d + '/', '').replace(OUT + '/', 'OUT/')
     open(f'{OUT}/{name}.txt', 'w').write(txt)
     shutil.rmtree(d)
-    return txt
+    return txt, ok, out
 
 
 # --- ses-
@@ -144,35 +134,22 @@ def whole(name, runs):
     return 'cc1 exit=0\n' in t and (not runs or 'ld exit=0\n' in t)
 
 
-def ses(src):
-    p, runs, name = src
-    d = fresh(f'ses-{name}')
-    cxx, fl = flags(p)
-    files = write(d, [open(p, 'rb').read()], os.path.splitext(p)[1])
-    txt, ok = repl(d, files, p, fl)
+def ses(name, src):
+    p, runs, n = src
+    txt, ok, out = repl(name, p, [open(p, 'rb').read()], lambda txt, ok: runs and status(txt) == ['ok'])
     acc = status(txt) == ['ok']
     # the corpus only compiles what it does not run: a cell that fails to link compiled
     linked = re.search(r'^wasm-ld: error:', txt, re.M) and not re.search(r'^\S+:\d+:\d+: (fatal )?error:', txt, re.M)
-    good = ok and (acc or not runs and bool(linked)) == whole(name, runs)
-    if runs and acc:
-        out = run(sorted(glob.glob(f'{d}/*.so')))
-        txt += out
-        good = good and same(out, expected(name))
-    return f'ses-{name}', finish(f'ses-{name}', d, txt), good
+    good = ok and (acc or not runs and bool(linked)) == whole(n, runs)
+    return txt, good and (out is None or same(out, expected(n)))
 
 
 # --- seq-
 
-def seq(p):
-    name = 'seq-' + os.path.splitext(os.path.basename(p))[0]
-    d = fresh(name)
-    cxx, fl = flags(p)
+def seq(name, p):
     cells = [c if c.strip() not in (b'//%undo', b'//%restart') else c.strip()[2:].decode()
              for c in re.split(rb'^//%%\n', open(p, 'rb').read(), flags=re.M)]
-    txt, ok = repl(d, write(d, cells, os.path.splitext(p)[1]), p, fl)
-    if ok:
-        txt += run(sorted(glob.glob(f'{d}/*.so')))
-    return name, finish(name, d, txt), None
+    return repl(name, p, cells, lambda txt, ok: ok)[0], None
 
 
 # --- crash-
@@ -188,19 +165,12 @@ def crashes(name):
     return m is not None and m[1] not in ('0', '1')
 
 
-def crash(src):
-    p, runs, name = src
-    d = fresh(f'crash-{name}')
-    cxx, fl = flags(p)
+def crash(name, src):
+    p = src[0]
     cells = [BEFORE, open(p, 'rb').read(), AFTER, '%restart', MAIN]
-    txt, ok = repl(d, write(d, cells, os.path.splitext(p)[1]), p, fl)
-    st = status(txt)
-    good = ok and len(st) == 5 and st[0] == st[2] == st[3] == st[4] == 'ok'
-    if good:
-        out = run(sorted(glob.glob(f'{d}/*.so')))
-        txt += out
-        good = out == '42\nrun exit=0\n'
-    return f'crash-{name}', finish(f'crash-{name}', d, txt), good
+    # all but the source's cell accepted
+    txt, _, out = repl(name, p, cells, lambda txt, ok: ok and (st := status(txt))[:1] + st[2:] == ['ok'] * 4)
+    return txt, out == '42\nrun exit=0\n'
 
 
 # --- mem-
@@ -229,16 +199,20 @@ class Child:
     """`<engine> session`, through the protocol (engine/sc.h)"""
     NEW, CELL, REPLY, SO = 1, 2, 4, 0
 
-    def __init__(self, args, timeout):
-        """the child, killed after timeout seconds: what it would reply is
-        then an EOFError. start() opens the session"""
-        self.p = subprocess.Popen([ENG, 'session'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        self.timer = threading.Timer(timeout, self.p.kill)
+    def __init__(self, timeout):
+        """the child, in a session of its own with the copies it forks: all
+        of them killed after timeout seconds, when a reply is an EOFError"""
+        self.p = subprocess.Popen([ENG, 'session'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  start_new_session=True)
+        self.timer = threading.Timer(timeout, self.kill)
         self.timer.start()
-        self.args = args
 
-    def start(self):
-        st, (diags, _, _) = self.send(self.NEW, 0, b''.join(a.encode() + b'\0' for a in self.args))
+    def kill(self):
+        while kill_session(self.p.pid):
+            pass
+
+    def start(self, args):
+        st, (diags, _, _) = self.send(self.NEW, 0, b''.join(a.encode() + b'\0' for a in args))
         if st != 0:
             raise ValueError(f'no session: {diags.decode(errors="replace")}')
 
@@ -268,13 +242,11 @@ class Child:
         self.p.wait()
 
 
-def mem(cxx):
-    name = f'mem-{"cxx" if cxx else "c"}'
-    fl = session(cxx, B)
+def mem(name, cxx):
     rows, t0, bad = [], time.time(), []
-    c = Child(fl, 600)
+    c = Child(600)
     try:
-        c.start()
+        c.start(session(cxx, B))
         for i, src in enumerate(mem_cells(cxx, 1000)):
             st, (diags, _, _) = c.send(Child.CELL, Child.SO, src.encode())
             if st != 0:
@@ -283,19 +255,17 @@ def mem(cxx):
     except (EOFError, ValueError, OSError) as e:
         txt = ''.join(bad) + f'after {len(rows)} cells: {e}\n'
         open(f'{OUT}/{name}.txt', 'w').write(txt)
-        return name, txt, False
+        return txt, False
     finally:
         c.close()
     secs = time.time() - t0
-    xs = [(x, y) for x, y in rows if x > 100]
-    mx, my = sum(x for x, _ in xs) / len(xs), sum(y for _, y in xs) / len(xs)
-    slope = sum((x - mx) * (y - my) for x, y in xs) / sum((x - mx) ** 2 for x, _ in xs)
+    slope = statistics.linear_regression(*zip(*rows[100:])).slope
     step = max(rows[i + 100][1] - rows[i][1] for i in range(100, len(rows) - 100))
     good = not bad and slope < 50 and step < 5 * 1024
     txt = (''.join(bad) + f'{len(rows)} cells, {secs / len(rows) * 1000:.1f} ms a cell; RSS {rows[99][1] // 1024} MB after 100,'
            f' {rows[-1][1] // 1024} MB after {len(rows)}; slope {slope:.1f} KB a cell, at most {step} KB over 100 cells\n')
     open(f'{OUT}/{name}.txt', 'w').write(txt + ''.join(f'{x} {y}\n' for x, y in rows))
-    return name, txt, good
+    return txt, good
 
 
 def main():
@@ -306,24 +276,31 @@ def main():
     for p, runs in sources(R, B):
         srcs[source_name(p, R, B)] = (p, runs)  # the last of a name, as the corpus's results
     srcs = [(p, runs, n) for n, (p, runs) in srcs.items() if n not in SKIP]
-    seqs = sorted(glob.glob(f'{SEQ}/*.c') + glob.glob(f'{SEQ}/*.cpp'))
-    jobs = [(ses, s, f'ses-{s[2]}') for s in srcs] * ('ses' in slices)
-    jobs += [(seq, p, 'seq-' + os.path.splitext(os.path.basename(p))[0]) for p in seqs] * ('seq' in slices)
-    jobs += [(crash, s, f'crash-{s[2]}') for s in srcs if crashes(s[2])] * ('crash' in slices)
-    jobs += [(mem, x, f'mem-{"cxx" if x else "c"}') for x in (False, True)] * ('mem' in slices)
+    # (name, slice, its argument), the longest first: mem- is 1000 cells in a row
+    jobs = []
+    if 'mem' in slices:
+        jobs += [(f'mem-{"cxx" if x else "c"}', mem, x) for x in (False, True)]
+    if 'crash' in slices:
+        jobs += [(f'crash-{s[2]}', crash, s) for s in srcs if crashes(s[2])]
+    if 'ses' in slices:
+        jobs += [(f'ses-{s[2]}', ses, s) for s in srcs]
+    if 'seq' in slices:
+        jobs += [('seq-' + os.path.splitext(os.path.basename(p))[0], seq, p)
+                 for p in sorted(glob.glob(f'{SEQ}/*.c') + glob.glob(f'{SEQ}/*.cpp'))]
     if only:
-        jobs = [j for j in jobs if j[2] in only]
+        jobs = [j for j in jobs if j[0] in only]
     std_pcm(ENG, OUT)
     with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
-        rs = list(ex.map(lambda j: j[0](j[1]), jobs))
+        rs = list(ex.map(lambda j: (j[0], *j[1](j[0], j[2])), jobs))
     bad = [n for n, _, good in rs if good is False and n not in KNOWN]
+    known = [n for n, _, good in rs if good is False and n in KNOWN]
     for n in (n for n, _, good in rs if good and n in KNOWN):
         print('KNOWN, now good (take it out of KNOWN):', n)
     for n, txt, _ in rs:
         if n.startswith('mem-'):
             print(n, txt.splitlines()[-1])
     # seq-: the expected output, all of them in one file
-    got = ''.join(f'== {n}\n{txt}' for n, txt, good in rs if n.startswith('seq-'))
+    got = ''.join(f'== {n}\n{txt}' for n, txt, _ in rs if n.startswith('seq-'))
     if 'seq' in slices and not only:
         if UPDATE:
             open(f'{SEQ}/expected.txt', 'w').write(got)
@@ -341,7 +318,7 @@ def main():
         for k in diff(base, summary):
             print('DIFF', k)
             bad.append(k)
-    print(f'{len(rs)} results, {len(bad)} bad ({sum(good is False and n in KNOWN for n, _, good in rs)} known)')
+    print(f'{len(rs)} results, {len(bad)} bad ({len(known)} known)')
     sys.exit(1 if bad else 0)
 
 

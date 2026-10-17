@@ -28,7 +28,8 @@ def sources(R, B, full=True):
     if full:
         for sub in ['SemaCXX', 'SemaTemplate', 'CodeGenCXX', 'CXX/**', 'Parser', 'Lexer', 'AST', 'Misc']:
             ps += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.cpp', recursive=True))]
-    return [x for x in ps if not x[0].endswith(tuple(s + '.c' for s in SKIP))]
+    skip = tuple(s + '.c' for s in SKIP)
+    return [x for x in ps if not x[0].endswith(skip)]
 
 
 def source_name(p, R, B):
@@ -40,14 +41,13 @@ def source_name(p, R, B):
     return n[-200:]
 
 
-def run_all(cmd, timeout, **kw):
+def run_all(cmd, timeout, cwd=None):
     """subprocess.run(cmd, capture_output=True), in a session of its own: on
     a timeout, every process of the session is killed, the children it put
     in process groups of their own too (the REPL's engine)"""
-    p = subprocess.Popen(cmd, stdin=subprocess.PIPE if 'input' in kw else None, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, start_new_session=True, cwd=kw.get('cwd'))
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=cwd)
     try:
-        out, err = p.communicate(kw.get('input'), timeout)
+        out, err = p.communicate(timeout=timeout)
         return subprocess.CompletedProcess(cmd, p.returncode, out, err)
     except subprocess.TimeoutExpired:
         while kill_session(p.pid):  # again: one may have forked during the scan

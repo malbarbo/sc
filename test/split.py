@@ -21,7 +21,7 @@ import glob, os, re, shutil, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from spike import expected, same, split, std_pcm
-from corpuslib import run_all
+from corpuslib import run_all, source_name, sources
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
@@ -31,7 +31,6 @@ ENG = f'{B}/sc-engine-full'
 LIB = f'{B}/sysroot/lib/wasm32-wasip1'
 SCLOAD = f'{B}/loader/release/scload'
 OUT = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else f'{B}/res/split')
-SKIP = ('warn-date-time', 'SOURCE_DATE_EPOCH', 'pr133574', 'builtin_redef')  # as corpus.py
 G = 'gcc-ts_gcc_testsuite_gcc.c-torture_execute_'
 # where cells cannot be the program (ANALISE.md §24)
 KNOWN = {
@@ -50,13 +49,7 @@ def flags(cxx, gnu17, mod):
 
 def programs():
     """(path, name of its pic- result) of each program the corpus runs"""
-    ps = [(p, os.path.splitext(os.path.basename(p))[0]) for p in sorted(glob.glob(f'{R}/test/samples/*.c'))]
-    ps += [(p, 'ct-' + os.path.basename(p)[:-2]) for p in sorted(glob.glob(f'{B}/c-testsuite/tests/single-exec/*.c'))]
-    ps += [(p, os.path.splitext(os.path.relpath(p, B))[0].replace('/', '_'))
-           for p in sorted(glob.glob(f'{B}/gcc-ts/gcc/testsuite/gcc.c-torture/execute/*.c'))]
-    ps += [(p, 'cxx-' + os.path.basename(p)[:-4]) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp'))]
-    ps += [(p, 'mod-' + os.path.basename(p)[:-4]) for p in sorted(glob.glob(f'{R}/test/mod/*.cpp'))]
-    return [(p, n[-200:]) for p, n in ps if not p.endswith(tuple(x + '.c' for x in SKIP))]
+    return [(p, source_name(p, R, B)) for p, runs in sources(R, B) if runs]
 
 
 def run(sos):

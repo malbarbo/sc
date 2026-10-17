@@ -1,24 +1,30 @@
-diff --git a/clang/lib/Sema/SemaDeclCXX.cpp b/clang/lib/Sema/SemaDeclCXX.cpp
-index b0669c602..25f450c7e 100644
---- a/clang/lib/Sema/SemaDeclCXX.cpp
-+++ b/clang/lib/Sema/SemaDeclCXX.cpp
-@@ -12089,7 +12089,9 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
-     // Determine whether the parent already has an anonymous namespace.
-     DeclContext *Parent = CurContext->getRedeclContext();
-     if (TranslationUnitDecl *TU = dyn_cast<TranslationUnitDecl>(Parent)) {
--      PrevNS = TU->getAnonymousNamespace();
-+      // incremental: each partial TU has a TranslationUnitDecl, and the
-+      // anonymous namespace is the one of the first
-+      PrevNS = TU->getFirstDecl()->getAnonymousNamespace();
-     } else {
-       NamespaceDecl *ND = cast<NamespaceDecl>(Parent);
-       PrevNS = ND->getAnonymousNamespace();
-@@ -12124,7 +12126,7 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
-     // Link the anonymous namespace into its parent.
-     DeclContext *Parent = CurContext->getRedeclContext();
-     if (TranslationUnitDecl *TU = dyn_cast<TranslationUnitDecl>(Parent)) {
--      TU->setAnonymousNamespace(Namespc);
-+      TU->getFirstDecl()->setAnonymousNamespace(Namespc);
-     } else {
-       cast<NamespaceDecl>(Parent)->setAnonymousNamespace(Namespc);
-     }
+diff --git a/clang/include/clang/AST/Decl.h b/clang/include/clang/AST/Decl.h
+index 0a6f256af..2fa6c67c9 100644
+--- a/clang/include/clang/AST/Decl.h
++++ b/clang/include/clang/AST/Decl.h
+@@ -140,7 +140,11 @@ public:
+ 
+   ASTContext &getASTContext() const { return Ctx; }
+ 
+-  NamespaceDecl *getAnonymousNamespace() const { return AnonymousNamespace; }
++  /// Incremental: each partial TU has a TranslationUnitDecl, and the
++  /// anonymous namespace is the one of the first, as a namespace's.
++  NamespaceDecl *getAnonymousNamespace() const {
++    return getFirstDecl()->AnonymousNamespace;
++  }
+   void setAnonymousNamespace(NamespaceDecl *D);
+ 
+   static TranslationUnitDecl *Create(ASTContext &C);
+diff --git a/clang/lib/AST/Decl.cpp b/clang/lib/AST/Decl.cpp
+index 5a76a726c..9e9058ce7 100644
+--- a/clang/lib/AST/Decl.cpp
++++ b/clang/lib/AST/Decl.cpp
+@@ -5491,7 +5491,7 @@ TranslationUnitDecl *TranslationUnitDecl::Create(ASTContext &C) {
+ }
+ 
+ void TranslationUnitDecl::setAnonymousNamespace(NamespaceDecl *D) {
+-  AnonymousNamespace = D;
++  getFirstDecl()->AnonymousNamespace = D;
+ 
+   if (ASTMutationListener *Listener = Ctx.getASTMutationListener())
+     Listener->AddedAnonymousNamespace(this, D);

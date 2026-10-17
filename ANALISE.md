@@ -3015,31 +3015,37 @@ patch.
   - **Parser.** O fim da entrada com um parêntese, colchete ou chave
     aberto (`ParenCount`, `BracketCount`, `BraceCount`) vira `eof`. Os laços
     param, e o erro é o do clang: "expected '}'" com a nota "to match this
-    '{'".
-  - **Pré-processador.** O fim da mesma entrada lido mais de 64 vezes
-    seguidas vira `eof`, o que cobre os laços do `_Pragma`, do
-    `__has_c_attribute(` e do `__has_warning(`.
+    '{'". As contagens voltam a zero no fim de cada entrada
+    (`ParseTopLevelDecl`), então a célula seguinte começa fora de qualquer
+    colchete, com ou sem o `fork`. O engine pula um `eof` no começo de uma
+    célula: é o fim de uma célula anterior que terminou dentro de um
+    colchete. O teste de profundidade do lexer cru não serviria para
+    decidir: ele conta as chaves de `#if 0` e de `#define`.
+  - **Pré-processador.** Os laços que só paravam no `eof` param também no
+    fim da entrada: o do `_Pragma(` (`Pragma.cpp`), o dos argumentos de uma
+    macro `F(` e o dos `__has_c_attribute(`, `__has_warning(` e outros
+    `__has_*(` (`PPMacroExpansion.cpp`). O upstream já faz isso no
+    `LexTokensUntilEOF`. Como rede de segurança, o fim da mesma entrada
+    lido 65.536 vezes seguidas vira `eof`, para um laço que o corpus não
+    exercita.
 
-  A primeira versão da segunda parte dava `eof` já na segunda leitura e
-  quebrou o REPL: o fluxo normal relê o fim algumas vezes, por exemplo no
+  A primeira versão da rede dava `eof` já na segunda leitura e quebrou o
+  REPL: o fluxo normal relê o fim algumas vezes, por exemplo no
   `ConsumeAnnotationToken` depois de um valor mostrado e no `Parser` que o
-  engine cria depois do `ParseAST`. O engine agora também pula um `eof` no
-  começo de uma célula.
-
-  A parte do parser supõe que as contagens de parênteses, colchetes e
-  chaves estão em zero no começo de cada célula. Uma célula que falha com
-  um colchete aberto as deixa acima de zero, mas a sessão descarta esse
-  estado: quem segue é a cópia do `fork`, de antes da célula. Sem o
-  `fork`, como no clang-repl do upstream, toda célula seguinte terminaria
-  em `eof`. O limite de 64 leituras é arbitrário: o fluxo normal relê o fim
-  poucas vezes, e um laço gira milhares. O teste de profundidade do lexer cru não serviria
-  para decidir: ele conta as chaves de `#if 0` e de `#define`.
+  engine cria depois do `ParseAST`. A segunda versão tinha o limite em 64 e
+  era o que produzia os erros desses laços. Na revisão (`/simplify`), os
+  laços passaram a parar sozinhos. Com o limite tirado de todo, o `ses-`,
+  o `seq-` e o `crash-` não tiveram nenhum timeout, ou seja, nenhum fonte do
+  corpus depende da rede.
 - **Namespace anônimo por célula (`llvm/incremental-anon-namespace.patch`).**
   Cada entrada tem o seu `TranslationUnitDecl`, e o Sema guardava o
   namespace anônimo nele. Cada célula tinha então um namespace anônimo
   novo. O `namespace { int x = 9; }` repetido era aceito, e o `x` ficava
   ambíguo dali em diante. Agora o namespace anônimo é o do primeiro TU,
-  como num arquivo, e o `x` repetido é redefinição.
+  como num arquivo, e o `x` repetido é redefinição. A mudança fica nos
+  acessores do `TranslationUnitDecl` (`getFirstDecl()`, como o
+  `NamespaceDecl` já faz para o seu), e não no Sema: assim ela vale também
+  para o ASTReader, o ASTWriter e o ASTImporter.
 - **Acesso no palpite entre comando e declaração
   (`llvm/incremental-access.patch`).** No topo de uma célula, o clang-repl
   analisa o começo em modo tentativo para decidir se é um comando ou uma
@@ -3099,3 +3105,6 @@ Com a máquina ocupada pelas outras fatias, o `mem-` mede 30 ms por célula
 em C e 40 ms em C++. A inclinação fica em 2,6 KB e 6,6 KB por célula, e a
 maior subida em 100 células em 404 KB e 1,8 MB. Os limites do plano
 continuam longe.
+
+Depois da revisão (`/simplify`), com os laços do pré-processador corrigidos
+e a rede em 65.536, todas as baterias deram o mesmo, com 0 diferenças.

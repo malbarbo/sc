@@ -83,12 +83,16 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `incremental-anon-namespace.patch` makes the anonymous namespace of
   every cell the one of the first, as in one file: each cell has a
   `TranslationUnitDecl` of its own, and its anonymous namespace was
-  another, so a name redefined there was ambiguous (§46).
+  another, so a name redefined there was ambiguous. It is in the
+  `TranslationUnitDecl`'s accessors, as `NamespaceDecl` does it (§46).
   `incremental-input-end.patch` ends the loops that stop at the end of the
   file at the end of a cell too: a cell that ends inside a bracket (`int
   f() {`) or inside a `_Pragma(` hung the engine. In the parser, the end of
-  the cell inside a bracket is the end of the file. In the preprocessor,
-  the end of the cell lexed again is the end of the file (§46).
+  the cell inside a bracket is the end of the file, and the counts of
+  brackets are 0 again at the end of each cell. In the preprocessor, the
+  loops of `_Pragma(`, of a macro's arguments and of `__has_*(` stop there
+  too; the end of the cell lexed 65536 times is the end of the file, a
+  safety net (§46).
   `incremental-access.patch` keeps the guess between a statement and a
   declaration at the top of a cell from checking access early: it
   rejected `B::C::C() {}` for a private class `C` of `B` (§46).
