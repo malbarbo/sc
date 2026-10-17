@@ -33,6 +33,10 @@ struct ScOptions {
 // false, with the reason in Error, for a flag the engine does not take
 bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O, std::string &Error);
 void scBuildInvocation(clang::CompilerInvocation &Inv, const ScOptions &O);
+// what a session changes in the invocation (PLANO-REPL.md §3.5): what
+// -fincremental-extensions, without -disable-free and
+// -clear-ast-before-backend, gives
+void scIncremental(clang::CompilerInvocation &Inv);
 // sets the backend options the invocation lists (FrontendOptions::LLVMArgs, the
 // driver's -mllvm), as cc1 does, but without the command line parser. Those
 // already given are left alone: a session sets them again before each

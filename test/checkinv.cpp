@@ -1,6 +1,8 @@
 // Native check: the invocation built by scBuildInvocation must round-trip to
 // the same cc1 command line as the one clang's option parser builds.
 //   checkinv <cc1 args...>
+// With -fincremental-extensions (a session's flags), the sc side is
+// scBuildInvocation without it, then scIncremental.
 #include "sc_inv.h"
 #include "clang/Basic/DiagnosticIDs.h"
 #include "clang/Basic/DiagnosticOptions.h"
@@ -29,14 +31,21 @@ int main(int argc, const char **argv) {
   CompilerInvocation Parsed;
   if (!CompilerInvocation::CreateFromArgs(Parsed, Args, Diags, "clang"))
     return 1;
+  std::vector<const char *> Sc;
+  for (const char *A : Args)
+    if (llvm::StringRef(A) != "-fincremental-extensions")
+      Sc.push_back(A);
+  bool Incremental = Sc.size() != Args.size();
   ScOptions O;
   std::string Error;
-  if (!scParseArgs(Args, O, Error)) {
+  if (!scParseArgs(Sc, O, Error)) {
     llvm::outs() << "sc: " << Error << "\nDIFFERENT\n";
     return 1;
   }
   CompilerInvocation Mine;
   scBuildInvocation(Mine, O);
+  if (Incremental)
+    scIncremental(Mine);
   auto A = gen(Parsed), B = gen(Mine);
   std::multiset<std::string> SA(A.begin(), A.end()), SB(B.begin(), B.end());
   int diffs = 0;

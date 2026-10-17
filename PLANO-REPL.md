@@ -334,9 +334,10 @@ a libc e os builtins.
 iguala o `pic-` em 1.941 dos 1.947 programas do corpus. Os 6 restantes são
 limites conhecidos (`KNOWN` no `test/split.py`). Para chegar lá, a sessão
 ganhou quatro correções (§3.8) e o loader, as referências para a frente.
-Ainda faltam o §3.4 (o aviso de não usado só na célula que define e a nota
-da redefinição) e as combinações incrementais no `checkinv` (§3.5). O
-`return` no topo foi resolvido por um patch no Sema (§3.7). O `#include` depois de uma
+Os itens que faltavam foram fechados em 2026-10-17: o §3.4 (o aviso de não
+usado pelo §29 do ANALISE.md; a redefinição, sem nota), as combinações
+incrementais no `checkinv` (§3.5) e o `return` no topo, por um patch no
+Sema (§3.7). O `#include` depois de uma
 célula que falhou foi resolvido pelo snapshot por `fork` (§3.3).
 
 ### 3.1 Montagem (C-B3, C-m1, C-m3)
@@ -434,8 +435,12 @@ Testes: os casos `cnt`, `nx` (`static` local de função `static`) e `an`
 
 **Decisões para a v1:**
 
-- O aviso de não usado só sai na célula que define a declaração. Isso é
-  filtrado no printer, pela PTU de origem.
+- ~~O aviso de não usado só sai na célula que define a declaração. Isso é
+  filtrado no printer, pela PTU de origem.~~ Mudou no protótipo (ANALISE.md
+  §29): a sessão esvazia o `UnusedFileScopedDecls` e o `UndefinedButUsed` a
+  cada célula, porque uma célula seguinte pode usar ou definir o nome; no
+  REPL o fim de célula não avisa nada. `sc FILE` e `sc check` usam
+  `-sc-one-cell` e avisam como o compilador de uma vez só.
 - ~~`warn_unused_expr` fica ignorado; uma expressão sem `;` dá "falta
   `;`" e a impressão de valor fica fora da v1.~~ Mudou no protótipo
   (ANALISE.md §26): a expressão sem `;` mostra o valor, se for escalar, e
@@ -453,9 +458,11 @@ Testes: os casos `cnt`, `nx` (`static` local de função `static`) e `an`
   usa `%undo`).
 - Remover do lookup não basta. O `DeferredDecls` do CodeGen é indexado pelo
   nome mangled e emitiria o corpo antigo.
-- **Decidido: a v1 rejeita.** A mensagem do clang ganha uma nota do sc que
-  sugere `undo` da célula anterior. Esse `undo` de uma célula já gerada é
-  `SC_LOST` + repasse sem ela (§3.3).
+- **Decidido: a v1 rejeita.** ~~A mensagem do clang ganha uma nota do sc que
+  sugere `undo` da célula anterior.~~ Decidido em 2026-10-17: sem nota. O
+  erro do clang já aponta a definição anterior ("previous definition is
+  here", com a `cell_N`), e o `:undo` só desfaz a última célula, então a
+  nota só serviria num caso. O `:undo` está no `:help`.
 - Aceitar a redefinição fica para depois. Seria um patch que apaga o nome de
   `DeferredDecls` e `EmittedDeferredDecls` e a declaração do lookup.
 
@@ -471,7 +478,9 @@ Testes: os casos `cnt`, `nx` (`static` local de função `static`) e `an`
   - `ClearASTBeforeBackend=false`.
 - O `checkinv` ganha as combinações incrementais: c, c++, pic e c++ pic
   mod. O `TU_Incremental` não é flag de cc1, então fica fora do `checkinv`
-  e coberto pelos testes de sessão.
+  e coberto pelos testes de sessão. Feito em 2026-10-17 (ANALISE.md §44):
+  o `checkinv` roda os argumentos das 12 sessões (`build/repl/*.args`), e
+  o que a sessão força está em `scIncremental`.
 
 ### 3.6 Repasse depois de `SC_LOST` (C-B4, R6, T-M4)
 

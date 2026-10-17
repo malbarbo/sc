@@ -343,6 +343,14 @@ checkinv: $(B)/checkinv
 	done
 	$< $$(scripts/flags.py pic on g) -o - /c/x.c
 	$< $$(scripts/flags.py c++ pic mod on g) -o - /c/x.cpp
+	# a session's flags (PLANO-REPL.md §3.5): scIncremental in place of
+	# -disable-free and -clear-ast-before-backend
+	for a in $(REPL_ARGS:$(B)/repl/%.args=%); do \
+	  set -- $$(echo $$a | tr - ' '); l=$$1; shift; \
+	  $< $$(scripts/flags.py --session $$l $(CURDIR)/$(B) "$$@" | \
+	    sed '/^--$$/,$$d; /^-disable-free$$/d; /^-clear-ast-before-backend$$/d') \
+	    -fincremental-extensions -o - /c/x.c || exit 1; \
+	done
 	$< $$(scripts/flags.py c++ pcm on) -o - /c/std.cppm
 
 size: $(B)/sc.wasm

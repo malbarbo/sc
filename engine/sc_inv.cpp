@@ -210,6 +210,13 @@ void scBuildInvocation(CompilerInvocation &Inv, const ScOptions &O) {
   FO.Inputs.push_back(FrontendInputFile(O.Input, InputKind(L)));
 }
 
+void scIncremental(CompilerInvocation &Inv) {
+  Inv.getLangOpts().IncrementalExtensions = true;
+  Inv.getCodeGenOpts().DisableFree = false;
+  Inv.getCodeGenOpts().ClearASTBeforeBackend = false;
+  Inv.getFrontendOpts().DisableFree = false;
+}
+
 void scSetLLVMArgs(const CompilerInvocation &Inv) {
   auto &Opts = llvm::cl::getRegisteredOptions();
   for (llvm::StringRef A : Inv.getFrontendOpts().LLVMArgs) {

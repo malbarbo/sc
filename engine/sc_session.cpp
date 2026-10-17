@@ -674,11 +674,7 @@ std::unique_ptr<ScSession> ScSession::create(ScOptions O, llvm::raw_ostream *Dia
   auto Inv = std::make_shared<CompilerInvocation>();
   scBuildInvocation(*Inv, O);
   scSetLLVMArgs(*Inv);
-  // §3.5
-  Inv->getLangOpts().IncrementalExtensions = true;
-  Inv->getCodeGenOpts().DisableFree = false;
-  Inv->getCodeGenOpts().ClearASTBeforeBackend = false;
-  Inv->getFrontendOpts().DisableFree = false;
+  scIncremental(*Inv);
   Inv->getPreprocessorOpts().addRemappedFile(MainFile, llvm::MemoryBuffer::getMemBuffer("").release());
 
   std::unique_ptr<ScSession> S(new ScSession);

@@ -2824,3 +2824,43 @@ no `off`, que mudou com o novo engine (4525, 4513); agora ele imprime
 "contagem impossível" para um valor fora de 0..5, e a saída fica estável.
 O `make test`, o `test-native`, o `test-split`, o
 `test-aluno` e o `test-checks` deram 0 diferença.
+
+## 44. O fim da fase 2 do REPL: §3.4 e §3.5 do plano
+
+**O aviso de não usado (§3.4).** O plano queria o aviso só na célula que
+define a declaração, filtrado no printer. O §29 já tinha resolvido de
+outro jeito: a sessão esvazia as listas da Sema a cada célula, então no
+REPL o fim de célula não avisa nada, e `sc FILE` (`-sc-one-cell`) avisa
+como o compilador.
+
+**A redefinição (§3.4).** Decidido: sem nota do sc. O erro do clang já
+aponta a definição anterior, com a `cell_N`:
+
+```
+cell_4:1:5: error: redefinition of 'g'
+cell_3:1:5: note: previous definition is here
+```
+
+O `:undo` só desfaz a última célula, então uma nota sugerindo `:undo` só
+serviria quando a definição anterior é dela. Um `:undo cell_N` (repasse
+sem a célula, e sem as que dependem dela) ficou de fora.
+
+**O `checkinv` da sessão (§3.5).** A sessão monta a invocação com o
+`scBuildInvocation` e depois força quatro campos. Esses campos estão agora
+numa função, `scIncremental`:
+- `IncrementalExtensions`;
+- o `DisableFree` do CodeGen e o do Frontend, desligados;
+- o `ClearASTBeforeBackend`, desligado.
+
+Isso é o que o parser do clang monta com `-fincremental-extensions`, sem
+`-disable-free` e sem `-clear-ast-before-backend`. O
+`-fincremental-extensions` é uma flag pura: só o `Preprocessor` a lê, sem
+opções derivadas.
+
+O `make checkinv` agora roda os argumentos de cada uma das 12 sessões
+(`flags.py --session`: c e c++, cada nível, REPL e `-file`). Ele tira o
+link (depois de `--`) e as duas flags, e acrescenta
+`-fincremental-extensions`. Com essa flag, o `checkinv` chama o
+`scIncremental` do lado do sc. As 12 dão SAME. Com o `-disable-free`
+deixado no lado do parser, o resultado é DIFFERENT, então a comparação vê
+esses campos. O `TU_Incremental` continua fora: não é flag de cc1.
