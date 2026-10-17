@@ -637,6 +637,11 @@ só entra na fase 4, depois do aprendizado.
   raros (`CleanUpPTU`, undo, repasse) entram no `symbols.used` (T-M1).
 - O `ses-` usa uma amostra dos testes do clang, não o corpus inteiro, para
   não dobrar o tempo do learn (T-M2).
+- **Feito na fase 4 de outro jeito (ANALISE.md §47):** o wasm só tem a
+  sessão na fase 5, então quem aprende é o `make learn-session`, no
+  nativo, e o resultado vai para o `cuts/symbols.session.used`, que os dois
+  engines mantêm. O `ses-` roda o corpus inteiro: o learn refaz só o que
+  difere.
 
 ## 7. Decisões do professor
 

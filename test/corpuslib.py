@@ -41,6 +41,15 @@ def source_name(p, R, B):
     return n[-200:]
 
 
+def only_names():
+    """the names of ONLY: <name>,... or a file of them, one per line; None
+    without ONLY"""
+    o = os.environ.get('ONLY')
+    if not o:
+        return None
+    return open(o).read().split() if os.path.isfile(o) else o.split(',')
+
+
 def run_all(cmd, timeout, cwd=None):
     """subprocess.run(cmd, capture_output=True), in a session of its own: on
     a timeout, every process of the session is killed, the children it put
@@ -82,6 +91,7 @@ def norm_hash(txt):
     norm = re.sub(r'error while executing at wasm backtrace:.*?(?=\n\S|\Z)', 'TRAP', norm, flags=re.S)
     norm = re.sub(r'0x[0-9a-f]+', '0x?', norm)
     norm = re.sub(r'-[0-9a-f]{6}\.pcm\b', '-?.pcm', norm)  # random temporary names
+    norm = re.sub(r'/tmp/sc-\w{6}/', '/tmp/sc-?/', norm)  # a REPL cell's link (sc_session.cpp)
     return hashlib.md5('\n'.join(sorted(norm.splitlines())).encode()).hexdigest()
 
 

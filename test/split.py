@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Phase 2 of PLANO-REPL.md: the programs of the corpus as REPL cells, through
-build/sc-engine-full (the uncut native engine with the protocol's loop).
+a native engine with the protocol's loop (proto/src/bin/sc-engine.rs).
 
-usage: split.py [<outdir>]   (build/res/split)
-ONLY=<name>,... runs only those programs; JOBS sets the parallelism (48)
+usage: split.py [<engine> [<outdir>]]   (build/sc-engine, build/res/split)
+ONLY=<name>,... (or a file of names) runs only those programs; JOBS sets the parallelism (48)
 
 Each program the corpus runs (test/samples, c-testsuite, gcc torture
 execute/, test/cxx, test/mod) is cut into one cell per top-level declaration
-(test/spike.py), the cells go through `sc-engine-full repl`, which compiles
+(test/spike.py), the cells go through `<engine> repl`, which compiles
 them in one child session and links each as a shared object, and the loader
 runs the shared objects. The output must be the one of the program compiled
 whole as a shared object (pic-, in the native base, build/res/native-base);
@@ -21,16 +21,16 @@ import glob, os, re, shutil, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from spike import expected, same, split, std_pcm
-from corpuslib import run_all, source_name, sources
+from corpuslib import only_names, run_all, source_name, sources
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
 from flags import session  # the engine's flags
 B = f'{R}/build'
-ENG = f'{B}/sc-engine-full'
+ENG = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else f'{B}/sc-engine')
 LIB = f'{B}/sysroot/lib/wasm32-wasip1'
 SCLOAD = f'{B}/loader/release/scload'
-OUT = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else f'{B}/res/split')
+OUT = os.path.realpath(sys.argv[2] if len(sys.argv) > 2 else f'{B}/res/split')
 G = 'gcc-ts_gcc_testsuite_gcc.c-torture_execute_'
 # where cells cannot be the program (ANALISE.md §24)
 KNOWN = {
@@ -93,8 +93,7 @@ def one(prog):
 def main():
     os.makedirs(OUT, exist_ok=True)
     progs = programs()
-    if os.environ.get('ONLY'):
-        only = os.environ['ONLY'].split(',')
+    if only := only_names():
         progs = [x for x in progs if x[1] in only]
     if any('/test/mod/' in p for p, _ in progs):
         std_pcm(ENG, OUT)

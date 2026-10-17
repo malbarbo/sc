@@ -56,8 +56,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   (`Child`, and `Repl`, which replays a lost session) and, with the
   `engine` feature, a safe Rust API over the linked engine (`Session`,
   `main`, `serve`; `ANALISE.md` §23 and §24). `make test-proto` runs its
-  tests. `src/bin/sc-engine.rs` is `build/sc-engine-full`: the one-shot
-  engine, the child (`session`) and a test of the REPL's side (`repl`).
+  tests. `src/bin/sc-engine.rs` is `build/sc-engine` (cut, the REPL's) and
+  `build/sc-engine-full` (uncut): the one-shot engine, the child
+  (`session`) and a test of the REPL's side (`repl`).
 - `llvm/` has the patches over the LLVM pin (`Makefile` has the commit) and the
   CMake toolchain file for wasi-sdk. `wasi-host.patch` makes LLVM build for
   WASI, from YoWASP's patch. `no-veclibs.patch` lets `scripts/trim.py` build
@@ -111,7 +112,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `import std;`) have small student-style programs. `test/spike.py` cuts
   them into REPL cells and runs them through `build/sc-spike`; `test/split.py`
   does the same with every program of the corpus through
-  `build/sc-engine-full repl`. `test/session.py` has the other slices of
+  `build/sc-engine repl`. `test/session.py` has the other slices of
   the session: every source of the corpus as one cell (`ses-`), the
   sequences of cells, undos and restarts in `test/seq/` (`seq-`), the
   sources that crash the engine between good cells (`crash-`) and the
@@ -157,8 +158,10 @@ make native      # build/sc, the native engine (builds LLVM once more)
 make test-native # the corpus on build/sc against the uncut native engine
 make learn-native # after make learn: what only the native engine calls
 make test-proto  # the Rust API (proto/) over the uncut native engine
-make test-split  # the corpus's programs as REPL cells (build/sc-engine-full)
-make test-session # the session's other slices (test/session.py)
+make learn-session # after make learn-native: what only the REPL's session calls
+make test-split  # the corpus's programs as REPL cells (build/sc-engine)
+make test-session # the session's other slices (test/session.py) against the uncut engine
+make test-session-warn # ses-, seq- and crash- with -Weverything
 ```
 
 The first `make` fetches wasi-sdk 29, the LLVM pin with the patches, and the
@@ -196,6 +199,15 @@ libstdc++'s `std::__cxx11` natively. What inlines differently on x86-64 adds
 the functions in `cuts/symbols.host.used` (`make learn-native`). A cut
 function prints its name and aborts; cut data is zeros, as at address 0 in
 `sc.wasm`.
+
+The REPL's engine (`build/sc-engine`) is the native engine with the
+session, cut the same way. What only the session calls is in
+`cuts/symbols.session.used`, by demangled name, which both engines keep:
+`sc.wasm` will have the session too. `make learn-session`
+(`scripts/learn_session.py`) learns it on the native engine, from the
+functions that abort in the session's slices (`ses-` and `seq-` and
+`crash-` with `-Weverything`, and `split-`), and puts back the objects they
+are in.
 
 The corpus has 11,736 files: c-testsuite, gcc's torture tests (`execute/` is
 linked and run, `compile/` only compiled), clang's own C and C++ tests

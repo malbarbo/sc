@@ -30,6 +30,8 @@ Two kinds of cut:
       !<re>         never wrap demangled names matching this
       noop:<re>     wrap with an empty body instead (void functions only)
       noopkeep:<f>  demangled names (one per line) that noop: must not touch
+    Nor those of cuts/symbols.session.used, demangled, which only the REPL's
+    session calls (scripts/learn_session.py, on the native engine).
 
 For experiments, SC_CUTS, SC_ENGINE (dir of the engine objects), SC_EXTRA
 (more engine objects), SC_LINKDIR
@@ -407,20 +409,26 @@ if mode == 'learn' and not NATIVE:
     write_used()
     say(f'discovery: {len(stubs)} wrappers, {len(used)} called by the corpus')
 
-if NATIVE:
-    # symbols.used has the wasm names: int64_t is long long there and long
-    # here, and std:: is libc++'s std::__2 there and libstdc++'s
-    # std::__cxx11 (and [abi:cxx11]) here. Compare the demangled names
-    # without those.
-    def unll(x):
-        return re.sub(r'\blong long\b', 'long', re.sub(r'std::__(?:\d+|cxx11)::|\[abi:cxx11\]', lambda m: 'std::' * (m[0][0] == 's'), x))
+
+
+def unll(x):
+    """a demangled name as both engines spell it: int64_t is long long in
+    wasm and long in x86-64, and std:: is libc++'s std::__2 in wasm and
+    libstdc++'s std::__cxx11 (and [abi:cxx11]) in x86-64"""
+    return re.sub(r'\blong long\b', 'long', re.sub(r'std::__(?:\d+|cxx11)::|\[abi:cxx11\]', lambda m: 'std::' * (m[0][0] == 's'), x))
+
+
+if NATIVE:  # symbols.used has the wasm names
     dem = subprocess.run(['llvm-cxxfilt'], input='\n'.join(sorted(used)), capture_output=True, text=True).stdout.split('\n')
     used = {s for s, dm in cands.items() if unll(dm) in set(map(unll, dem))} | host
+session_file = f'{CUTS}/symbols.session.used'
+session = set(map(unll, rules(session_file))) if os.path.exists(session_file) else set()
+session = {s for s, dm in cands.items() if unll(dm) in session}
 # after a run with differences, run only the files that differ until they
 # pass, then the whole corpus again
 only = None
 for it in range(100):
-    wrap = sorted(s for s in cands if s not in used)
+    wrap = sorted(s for s in cands if s not in used and s not in session)
     open(f'{d}/wrap.rsp', 'w').write(''.join(f'--wrap={s}\n' for s in wrap))
     _, n = link_with_stubs(base, f'-Wl,@{d}/wrap.rsp', ENG, 'wstubs')
     if mode != 'learn':

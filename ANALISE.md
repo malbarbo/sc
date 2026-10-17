@@ -3111,3 +3111,99 @@ e a rede em 65.536, todas as baterias deram o mesmo, com 0 diferenças.
 O `LexTok` do patch é inline no `Parser.h`. Fora de linha, no
 `Parser.cpp`, o `sc.wasm` tem os mesmos 19.953.807 bytes: o inline não
 custa nada, e fica como está.
+
+## 47. Fase 4 do REPL: a sessão no engine cortado
+
+O REPL usava o `sc-engine-full`, sem cortes. Agora usa o `build/sc-engine`:
+o mesmo `proto/src/bin/sc-engine.rs`, ligado com o `link.py --native` (os
+cortes de sempre) e o `sc_session.o` e o `sc_api.o`, com `llvm-strip`. São
+26,1 MB, contra 75,5 MB do `sc-engine-full` (37,2 MB antes do strip).
+
+**Onde aprender.** O plano mandava o `make learn` dirigir o
+`sc-engine repl`. Só que o `sc.wasm` não tem sessão antes da fase 5 (o
+reactor), e o learn do wasm roda o `corpus.py` sobre um engine one-shot.
+Então a sessão aprende no nativo, como o `learn-native`: o
+`make learn-session` (`scripts/learn_session.py`) liga o engine cortado com
+a sessão, roda as fatias, e cada função cortada que o engine chama
+(`sc: cut function called: ...`, `sc_cuts.cpp`) entra na lista. As fatias
+que diferem rodam de novo até passar, e depois todas outra vez. As fatias
+do learn:
+- `ses-`, `seq-` e `crash-` com `-Weverything`, contra o mesmo
+  `session.py` no `sc-engine-full` (`build/res/session-wev-base`);
+- `split-`, contra o `pic-`.
+
+A lista é o `cuts/symbols.session.used`, com os nomes demangled. O
+`link.py` a compara pelo mesmo nome normalizado do §19 (`long long` e
+`std::__2` contra `long` e `std::__cxx11`), então os dois engines a mantêm:
+na fase 5 o `sc.wasm` já tem o que a sessão chama. Uma função de um objeto
+cortado devolve o objeto ao `cuts/objects.txt`, como o `link.py --learn`
+faz no wasm. O `session.py` passou a gravar no resultado essas linhas do
+stderr do engine, e o `split.py` já gravava o stderr.
+
+**O que a sessão chama.** Antes do learn, o `sc-engine` cortado tinha 205
+resultados ruins nas fatias. O learn trouxe 63 funções e um objeto:
+- 44 da informação de debug (`CGDebugInfo` e `DwarfUnit`). A sessão
+  compila toda célula com `-gline-tables-only`, para a linha de um trap
+  (§3.5), e o `ses-` passa assim os testes do clang, que o corpus compila
+  sem debug;
+- a `threadSafetyCleanup`, que o fim de toda sessão chama: quase todo
+  resultado diferia por ela;
+- as de módulos (`ModuleManager`, `GenerateModuleAction`, os
+  `ActOnAnnotModule*`) e o objeto `ModuleFile.cpp`, para os fontes com
+  `#pragma clang module build` e o `import std;` numa sessão;
+- poucas outras (`TemplateParamObjectDecl::printName`,
+  `SemaOpenMP::DestroyDataSharingAttributesStack`).
+
+**Dois ajustes nos testes.**
+- Com `WFLAGS`, o `ses-` decide se o fonte compila inteiro pela
+  `native-wev-base`: o `-Weverything` faz 8 fontes compilarem (`cc1 exit=0`)
+  que sem ele dão erro. Ele liga avisos como o
+  `-Wincompatible-function-pointer-types-strict`, que, onde valem, tomam o
+  lugar do erro `-Wincompatible-function-pointer-types`.
+- O link de uma célula falha com o nome do diretório temporário
+  (`/tmp/sc-XXXXXX/cell_1.o`), que muda a cada execução. O `norm_hash`
+  troca esse nome por `/tmp/sc-?/`, como já fazia com os `.pcm`. Nenhum
+  resultado das bases do corpus tem esse nome, então elas não mudam.
+
+**Tempo do learn.** Do zero foram 26 rodadas e cerca de 1 hora. Cada
+rodada leva uns 2 minutos, entre o link e o `cargo build`. O nativo não tem
+a descoberta do wasm, com o wrapper que registra e repassa a chamada: cada
+fonte acha uma função por rodada, e 44 fontes de debug acharam as 20 do
+`CGDebugInfo` uma a uma. Uma rodada que não acha nada leva 4 minutos. Por
+isso o learn parte da lista como ela está, e esvaziar o arquivo aprende
+tudo de novo. O `ses-` roda o corpus inteiro, e não a amostra que o plano
+previa (T-M2), porque as rodadas seguintes rodam só o que difere.
+
+**Tamanho.** O `sc.wasm` mantém as 63 funções e o objeto, mesmo sem
+sessão, onde o código one-shot as alcança:
+
+| | antes | depois | |
+|---|---|---|---|
+| `sc.wasm` | 19.953.807 | 20.010.260 | +56 KB, +0,28% |
+| `sc.wasm` zstd | 5.624.066 | 5.641.258 | +0,31% |
+| `build/sc` | 25.500.032 | 25.554.032 | +54 KB |
+
+A fase 5 vai ligar a sessão no `sc.wasm`. Uma estimativa: o `link.py` com o
+`sc_session.o` e o `sc_api.o` para wasm, exportando o `sc.h`, depois do
+`wasm-opt` de sempre, dá 20.035.364 bytes e 5.650.733 em zstd, +0,47% sobre
+o `sc.wasm` de antes da fase 4. O orçamento do §5.1 do plano é +1% em zstd.
+Os 5.452.450 que o plano cita eram o `sc.wasm` antes das exceções e dos
+padrões novos (fase E+N), que tiveram orçamento próprio.
+
+**Memória e tempo da sessão.** No `mem-`, o engine cortado usa menos
+memória que o sem cortes: 25 MB de RSS depois de 100 células em C (antes,
+40 MB) e 56 MB em C++ (antes, 70 MB). A inclinação é a mesma, 2,6 KB e
+5,3 KB por célula. Uma célula leva 33 ms em C e 41 ms em C++.
+
+**As baterias.** `make test`, `test-native` e `test-warn` deram 0
+diferenças em 17.715 arquivos. O `test-session`, no `sc-engine` contra o
+`sc-engine-full`, deu 11.917 resultados e 0 ruins (39 conhecidos), e o
+`test-session-warn` (ses-, seq- e crash- com `-Weverything`) 11.916 e 0
+ruins. O `test-split` deu 0 diferenças em 1.947 programas, e o
+`test-aluno` e o `test-checks` agora rodam no engine cortado, iguais ao
+`expected.txt`. O `checkinv` e o `test-proto` passaram.
+
+As fatias da sessão ficam fora do `make test`: elas precisam do engine
+nativo com a sessão, e o `make test` roda o `sc.wasm`. O critério de uma
+mudança no engine ou nos cortes passou a incluir o `make test-session`
+(AGENTS.md).

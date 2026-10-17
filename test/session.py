@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Phase 3 of PLANO-REPL.md (§6): the REPL's session through a native engine
-with the protocol's loop (build/sc-engine-full), as the REPL drives it,
+with the protocol's loop (build/sc-engine), as the REPL drives it,
 `<engine> repl` (proto/src/bin/sc-engine.rs). split- is test/split.py.
 
 usage: session.py [--update] [<engine> [<outdir> [<base summary.json>]]]
-       (build/sc-engine-full, build/res/session)
-SLICES=ses,seq,crash,mem picks the slices (all); ONLY=<name>,... the
-results; JOBS sets the parallelism (48)
+       (build/sc-engine, build/res/session)
+SLICES=ses,seq,crash,mem picks the slices (all); ONLY=<name>,... (or a
+file of names) the results; JOBS sets the parallelism (48); WFLAGS adds warning flags to the
+session's (e.g. -Weverything; then seq- is not checked against expected.txt)
 
 ses-    each source of the corpus (test/corpuslib.py) as the one cell of a
         session: accepted if and only if it compiles whole (the native base,
         build/res/native-base: pic- for a program), and a program gives the
         output of pic-. A source the corpus only compiles may fail to link.
+        With WFLAGS, the base is build/res/native-wev-base.
         The session runs in the source's directory. KNOWN lists where a
         session cannot be the whole compile, with the reason.
 seq-    test/seq/NAME.c or NAME.cpp, cells separated by a line `//%%`; a
@@ -30,23 +32,28 @@ mem-    1000 small cells, C and C++, each in one session: after the first
 
 Writes <outdir>/<name>.txt and <outdir>/summary.json (ses-, seq- and crash-,
 normalized as the corpus's); with a base summary, lists the results that
-differ from it. Fails if a slice's own check fails.
+differ from it. Fails if a slice's own check fails. A function the cuts
+removed that the engine calls (scripts/link.py, native) is a line
+`sc: cut function called: <name>` of the result.
 """
 import difflib, glob, json, os, re, shutil, statistics, struct, subprocess, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from corpuslib import diff, kill_session, norm_hash, run_all, sources, source_name
+from corpuslib import IGNORE, diff, kill_session, norm_hash, only_names, run_all, sources, source_name
 from spike import expected, run, same, std_pcm
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
 from flags import session  # the engine's flags
 B = f'{R}/build'
-BASE = f'{B}/res/native-base'
 SEQ = f'{R}/test/seq'
+W_EXTRA = os.environ.get('WFLAGS', '').split()
+# the one-shot engine's results, with the same warnings: -Weverything turns
+# some errors into warnings
+BASE = f'{B}/res/native-wev-base' if W_EXTRA else f'{B}/res/native-base'
 UPDATE = sys.argv[1:2] == ['--update']
 ARGS = sys.argv[1 + UPDATE:]
-ENG = os.path.realpath(ARGS[0] if ARGS else f'{B}/sc-engine-full')
+ENG = os.path.realpath(ARGS[0] if ARGS else f'{B}/sc-engine')
 OUT = os.path.realpath(ARGS[1] if len(ARGS) > 1 else f'{B}/res/session')
 # where a session is not the whole compile (ANALISE.md §46)
 FILE = '__FILE__ (#include, #embed, __has_embed) names the cell, which is no file'
@@ -89,7 +96,8 @@ def flags(p):
     """the session's flags for the source p"""
     cxx = p.endswith(('.cpp', '.cc', '.cxx'))
     c17 = p.startswith((f'{B}/c-testsuite/', f'{B}/gcc-ts/'))
-    return session(cxx, B, c17, '/test/mod/' in p or 'import std;' in open(p, errors='replace').read(), f'{OUT}/std.pcm')
+    fl = session(cxx, B, c17, '/test/mod/' in p or 'import std;' in open(p, errors='replace').read(), f'{OUT}/std.pcm')
+    return fl[:fl.index('--')] + W_EXTRA + fl[fl.index('--'):]
 
 
 def status(txt):
@@ -115,8 +123,10 @@ def repl(name, p, cells, runs):
         open(files[-1], 'wb').write(c)
     try:
         r = run_all([ENG, 'repl', d] + files + ['--'] + flags(p), 120, cwd=os.path.dirname(p))
-        # what the engine writes on a crash (a backtrace) is not the session's
-        txt, ok = r.stdout.decode(errors='replace') + f'repl exit={r.returncode}\n', r.returncode == 0
+        # what the engine writes on a crash (a backtrace) is not the
+        # session's, but for the cut function it called
+        cut = ''.join(re.findall(r'^sc: cut function called: \S+\n', r.stderr.decode(errors='replace'), re.M))
+        txt, ok = r.stdout.decode(errors='replace') + cut + f'repl exit={r.returncode}\n', r.returncode == 0
     except subprocess.TimeoutExpired:
         txt, ok = 'repl TIMEOUT\n', False
     out = run(sorted(glob.glob(f'{d}/*.so'))) if runs(txt, ok) else None
@@ -271,7 +281,7 @@ def mem(name, cxx):
 def main():
     os.makedirs(OUT, exist_ok=True)
     slices = os.environ.get('SLICES', 'ses,seq,crash,mem').split(',')
-    only = os.environ['ONLY'].split(',') if os.environ.get('ONLY') else None
+    only = only_names()
     srcs = {}
     for p, runs in sources(R, B):
         srcs[source_name(p, R, B)] = (p, runs)  # the last of a name, as the corpus's results
@@ -301,7 +311,7 @@ def main():
             print(n, txt.splitlines()[-1])
     # seq-: the expected output, all of them in one file
     got = ''.join(f'== {n}\n{txt}' for n, txt, _ in rs if n.startswith('seq-'))
-    if 'seq' in slices and not only:
+    if 'seq' in slices and not only and not W_EXTRA:
         if UPDATE:
             open(f'{SEQ}/expected.txt', 'w').write(got)
         exp = open(f'{SEQ}/expected.txt').read() if os.path.exists(f'{SEQ}/expected.txt') else ''
@@ -314,7 +324,8 @@ def main():
     for n in bad:
         print('BAD', n)
     if len(ARGS) > 2:
-        base = {k: v for k, v in json.load(open(ARGS[2])).items() if k in summary}
+        # the corpus's IGNORE, in each slice
+        base = {k: v for k, v in json.load(open(ARGS[2])).items() if k in summary and k.split('-', 1)[1] not in IGNORE}
         for k in diff(base, summary):
             print('DIFF', k)
             bad.append(k)

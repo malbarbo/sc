@@ -116,7 +116,7 @@ impl Machine {
     /// every loop and call.
     pub fn new(lang: Lang, safety: Safety, argv: Vec<String>, interactive: bool) -> crate::Result<Machine> {
         let b = build_dir()?;
-        let engine = b.join("sc-engine-full");
+        let engine = b.join("sc-engine");
         let file = if interactive { "" } else { "-file" };
         let args_file = b.join("repl").join(format!("{}-{}{file}.args", lang.name(), safety.name()));
         let mut args: Vec<String> = std::fs::read_to_string(&args_file)

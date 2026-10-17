@@ -2,9 +2,9 @@
 //! sgleam and spython: `sc` is the REPL, `sc FILE` runs a program.
 //!
 //! A prototype ahead of phase 6b of PLANO-REPL.md: the compiler is the
-//! child `sc-engine-full session` of the build directory (`SC_BUILD`, by
-//! default the one this binary is in), with the session's arguments that
-//! `make repl` writes to `build/repl`.
+//! child `sc-engine session` (cut, phase 4) of the build directory
+//! (`SC_BUILD`, by default the one this binary is in), with the session's
+//! arguments that `make repl` writes to `build/repl`.
 
 mod config;
 mod machine;

@@ -35,7 +35,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto test-split test-session test-aluno test-checks repl clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session checkinv size spike test-proto test-split test-session test-session-warn test-aluno test-checks repl clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -174,7 +174,7 @@ $(B)/sc-full.wasm: $(ENGINE:%=$(B)/engine/%.o) scripts/link.py
 	scripts/link.py --full $@
 
 $(B)/sc-cut.wasm: $(ENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj scripts/link.py \
-    cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/o0init.txt
+    cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/symbols.session.used cuts/o0init.txt
 	scripts/link.py $@
 
 $(B)/sc.wasm: $(B)/sc-cut.wasm
@@ -205,7 +205,7 @@ $(B)/trim-host/Intrinsics.cpp.o: scripts/trim.py scripts/trim_intrinsics.py | $(
 	scripts/trim.py --native
 
 $(B)/sc-host-cut: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o scripts/link.py \
-    cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/symbols.host.used cuts/o0init.txt
+    cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/symbols.host.used cuts/symbols.session.used cuts/o0init.txt
 	scripts/link.py --native $@
 
 $(B)/sc: $(B)/sc-host-cut
@@ -250,17 +250,40 @@ $(B)/sc-engine-full: $(B)/link-session/engine.args $(wildcard proto/*.toml proto
 	  --target-dir $(B)/proto --bin sc-engine
 	cp $(B)/proto/release/sc-engine $@
 
-# the corpus's programs as REPL cells against the programs whole (pic-)
-test-split: $(B)/sc-engine-full $(SCLOAD) $(B)/res/native-base/summary.json
-	test/split.py
+# the same, cut (PLANO-REPL.md phase 4): the REPL's engine. What only the
+# session calls is in cuts/symbols.session.used (make learn-session)
+$(B)/link-session-cut/engine.args: $(SESSION:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o scripts/link.py \
+    cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/symbols.host.used cuts/symbols.session.used cuts/o0init.txt
+	SC_LINKDIR=$(CURDIR)/$(B)/link-session-cut \
+	  SC_EXTRA="$(CURDIR)/$(B)/engine-host/sc_session.o $(CURDIR)/$(B)/engine-host/sc_api.o" \
+	  scripts/link.py --native --emit-link $@ $(B)/link-session-cut/engine
 
-# the slices of the session (PLANO-REPL.md phase 3, §6): ses-, seq-, crash-, mem-
-test-session: $(B)/sc-engine-full $(SCLOAD) $(B)/res/native-base/summary.json
-	test/session.py
+$(B)/sc-engine: $(B)/link-session-cut/engine.args $(wildcard proto/*.toml proto/*.lock proto/*.rs proto/src/*.rs proto/src/bin/*.rs)
+	SC_LINK_ARGS=$(CURDIR)/$< cargo build --release --locked --manifest-path proto/Cargo.toml --features engine \
+	  --target-dir $(B)/proto-cut --bin sc-engine
+	llvm-strip -o $@ $(B)/proto-cut/release/sc-engine
+
+# the corpus's programs as REPL cells against the programs whole (pic-)
+test-split: $(B)/sc-engine $(SCLOAD) $(B)/res/native-base/summary.json
+	test/split.py $(B)/sc-engine
+
+# the slices of the session (PLANO-REPL.md phase 3, §6): ses-, seq-, crash-,
+# mem-; on the uncut engine they are the base of the cut one's
+$(B)/res/session-base/summary.json: $(B)/sc-engine-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/native-base/summary.json
+	test/session.py $< $(@D)
+
+$(B)/res/session-wev-base/summary.json: $(B)/sc-engine-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/native-wev-base/summary.json
+	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $< $(@D)
+
+test-session: $(B)/sc-engine $(SCLOAD) $(B)/res/session-base/summary.json
+	test/session.py $(B)/sc-engine $(B)/res/session $(B)/res/session-base/summary.json
+
+test-session-warn: $(B)/sc-engine $(SCLOAD) $(B)/res/session-wev-base/summary.json
+	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $(B)/sc-engine $(B)/res/session-wev $(B)/res/session-wev-base/summary.json
 
 # --- the REPL's loader: runs the shared objects (native, wasmtime). The same
 # crate has sc, the REPL (a prototype of phase 6b: its compiler is the child
-# sc-engine-full session, with the arguments in build/repl)
+# sc-engine session, with the arguments in build/repl)
 SCLOAD := $(B)/loader/release/scload
 SC_REPL := $(B)/loader/release/sc
 $(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/lib.rs loader/src/main.rs
@@ -277,7 +300,7 @@ $(B)/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/repl
 	scripts/flags.py --session $(firstword $(subst -, ,$*)) $(CURDIR)/$(B) $(wordlist 2,3,$(subst -, ,$*)) > $@
 
-repl: $(SC_REPL) $(B)/sc-engine-full $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
+repl: $(SC_REPL) $(B)/sc-engine $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 
 # a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
 test-aluno: repl
@@ -325,6 +348,11 @@ learn: $(ENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj $(B)/res/wev-bas
 learn-native: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o $(B)/res/native-wev-base/summary.json
 	WFLAGS=-Weverything SC_BASE=$(CURDIR)/$(B)/res/native-wev-base/summary.json scripts/link.py --native --learn $(B)/sc-host-cut
 
+# what only the REPL's session calls (cuts/symbols.session.used), after learn-native
+learn-session: $(SESSION:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o $(B)/res/session-wev-base/summary.json \
+    $(B)/res/native-base/summary.json $(SCLOAD)
+	scripts/learn_session.py
+
 # the invocation built by engine/sc_inv.cpp against clang's option parser (native)
 N := $(B)/native
 CHECKINV_FLAGS := -DNDEBUG -std=c++17 -fno-exceptions -fno-rtti -O1 -Iengine \
@@ -364,4 +392,4 @@ size: $(B)/sc.wasm
 	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
 clean:
-	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/proto $(B)/sc-engine-full $(B)/res/split $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native
+	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/proto $(B)/proto-cut $(B)/sc-engine-full $(B)/sc-engine $(B)/res/split $(B)/res/session* $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native

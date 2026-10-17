@@ -203,3 +203,5 @@ tools/lld/wasm/CMakeFiles/.*/LTO\.cpp
 !tools/clang/lib/AST/CMakeFiles/obj\.clangAST\.dir/NSAPI\.cpp\.obj$
 # put back by link.py --learn
 !lib/Transforms/Instrumentation/CMakeFiles/LLVMInstrumentation\.dir/AddressSanitizer\.cpp\.obj$
+# put back by learn_session.py
+!tools/clang/lib/Serialization/CMakeFiles/obj\.clangSerialization\.dir/ModuleFile\.cpp\.obj$
