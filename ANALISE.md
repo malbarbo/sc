@@ -3108,3 +3108,6 @@ continuam longe.
 
 Depois da revisão (`/simplify`), com os laços do pré-processador corrigidos
 e a rede em 65.536, todas as baterias deram o mesmo, com 0 diferenças.
+O `LexTok` do patch é inline no `Parser.h`. Fora de linha, no
+`Parser.cpp`, o `sc.wasm` tem os mesmos 19.953.807 bytes: o inline não
+custa nada, e fica como está.
