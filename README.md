@@ -80,6 +80,18 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   one, crashing CodeGen (§43), and for a `static` local there, which has
   no function to be named after; a lambda or a class local to a statement
   there is mangled as one in a function `__stmts_N` (§45).
+  `incremental-anon-namespace.patch` makes the anonymous namespace of
+  every cell the one of the first, as in one file: each cell has a
+  `TranslationUnitDecl` of its own, and its anonymous namespace was
+  another, so a name redefined there was ambiguous (§46).
+  `incremental-input-end.patch` ends the loops that stop at the end of the
+  file at the end of a cell too: a cell that ends inside a bracket (`int
+  f() {`) or inside a `_Pragma(` hung the engine. In the parser, the end of
+  the cell inside a bracket is the end of the file. In the preprocessor,
+  the end of the cell lexed again is the end of the file (§46).
+  `incremental-access.patch` keeps the guess between a statement and a
+  declaration at the top of a cell from checking access early: it
+  rejected `B::C::C() {}` for a private class `C` of `B` (§46).
   `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the
@@ -95,7 +107,11 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `import std;`) have small student-style programs. `test/spike.py` cuts
   them into REPL cells and runs them through `build/sc-spike`; `test/split.py`
   does the same with every program of the corpus through
-  `build/sc-engine-full repl`. `test/repl/` has
+  `build/sc-engine-full repl`. `test/session.py` has the other slices of
+  the session: every source of the corpus as one cell (`ses-`), the
+  sequences of cells, undos and restarts in `test/seq/` (`seq-`), the
+  sources that crash the engine between good cells (`crash-`) and the
+  memory over 1000 cells (`mem-`). `test/repl/` has
   sequences of REPL inputs (`c1.c`, `c2.c`...).
 - `loader/` (Rust, wasmtime) loads wasm shared objects the way the REPL will:
   `libc.so` and `libc++.so` from wasi-sdk, then each input, sharing one
@@ -138,6 +154,7 @@ make test-native # the corpus on build/sc against the uncut native engine
 make learn-native # after make learn: what only the native engine calls
 make test-proto  # the Rust API (proto/) over the uncut native engine
 make test-split  # the corpus's programs as REPL cells (build/sc-engine-full)
+make test-session # the session's other slices (test/session.py)
 ```
 
 The first `make` fetches wasi-sdk 29, the LLVM pin with the patches, and the

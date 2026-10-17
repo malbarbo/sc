@@ -1,0 +1,24 @@
+diff --git a/clang/lib/Sema/SemaDeclCXX.cpp b/clang/lib/Sema/SemaDeclCXX.cpp
+index b0669c602..25f450c7e 100644
+--- a/clang/lib/Sema/SemaDeclCXX.cpp
++++ b/clang/lib/Sema/SemaDeclCXX.cpp
+@@ -12089,7 +12089,9 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
+     // Determine whether the parent already has an anonymous namespace.
+     DeclContext *Parent = CurContext->getRedeclContext();
+     if (TranslationUnitDecl *TU = dyn_cast<TranslationUnitDecl>(Parent)) {
+-      PrevNS = TU->getAnonymousNamespace();
++      // incremental: each partial TU has a TranslationUnitDecl, and the
++      // anonymous namespace is the one of the first
++      PrevNS = TU->getFirstDecl()->getAnonymousNamespace();
+     } else {
+       NamespaceDecl *ND = cast<NamespaceDecl>(Parent);
+       PrevNS = ND->getAnonymousNamespace();
+@@ -12124,7 +12126,7 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
+     // Link the anonymous namespace into its parent.
+     DeclContext *Parent = CurContext->getRedeclContext();
+     if (TranslationUnitDecl *TU = dyn_cast<TranslationUnitDecl>(Parent)) {
+-      TU->setAnonymousNamespace(Namespc);
++      TU->getFirstDecl()->setAnonymousNamespace(Namespc);
+     } else {
+       cast<NamespaceDecl>(Parent)->setAnonymousNamespace(Namespc);
+     }

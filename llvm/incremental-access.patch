@@ -1,0 +1,17 @@
+diff --git a/clang/lib/Parse/ParseTentative.cpp b/clang/lib/Parse/ParseTentative.cpp
+index 1477fc38b..33371a280 100644
+--- a/clang/lib/Parse/ParseTentative.cpp
++++ b/clang/lib/Parse/ParseTentative.cpp
+@@ -35,7 +35,11 @@ bool Parser::isCXXDeclarationStatement(
+   case tok::coloncolon:
+   case tok::identifier: {
+     if (DisambiguatingWithExpression) {
+-      RevertingTentativeParsingAction TPA(*this);
++      // as below: no early access checks, and the tokens unannotated, for
++      // the access checks of the declaration (`B::C::C() {}`, with C a
++      // private class of B)
++      RevertingTentativeParsingAction TPA(*this, /*Unannotated=*/true);
++      SuppressAccessChecks AccessExporter(*this, /*activate=*/true);
+       // Parse the C++ scope specifier.
+       CXXScopeSpec SS;
+       ParseOptionalCXXScopeSpecifier(SS, /*ObjectType=*/nullptr,

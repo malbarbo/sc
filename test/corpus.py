@@ -27,7 +27,7 @@ the macros it was built with, libc++'s hardening among them. As a REPL
 session does, pic-, repl- and the levels compile with -gline-tables-only:
 the debug info, for where a trap is (ANALISE.md §31, §33).
 """
-from corpuslib import norm_hash, diff
+from corpuslib import norm_hash, diff, sources, source_name
 import hashlib, re, json, os, subprocess, sys, glob
 from concurrent.futures import ThreadPoolExecutor
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -68,29 +68,14 @@ def engine(dirs, args):
 # hash); 'pic': compile with -fPIC and link a shared object, as the REPL does
 # for each input (diagnostics + the object's md5); 'on', 'strict': as True, at
 # that level of --safety
-progs = [(p, True) for p in sorted(glob.glob(f'{R}/test/samples/*.c')) + sorted(glob.glob(f'{B}/c-testsuite/tests/single-exec/*.c'))]
-if os.environ.get('CORPUS', 'full') == 'full':
-    T = f'{B}/src/clang/test'
-    progs += [(p, True) for p in sorted(glob.glob(f'{B}/gcc-ts/gcc/testsuite/gcc.c-torture/execute/*.c'))]
-    progs += [(p, False) for p in sorted(glob.glob(f'{B}/gcc-ts/gcc/testsuite/gcc.c-torture/compile/*.c'))]
-    for sub in ['Sema', 'Parser', 'CodeGen', 'Lexer', 'Preprocessor', 'Misc', 'Frontend', 'AST', 'C/*', 'C/*/*']:
-        progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.c'))]
-progs += [(p, True) for p in sorted(glob.glob(f'{R}/test/cxx/*.cpp')) + sorted(glob.glob(f'{R}/test/mod/*.cpp'))]
-if os.environ.get('CORPUS', 'full') == 'full':
-    for sub in ['SemaCXX', 'SemaTemplate', 'CodeGenCXX', 'CXX/**', 'Parser', 'Lexer', 'AST', 'Misc']:
-        progs += [(p, False) for p in sorted(glob.glob(f'{T}/{sub}/*.cpp', recursive=True))]
+progs = sources(R, B, os.environ.get('CORPUS', 'full') == 'full')
 SAFETY = ('on', 'strict')
 progs += [(p, k) for p, t in list(progs) if t is True for k in ('pic',) + SAFETY]
 
 def name(pr):
     """the name of a result: <outdir>/<name>.txt"""
     p, kind = pr
-    d, f = os.path.dirname(p), os.path.basename(p)
-    rel = os.path.relpath(p, B)
-    stem, rel = os.path.splitext(f)[0], os.path.splitext(rel)[0]
-    n = stem if d == f'{R}/test/samples' else 'cxx-' + stem if d == f'{R}/test/cxx' else 'mod-' + stem if d == f'{R}/test/mod' else (
-        'ct-' + stem if 'c-testsuite' in d else rel.replace('/', '_'))
-    if len(n) > 200: n = n[-200:]
+    n = source_name(p, R, B)
     return 'pic-' + n if kind == 'pic' else f'{n}-{kind}' if kind in SAFETY else n
 
 
@@ -218,8 +203,6 @@ def std_pcm(level=None):
     open(f'{out}/{n}.txt', 'w').write(txt)
     return n, norm_hash(txt)
 
-SKIP = ('warn-date-time', 'SOURCE_DATE_EPOCH', 'pr133574', 'builtin_redef')  # depend on the clock
-progs = [p for p in progs if not p[0].endswith(tuple(x + '.c' for x in SKIP))]
 seqs = sorted({re.match(r'[a-z]+', f)[0] for f in os.listdir(f'{R}/test/repl')})
 if os.environ.get('ONLY'):  # ONLY=<file>: only the results named there, one per line
     only = set(open(os.environ['ONLY']).read().split())

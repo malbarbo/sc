@@ -1,0 +1,210 @@
+== seq-anon-namespace
+== c001.cpp ok
+== c002.cpp ok
+== c003.cpp ok
+== c004.cpp ok
+== c005.cpp ok
+== c006.cpp error
+cell_6:1:17: error: redefinition of 'hidden'
+    1 | namespace { int hidden = 9; }
+      |                 ^
+cell_2:1:17: note: previous definition is here
+    1 | namespace { int hidden = 3; }
+      |                 ^
+== c007.cpp ok
+== c008.cpp ok
+== c009.cpp ok
+== c010.cpp ok
+repl exit=0
+13 4 2
+run exit=0
+== seq-error-then-good
+== c001.c ok
+== c002.c error
+cell_2:1:22: error: use of undeclared identifier 'undeclared'
+    1 | int f(void) { return undeclared + 1; }
+      |                      ^~~~~~~~~~
+== c003.c ok
+== c004.c error
+cell_3:1:29: error: expected ';' after return statement
+    1 | int g(void) { return f() + 1 }
+      |                             ^
+      |                             ;
+== c005.c ok
+== c006.c ok
+repl exit=0
+3
+run exit=0
+== seq-error-undo
+== c001.cpp ok
+== c002.cpp ok
+== %undo ok
+== c004.cpp ok
+== c005.cpp ok
+== c006.cpp ok
+== c007.cpp error
+cell_5:1:5: error: cannot initialize a variable of type 'int' with an rvalue of type 'const char *'
+    1 | int bad = twice("x");
+      |     ^     ~~~~~~~~~~
+cell_4:1:44: error: invalid operands to binary expression ('const char *' and 'const char *')
+    1 | template <class T> T twice(T x) { return x + x; }
+      |                                          ~ ^ ~
+cell_5:1:11: note: in instantiation of function template specialization 'twice<const char *>' requested here
+    1 | int bad = twice("x");
+      |           ^
+== c008.cpp ok
+== c009.cpp ok
+repl exit=0
+4
+run exit=0
+== seq-import-std
+== c001.cpp ok
+== c002.cpp ok
+== c003.cpp ok
+== c004.cpp ok
+== c005.cpp ok
+repl exit=0
+6 3
+run exit=0
+== seq-nested-private
+== c001.cpp ok
+== c002.cpp ok
+== c003.cpp ok
+== c004.cpp ok
+== c005.cpp ok
+== c006.cpp ok
+== c007.cpp error
+cell_7:1:7: error: 'Node' is a private member of 'List'
+    1 | List::Node outside(1, nullptr);
+      |       ^
+cell_2:2:10: note: implicitly declared private here
+    2 |   struct Node;
+      |          ^
+== c008.cpp ok
+repl exit=0
+2
+run exit=0
+== seq-restart
+== c001.c ok
+== c002.c ok
+== c003.c ok
+== %restart ok
+== c005.c ok
+== %restart ok
+== %undo ok
+== c008.c ok
+== c009.c ok
+repl exit=0
+42 7
+run exit=0
+== seq-static
+== c001.c ok
+== c002.c ok
+== c003.c ok
+== c004.c ok
+== c005.c ok
+== c006.c error
+cell_6:1:12: error: redefinition of 'get'
+    1 | static int get(void) { return 0; }
+      |            ^
+cell_5:1:12: note: previous definition is here
+    1 | static int get(void) { return hidden * 2; }
+      |            ^
+== c007.c ok
+repl exit=0
+9
+run exit=0
+== seq-unbalanced-cxx
+== c001.cpp ok
+== c002.cpp error
+cell_2:3:5: error: expected expression
+    3 |   A<
+      |     ^
+cell_2:3:5: error: expected '>'
+cell_2:3:4: note: to match this '<'
+    3 |   A<
+      |    ^
+cell_2:3:5: error: expected member name or ';' after declaration specifiers
+    3 |   A<
+      |     ^
+cell_2:3:5: error: expected '}'
+cell_2:2:9: note: to match this '{'
+    2 | class A {
+      |         ^
+cell_2:3:5: error: expected ';' after class
+    3 |   A<
+      |     ^
+      |     ;
+== c003.cpp error
+cell_2:2:24: error: expected '}'
+    2 |   int f() { return 2; }
+      |                        ^
+cell_2:1:13: note: to match this '{'
+    1 | namespace n {
+      |             ^
+== c004.cpp error
+cell_2:1:48: error: expected '}'
+    1 | struct S { int v; int get() const { return v; }
+      |                                                ^
+cell_2:1:10: note: to match this '{'
+    1 | struct S { int v; int get() const { return v; }
+      |          ^
+cell_2:1:48: error: expected ';' after struct
+    1 | struct S { int v; int get() const { return v; }
+      |                                                ^
+      |                                                ;
+== c005.cpp ok
+== c006.cpp ok
+repl exit=0
+3
+run exit=0
+== seq-unbalanced
+== c001.c ok
+== c002.c error
+cell_2:2:12: error: expected '}'
+    2 |   return 1;
+      |            ^
+cell_2:1:13: note: to match this '{'
+    1 | int f(void) {
+      |             ^
+== c003.c error
+cell_2:1:29: error: expected ')'
+    1 | int g(int x) { return (x + 1; }
+      |                             ^
+cell_2:1:23: note: to match this '('
+    1 | int g(int x) { return (x + 1; }
+      |                       ^
+== c004.c error
+cell_2:1:1: error: _Pragma takes a parenthesized string literal
+    1 | _Pragma("message(\"x\")"
+      | ^
+== c005.c error
+cell_2:1:17: error: expected '}'
+    1 | int a[] = { 1, 2
+      |                 ^
+cell_2:1:11: note: to match this '{'
+    1 | int a[] = { 1, 2
+      |           ^
+cell_2:1:17: error: expected ';' after top level declarator
+    1 | int a[] = { 1, 2
+      |                 ^
+      |                 ;
+== c006.c ok
+== c007.c ok
+repl exit=0
+1
+run exit=0
+== seq-undo
+== c001.c ok
+== c002.c ok
+== c003.c ok
+== %undo ok
+== c005.c ok
+== %undo ok
+== %undo ok
+== c008.c ok
+== c009.c ok
+== c010.c ok
+repl exit=0
+2000
+run exit=0

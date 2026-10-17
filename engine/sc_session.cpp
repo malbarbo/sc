@@ -305,8 +305,9 @@ public:
     ASTContext &C = S.getASTContext();
     C.addTranslationUnitDecl();
 
-    // Skip previous eof due to last incremental input.
-    if (P->getCurToken().is(tok::annot_repl_input_end)) {
+    // Skip previous eof due to last incremental input. Its end lexed again
+    // and again is an eof (llvm/incremental-input-end.patch)
+    if (P->getCurToken().isOneOf(tok::annot_repl_input_end, tok::eof)) {
       P->ConsumeAnyToken();
       P->ExitScope();
       S.CurContext = nullptr;

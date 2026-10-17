@@ -242,8 +242,9 @@ impl Repl {
 
     /// A new child replays the log. It replaces the one before only once
     /// the whole log is replayed: on an error, the child and the log are
-    /// as they were.
-    fn restart(&mut self) -> Result<(), ReplError> {
+    /// as they were. The REPL calls it when the child takes too much memory
+    /// (PLANO-REPL.md §4).
+    pub fn restart(&mut self) -> Result<(), ReplError> {
         let mut child = Repl::start(&self.program, &self.args)?;
         for (i, e) in self.log.iter().enumerate() {
             let a = child.cell(&e.src, Mode::Replay)?;

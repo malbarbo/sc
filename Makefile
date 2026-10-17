@@ -35,7 +35,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto test-split test-aluno test-checks repl clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native checkinv size spike test-proto test-split test-session test-aluno test-checks repl clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -48,7 +48,9 @@ $(B)/src/llvm/CMakeLists.txt:
 	  && git apply $(CURDIR)/llvm/wasi-host.patch $(CURDIR)/llvm/no-veclibs.patch $(CURDIR)/llvm/dylink-weak.patch \
 	  $(CURDIR)/llvm/libcxx-locale.patch $(CURDIR)/llvm/incremental-c-scopes.patch \
 	  $(CURDIR)/llvm/incremental-stmts.patch $(CURDIR)/llvm/incremental-main-file.patch \
-	  $(CURDIR)/llvm/asan-cleanupret.patch $(CURDIR)/llvm/pattern-init.patch $(CURDIR)/llvm/repl-outside-function.patch
+	  $(CURDIR)/llvm/asan-cleanupret.patch $(CURDIR)/llvm/pattern-init.patch $(CURDIR)/llvm/repl-outside-function.patch \
+	  $(CURDIR)/llvm/incremental-anon-namespace.patch $(CURDIR)/llvm/incremental-input-end.patch \
+	  $(CURDIR)/llvm/incremental-access.patch
 
 $(B)/c-testsuite/.git:
 	git init -q $(B)/c-testsuite && cd $(B)/c-testsuite \
@@ -251,6 +253,10 @@ $(B)/sc-engine-full: $(B)/link-session/engine.args $(wildcard proto/*.toml proto
 # the corpus's programs as REPL cells against the programs whole (pic-)
 test-split: $(B)/sc-engine-full $(SCLOAD) $(B)/res/native-base/summary.json
 	test/split.py
+
+# the slices of the session (PLANO-REPL.md phase 3, §6): ses-, seq-, crash-, mem-
+test-session: $(B)/sc-engine-full $(SCLOAD) $(B)/res/native-base/summary.json
+	test/session.py
 
 # --- the REPL's loader: runs the shared objects (native, wasmtime). The same
 # crate has sc, the REPL (a prototype of phase 6b: its compiler is the child

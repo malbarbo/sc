@@ -21,6 +21,7 @@ import glob, os, re, shutil, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from spike import expected, same, split, std_pcm
+from corpuslib import run_all
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
@@ -81,8 +82,7 @@ def one(prog):
         files.append(f)
     try:
         # -I: the program's own includes, which the cells' directory does not have
-        r = subprocess.run([ENG, 'repl', d] + files + ['--', '-I', os.path.dirname(p)] + flags(cxx, gnu17, mod),
-                           capture_output=True, timeout=300)
+        r = run_all([ENG, 'repl', d] + files + ['--', '-I', os.path.dirname(p)] + flags(cxx, gnu17, mod), 300)
         txt = r.stdout.decode(errors='replace') + r.stderr.decode(errors='replace') + f'repl exit={r.returncode}\n'
         ok = r.returncode == 0 and not re.search(r'^== \S+ (error|lost)$', txt, re.M)
     except subprocess.TimeoutExpired:

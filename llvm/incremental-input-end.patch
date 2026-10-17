@@ -1,0 +1,128 @@
+diff --git a/clang/include/clang/Lex/Preprocessor.h b/clang/include/clang/Lex/Preprocessor.h
+index 1c917dcfe..95b0bbb9c 100644
+--- a/clang/include/clang/Lex/Preprocessor.h
++++ b/clang/include/clang/Lex/Preprocessor.h
+@@ -341,6 +341,11 @@ class Preprocessor {
+   /// True to avoid tearing down the lexer etc on EOF
+   bool IncrementalProcessing = false;
+ 
++  /// The end of the REPL input last lexed (HandleEndOfFile), and how many
++  /// times.
++  const char *ReplInputEndAt = nullptr;
++  unsigned ReplInputEnds = 0;
++
+ public:
+   /// The kind of translation unit we are processing.
+   const TranslationUnitKind TUKind;
+diff --git a/clang/include/clang/Parse/Parser.h b/clang/include/clang/Parse/Parser.h
+index 892715a6d..fbf759d67 100644
+--- a/clang/include/clang/Parse/Parser.h
++++ b/clang/include/clang/Parse/Parser.h
+@@ -339,6 +339,16 @@ public:
+     return ParseTopLevelDecl(Result, IS);
+   }
+ 
++  /// Lexes the next token into Tok. In a REPL input, its end inside a
++  /// bracket is the end of the file, where the loops of the parser stop:
++  /// they would go on at the end of the input, which they do not consume.
++  void LexTok() {
++    PP.Lex(Tok);
++    if (Tok.is(tok::annot_repl_input_end) &&
++        (ParenCount || BracketCount || BraceCount))
++      Tok.setKind(tok::eof);
++  }
++
+   /// ConsumeToken - Consume the current 'peek token' and lex the next one.
+   /// This does not work with special tokens: string literals, code completion,
+   /// annotation tokens and balanced tokens must be handled using the specific
+@@ -348,7 +358,7 @@ public:
+     assert(!isTokenSpecial() &&
+            "Should consume special tokens with Consume*Token");
+     PrevTokLocation = Tok.getLocation();
+-    PP.Lex(Tok);
++    LexTok();
+     return PrevTokLocation;
+   }
+ 
+@@ -358,7 +368,7 @@ public:
+     assert(!isTokenSpecial() &&
+            "Should consume special tokens with Consume*Token");
+     PrevTokLocation = Tok.getLocation();
+-    PP.Lex(Tok);
++    LexTok();
+     return true;
+   }
+ 
+@@ -708,7 +718,7 @@ private:
+   void UnconsumeToken(Token &Consumed) {
+     Token Next = Tok;
+     PP.EnterToken(Consumed, /*IsReinject*/ true);
+-    PP.Lex(Tok);
++    LexTok();
+     PP.EnterToken(Next, /*IsReinject*/ true);
+   }
+ 
+@@ -716,7 +726,7 @@ private:
+     assert(Tok.isAnnotation() && "wrong consume method");
+     SourceLocation Loc = Tok.getLocation();
+     PrevTokLocation = Tok.getAnnotationEndLoc();
+-    PP.Lex(Tok);
++    LexTok();
+     return Loc;
+   }
+ 
+@@ -731,7 +741,7 @@ private:
+       --ParenCount; // Don't let unbalanced )'s drive the count negative.
+     }
+     PrevTokLocation = Tok.getLocation();
+-    PP.Lex(Tok);
++    LexTok();
+     return PrevTokLocation;
+   }
+ 
+@@ -747,7 +757,7 @@ private:
+     }
+ 
+     PrevTokLocation = Tok.getLocation();
+-    PP.Lex(Tok);
++    LexTok();
+     return PrevTokLocation;
+   }
+ 
+@@ -763,7 +773,7 @@ private:
+     }
+ 
+     PrevTokLocation = Tok.getLocation();
+-    PP.Lex(Tok);
++    LexTok();
+     return PrevTokLocation;
+   }
+ 
+@@ -775,7 +785,7 @@ private:
+     assert(isTokenStringLiteral() &&
+            "Should only consume string literals with this method");
+     PrevTokLocation = Tok.getLocation();
+-    PP.Lex(Tok);
++    LexTok();
+     return PrevTokLocation;
+   }
+ 
+diff --git a/clang/lib/Lex/PPLexerChange.cpp b/clang/lib/Lex/PPLexerChange.cpp
+index b44bf2cd3..0ee6d46eb 100644
+--- a/clang/lib/Lex/PPLexerChange.cpp
++++ b/clang/lib/Lex/PPLexerChange.cpp
+@@ -531,7 +531,13 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
+   Result.startToken();
+   CurLexer->BufferPtr = EndPos;
+ 
+-  if (getLangOpts().IncrementalExtensions) {
++  // the end of a REPL input, which the parser lexes a few times; lexed again
++  // and again, it is the end of the file, where the loops that lex stop
++  if (EndPos != ReplInputEndAt) {
++    ReplInputEndAt = EndPos;
++    ReplInputEnds = 0;
++  }
++  if (getLangOpts().IncrementalExtensions && ++ReplInputEnds <= 64) {
+     CurLexer->FormTokenWithChars(Result, EndPos, tok::annot_repl_input_end);
+     Result.setAnnotationEndLoc(Result.getLocation());
+     Result.setAnnotationValue(nullptr);

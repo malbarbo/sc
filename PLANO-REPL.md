@@ -523,6 +523,9 @@ traz três correções de que a sessão precisa:
 | `#include` depois de uma entrada que falhou ou de `undo` | aberto | resolvido: snapshot por `fork` (§3.3); o `undo` já era repasse |
 | `return` no topo derruba o compilador | aberto | resolvido: `llvm/repl-outside-function.patch` dá o erro no Sema (ANALISE.md §43) |
 | `static` local e lambda num comando de topo derrubam o compilador (C++) | aberto | resolvido: `llvm/repl-outside-function.patch` (ANALISE.md §45) |
+| entrada que termina dentro de um `{`, `(` ou `[`, ou num `_Pragma(`, trava o compilador | aberto | resolvido: `llvm/incremental-input-end.patch` (ANALISE.md §46) |
+| cada entrada tem o seu namespace anônimo | aberto | resolvido: `llvm/incremental-anon-namespace.patch` (ANALISE.md §46) |
+| `B::C::C() {}` com `C` privada de `B` dá erro de acesso | aberto | resolvido: `llvm/incremental-access.patch` (ANALISE.md §46) |
 
 A cópia do `IncrementalParser` (§3.1) é feita a partir do 23.1.3, não do pin
 atual.
@@ -558,6 +561,17 @@ atual.
     essa entrada. Os trampolins do host acabavam com a pilha nativa numa
     recursão entre células.
 
+### 3.9 O que as fatias da fase 3 acharam
+
+As fatias `ses-`, `seq-`, `crash-` e `mem-` estão no `test/session.py`
+(`make test-session`), e não no `corpus.py`: rodam sobre o
+`sc-engine repl`, que só existe no nativo, e o `corpus.py` roda qualquer
+engine one-shot. Na fase 4 o mesmo script roda sobre o engine cortado,
+contra o `summary.json` do sem cortes. O `ses-` achou três bugs do
+clang-repl (tabela do §3.7). A lista do que não pode ser igual ao
+compile inteiro, com o motivo, está no `KNOWN` do script (ANALISE.md
+§46).
+
 ## 4. Memória e estado global
 
 - **Nativo:** a memória da sessão é do filho. Uma válvula (RSS acima de um
@@ -576,7 +590,9 @@ atual.
 - **Critérios mensuráveis** (T-m4):
   - `mem-`: 1.000 células pequenas. Depois de aquecer, a inclinação do RSS
     tem que ficar abaixo de 50 KB/célula e a do `memory.size` abaixo de
-    64 KB/célula. Os limites são revistos com o primeiro dado.
+    64 KB/célula. Os limites são revistos com o primeiro dado. Medido na
+    fase 3 (nativo): 2,6 KB/célula em C e 5,2 KB/célula em C++. O
+    `memory.size` espera o reactor (fase 5).
   - Memória do `lld` por link: RSS antes e depois de 100 links seguidos,
     diferença abaixo de 5 MB.
 

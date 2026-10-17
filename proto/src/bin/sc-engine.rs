@@ -3,13 +3,13 @@
 //!   sc-engine -cc1 ... | ld ...   the one-shot engine (sc_main)
 //!   sc-engine session             the child: the protocol on stdin and stdout
 //!   sc-engine repl <dir> <cell>... -- <session args>
-//!       a test of the REPL's side: each cell (a file, or %undo) goes to a
-//!       child session through a Repl, which replays the log when the session
-//!       is lost. Prints "== <cell> <status>" and the diagnostics of each, and
+//!       a test of the REPL's side: each cell (a file, %undo, or %restart,
+//!       a new child that replays the log) goes to a child session through
+//!       a Repl, which replays the log when the session is lost. Prints "== <cell> <status>" and the diagnostics of each, and
 //!       writes the shared object of each accepted cell as <dir>/<k>.so (k:
 //!       the cell's position, from 1, in three digits); an undo removes the
 //!       last one. Exits with 1 if the session cannot go on.
-use sc_proto::{main as sc_main, serve, Repl, Status};
+use sc_proto::{main as sc_main, serve, Answer, Repl, Status};
 use std::ffi::c_int;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Write};
@@ -39,7 +39,11 @@ fn repl(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut sos: Vec<PathBuf> = vec![];
     let mut out = io::stdout().lock();
     for (k, cell) in cells.iter().enumerate() {
-        let a = if cell == "%undo" { r.undo() } else { r.cell(&fs::read(cell)?) };
+        let a = match cell.as_str() {
+            "%undo" => r.undo(),
+            "%restart" => r.restart().map(|()| Answer { status: Status::Ok, diags: String::new(), so: vec![], syms: vec![] }),
+            _ => r.cell(&fs::read(cell)?),
+        };
         let a = a.map_err(|e| {
             let _ = writeln!(out, "== {cell} restart: {e}");
             e
@@ -54,7 +58,7 @@ fn repl(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         out.write_all(a.diags.as_bytes())?;
         if cell == "%undo" && a.status == Status::Ok {
             fs::remove_file(sos.pop().ok_or("undo without a shared object")?)?;
-        } else if a.status == Status::Ok {
+        } else if a.status == Status::Ok && cell != "%restart" {
             let so = PathBuf::from(dir).join(format!("{:03}.so", k + 1));
             fs::write(&so, &a.so)?;
             sos.push(so);

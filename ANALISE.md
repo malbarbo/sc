@@ -2956,3 +2956,146 @@ Ela recebe o símbolo ou o nome que o wasm-ld demangla.
 diferença em 17715 arquivos, e o corpus não muda. O `test-split`, o
 `test-aluno` e o `test-proto` passaram, e o `test-checks` ganhou só as
 entradas novas.
+
+## 46. Fase 3 do REPL: as fatias da sessão
+
+As fatias do §6 do PLANO-REPL ficaram no `test/session.py`
+(`make test-session`), não no `corpus.py`. Elas rodam sobre o
+`sc-engine repl`, que só existe no nativo, e o `corpus.py` roda qualquer
+engine one-shot. O script recebe o engine e uma base, então a fase 4 roda o
+mesmo script sobre o engine cortado, contra o `summary.json` do sem cortes.
+A lista de arquivos do corpus foi para o `corpuslib.sources()`, que os dois
+scripts usam.
+
+- **`ses-`.** Cada fonte do corpus (11.867) é a única célula de uma
+  sessão. A célula é aceita se e só se o fonte compila inteiro na base
+  nativa (o `pic-` de um programa), e um programa dá a saída do `pic-`. Um
+  fonte que o corpus só compila pode falhar no link: a sessão liga cada
+  célula, e o corpus não liga esses fontes. A sessão roda no diretório do
+  fonte, onde estão os `#include "..."` dele.
+- **`seq-`.** Sequências fixas em `test/seq/`, com a saída em
+  `test/seq/expected.txt`:
+  - erro e depois boa;
+  - `undo`;
+  - `%restart` (um filho novo que repassa o log; o `sc-engine repl` ganhou
+    o passo, e o `Repl::restart` ficou público para a válvula do §4);
+  - `static` e namespace anônimo entre células;
+  - `import std;` depois de `#include`;
+  - células que terminam dentro de um bloco;
+  - a classe privada aninhada.
+- **`crash-`.** Os 40 fontes em que o one-shot cai ou dá erro fatal
+  (código de saída que não é 0 nem 1 na base nativa): 29 erros fatais
+  (70), 3 crashes do `#pragma clang __debug` (132) e 8 estouros de pilha
+  (139). Cada um vai entre duas células boas, depois vem um
+  `%restart` e uma célula com `main`. A sessão segue nos 40, o repasse
+  exporta os mesmos nomes, e o programa imprime 42. Na sessão, 39 caem de
+  fato ("the engine crashed on this cell"). O `#pragma clang __debug
+  parser_crash` não chega ao parser numa célula e dá "expected
+  expression".
+- **`mem-`.** São 1.000 células pequenas numa sessão, em C e em C++. Depois
+  das 100 primeiras, a inclinação do RSS é de 2,6 KB por célula em C e de
+  5,2 KB em C++, abaixo dos 50 KB do plano. A maior subida em 100
+  células, cada uma um link, é de 440 KB e 860 KB, abaixo dos 5 MB. Cada
+  célula leva 12 ms em C e 19 ms em C++. O `memory.size` espera o reactor
+  (fase 5).
+
+**O que o `ses-` achou.** Na primeira rodada, 130 fontes deram resultado
+diferente do compile inteiro. Três eram bugs do clang-repl, cada um com um
+patch.
+
+- **Célula que termina dentro de um colchete trava o engine
+  (`llvm/incremental-input-end.patch`).** `int f() {`, `(x + 1;` ou
+  `_Pragma(` sem fechar deixavam o engine num laço infinito. Isso valia
+  para 25 fontes do corpus e também para o aluno: o `sc arquivo.c` com um
+  `}` faltando travava, e o REPL alimentado por pipe também. No modo
+  incremental, o fim de uma entrada é o token `annot_repl_input_end`, não
+  o `eof`, e muitos laços do parser e do pré-processador só param no
+  `eof`. O laço do parser não consome o token, então gira no mesmo lugar.
+  O patch tem duas partes:
+  - **Parser.** O fim da entrada com um parêntese, colchete ou chave
+    aberto (`ParenCount`, `BracketCount`, `BraceCount`) vira `eof`. Os laços
+    param, e o erro é o do clang: "expected '}'" com a nota "to match this
+    '{'".
+  - **Pré-processador.** O fim da mesma entrada lido mais de 64 vezes
+    seguidas vira `eof`, o que cobre os laços do `_Pragma`, do
+    `__has_c_attribute(` e do `__has_warning(`.
+
+  A primeira versão da segunda parte dava `eof` já na segunda leitura e
+  quebrou o REPL: o fluxo normal relê o fim algumas vezes, por exemplo no
+  `ConsumeAnnotationToken` depois de um valor mostrado e no `Parser` que o
+  engine cria depois do `ParseAST`. O engine agora também pula um `eof` no
+  começo de uma célula.
+
+  A parte do parser supõe que as contagens de parênteses, colchetes e
+  chaves estão em zero no começo de cada célula. Uma célula que falha com
+  um colchete aberto as deixa acima de zero, mas a sessão descarta esse
+  estado: quem segue é a cópia do `fork`, de antes da célula. Sem o
+  `fork`, como no clang-repl do upstream, toda célula seguinte terminaria
+  em `eof`. O limite de 64 leituras é arbitrário: o fluxo normal relê o fim
+  poucas vezes, e um laço gira milhares. O teste de profundidade do lexer cru não serviria
+  para decidir: ele conta as chaves de `#if 0` e de `#define`.
+- **Namespace anônimo por célula (`llvm/incremental-anon-namespace.patch`).**
+  Cada entrada tem o seu `TranslationUnitDecl`, e o Sema guardava o
+  namespace anônimo nele. Cada célula tinha então um namespace anônimo
+  novo. O `namespace { int x = 9; }` repetido era aceito, e o `x` ficava
+  ambíguo dali em diante. Agora o namespace anônimo é o do primeiro TU,
+  como num arquivo, e o `x` repetido é redefinição.
+- **Acesso no palpite entre comando e declaração
+  (`llvm/incremental-access.patch`).** No topo de uma célula, o clang-repl
+  analisa o começo em modo tentativo para decidir se é um comando ou uma
+  declaração. O ramo do `identifier` e do `::` lia o escopo `B::C::` sem
+  suspender a checagem de acesso, então `B::C::C() {}` dava "'C' is a
+  private member of 'B'". O ramo `default` logo abaixo já fazia isso.
+  Isso é comum em código de aluno: `struct Lista::No` definido fora da
+  classe. Agora o ramo faz como o `default`: suspende a checagem e volta
+  com os tokens sem anotação, e o acesso é checado no contexto da
+  declaração. O uso de `Lista::No` fora da classe continua dando erro.
+
+**O harness.** Num timeout, o `subprocess.run` matava o `sc-engine repl`,
+mas os filhos dele, em grupos de processos próprios, ficavam rodando: 55
+processos depois da primeira rodada. O `corpuslib.run_all` roda o comando
+numa sessão própria (`setsid`) e, no timeout, mata todos os processos da
+sessão. Ele repete a varredura do `/proc` até não achar nenhum vivo,
+porque um processo pode nascer durante a varredura e segurar o stdout. O
+`split.py` também passou a usá-lo. As fatias leem e escrevem os fontes em
+bytes: em modo texto, o Python trocava o `\r\n` por `\n`, e 11 fontes do
+corpus têm CRLF. Nenhum resultado mudou, mas agora a célula é o fonte que
+a base compilou. No `mem-`, um filho que morre ou trava (600 s) é uma
+falha da fatia, e não derruba o script.
+
+**O que não pode ser igual (o `KNOWN` do script, 39 fontes).**
+- `__FILE__` no `#include`, `#embed` ou `__has_embed` nomeia a célula, que
+  não é arquivo (10).
+- Uma declaração de módulo não pode estar numa célula (13).
+- Uma expressão no topo é um comando numa célula (5).
+- O diretório do fonte tem o que `../` nomeia, e o corpus mapeia só o
+  fonte (5).
+- Uma checagem do fim do TU, que a sessão não alcança (2):
+  - "inline variable is not defined";
+  - "used but not defined in this translation unit".
+- O `#pragma clang module build` escreve em `/tmp`, que o corpus não dá ao
+  engine (1).
+- O wasm-ld falha no objeto compartilhado, fora da sessão também (2):
+  - um segfault, com uma anotação numa função não definida;
+  - "duplicate symbol name", num operando `"X"(f)` de `asm`. Na sessão é
+    um erro fatal do lld, que sai do processo; a cópia do `fork` responde
+    que o engine caiu.
+- `void (*__funcref f)();` é tomado por comando (1).
+
+O `pr29160` e o `mangle-ms-back-references-pr13207` não rodam. Os nomes
+deles, demanglados, crescem exponencialmente, e o wasm-ld demangla os
+nomes para a seção de nomes a cada link de célula. O corpus só compila
+esses dois.
+
+**As baterias, com a fase 3 pronta.**
+- `make test` e `make test-native`: 17.715 arquivos, 0 diferenças.
+- `make test-split`: 1.947 programas e 10.541 células, 0 diferenças (6
+  conhecidas).
+- `make test-aluno` e `make test-checks`: como o `expected.txt`.
+- `make test-proto`: passa. `make checkinv`: SAME.
+- `make test-session`: 11.917 resultados, 0 ruins (39 conhecidos).
+
+Com a máquina ocupada pelas outras fatias, o `mem-` mede 30 ms por célula
+em C e 40 ms em C++. A inclinação fica em 2,6 KB e 6,6 KB por célula, e a
+maior subida em 100 células em 404 KB e 1,8 MB. Os limites do plano
+continuam longe.
