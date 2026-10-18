@@ -27,7 +27,7 @@ import json, os, re, shutil, subprocess, sys, time
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/test')
-from corpuslib import IGNORE, UNSTABLE, norm_hash
+from corpuslib import IGNORE, norm_hash
 
 B = f'{R}/build'
 WASM = sys.argv[1:] == ['--wasm']
@@ -35,7 +35,7 @@ D = f'{B}/link-session-learn{"-wasm" * WASM}'
 ENG = f'{D}/sc-engine'
 FILE = f'{R}/cuts/symbols.session.used'
 BASE = json.load(open(f'{B}/res/session-{"wasm-" * WASM}wev-base/summary.json'))
-BASE = {k: v for k, v in BASE.items() if k.split('-', 1)[1] not in IGNORE and k not in UNSTABLE}
+BASE = {k: v for k, v in BASE.items() if k.split('-', 1)[1] not in IGNORE}
 os.makedirs(D, exist_ok=True)
 log = open(f'{D}/learn.log', 'w')
 

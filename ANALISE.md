@@ -3318,8 +3318,38 @@ depende do engine e da pilha:
 - no wasm, cai no sem cortes e não cai no cortado;
 - no nativo, cai com 8 MB de pilha e no cortado com 16 MB.
 
-É um bug da sessão, de antes da fase 5. Fica no `UNSTABLE` do
-`corpuslib.py`, fora da comparação com a base, até ser corrigido.
+Era um bug da sessão, de antes da fase 5, já corrigido. O
+`auto [y] = UsingGet();` no escopo de namespace, tuple-like, cria uma
+variável implícita `y` para a ligação. O clang a põe no contexto com
+`addHiddenDecl`, fora da tabela de lookup. O `DeclContext::removeDecl`
+supõe que todo decl com nome está na tabela. A `BindingDecl` `y`, removida
+antes, apagou a entrada `y`. Então o `Map->find` da variável devolveu
+`end()`, e o `removeDecl` leu a lista depois do fim da tabela. O
+`assert` que pegaria isso não existe no release, e o que estava ali
+dependia do layout da memória. O mesmo acontece com um decl acrescentado a
+um namespace vindo de um módulo (o `std` de `import std;`): a tabela dele
+é preguiçosa, e o decl novo não entra nela.
+
+A primeira correção, sem patch, ficou no `ASTDeclUnmerger`: antes do
+`removeDecl`, uma entrada vazia ocupava o lugar do nome. Para todo decl
+com nome, ela chamava `getPrimaryContext()` também nas especializações,
+que o `removeDecl` pula. Isso desserializava o módulo, e o engine cortado
+caía numa função cortada (`mod-m3_errors`, `CXX/module/cpp.pre/p1`).
+Restrita às variáveis implícitas, ela mudou o layout e expôs o caso do
+módulo: os mesmos dois testes caíam em todos os engines, e as bases,
+geradas com ele, escondiam a queda. Para cobrir os dois casos sem patch,
+o `sc_session.cpp` copiaria o `shouldBeHidden`, que é `static` no clang.
+Então a correção é um patch de 3 linhas,
+`llvm/incremental-remove-decl.patch`: o `removeDecl` segue sem mexer na
+tabela quando o nome não tem entrada, no lugar do `assert`. Com
+valgrind, o `p3` e os dois testes de módulo davam "Invalid read" e agora
+não dão. Sem a leitura errada, a célula com erro em `import std;` segue e
+desserializa mais do módulo: o `make learn-session` pôs 4 funções do
+leitor de AST no `symbols.session.used` (`ExplicitInstantiationDecl`,
+`OffsetOfExpr`, `PackIndexingTypeLoc`). O
+`test/seq/binding-error.cpp` desfaz um `auto [a, b] = std::pair{...}`
+numa célula com erro e o redefine na seguinte. O `UNSTABLE` saiu do
+`corpuslib.py`.
 
 **O `test-checks`.** O `optional.cpp` e outro programa com UB em `off`
 imprimiam um valor lido de memória não iniciada. Esse valor dependia do

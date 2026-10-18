@@ -18,6 +18,17 @@ cell_2:1:17: note: previous definition is here
 repl exit=0
 13 4 2
 run exit=0
+== seq-binding-error
+== c001.cpp ok
+== c002.cpp error
+cell_2:2:11: error: use of undeclared identifier 'nope'
+    2 | int bad = nope;
+      |           ^~~~
+== c003.cpp ok
+== c004.cpp ok
+repl exit=0
+3 4
+run exit=0
 == seq-error-then-good
 == c001.c ok
 == c002.c error

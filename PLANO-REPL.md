@@ -908,9 +908,10 @@ no LLVM, a libc).
   wasmtime, e escreve ele mesmo a linha `sc: cut function called:`;
 - o learn no wasm é o alvo `learn-session-wasm`. Achou uma função;
 - o `loader/Cargo.lock` não precisou mudar;
-- o `ses-` do `dcl.decomp/p3` com `-Weverything` ficou fora da
-  comparação (`UNSTABLE`). É um bug da limpeza da célula com erro, de
-  antes da fase 5.
+- o `ses-` do `dcl.decomp/p3` com `-Weverything` caía às vezes: a
+  limpeza da célula com erro lia depois da tabela de lookup, um bug de
+  antes da fase 5. Corrigido pelo `llvm/incremental-remove-decl.patch`
+  (ANALISE.md §48).
 
 ## 6. Testes
 

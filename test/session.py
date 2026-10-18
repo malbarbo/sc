@@ -44,7 +44,7 @@ removed that the engine calls (scripts/link.py, native) is a line
 import difflib, glob, json, os, re, shutil, statistics, struct, subprocess, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from corpuslib import IGNORE, UNSTABLE, diff, kill_session, norm_hash, only_names, run_all, sources, source_name
+from corpuslib import IGNORE, diff, kill_session, norm_hash, only_names, run_all, sources, source_name
 from spike import expected, run, same, std_pcm
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -342,7 +342,7 @@ def main():
     if len(ARGS) > 2:
         # the corpus's IGNORE, in each slice
         base = {k: v for k, v in json.load(open(ARGS[2])).items()
-                if k in summary and k.split('-', 1)[1] not in IGNORE and k not in UNSTABLE}
+                if k in summary and k.split('-', 1)[1] not in IGNORE}
         for k in diff(base, summary):
             print('DIFF', k)
             bad.append(k)

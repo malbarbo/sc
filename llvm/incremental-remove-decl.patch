@@ -1,0 +1,26 @@
+diff --git a/clang/lib/AST/DeclBase.cpp b/clang/lib/AST/DeclBase.cpp
+index 70f61fa57..43ab76ef5 100644
+--- a/clang/lib/AST/DeclBase.cpp
++++ b/clang/lib/AST/DeclBase.cpp
+@@ -1786,12 +1786,15 @@ void DeclContext::removeDecl(Decl *D) {
+       StoredDeclsMap *Map = DC->getPrimaryContext()->LookupPtr;
+       if (Map) {
+         StoredDeclsMap::iterator Pos = Map->find(ND->getDeclName());
+-        assert(Pos != Map->end() && "no lookup entry for decl");
+-        StoredDeclsList &List = Pos->second;
+-        List.remove(ND);
+-        // Clean up the entry if there are no more decls.
+-        if (List.isNull())
+-          Map->erase(Pos);
++        // A decl added hidden (the variable of a tuple-like binding) or to a
++        // context whose lookup is lazy (one from a module) has no entry
++        if (Pos != Map->end()) {
++          StoredDeclsList &List = Pos->second;
++          List.remove(ND);
++          // Clean up the entry if there are no more decls.
++          if (List.isNull())
++            Map->erase(Pos);
++        }
+       }
+     } while (DC->isTransparentContext() && (DC = DC->getParent()));
+   }

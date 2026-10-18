@@ -118,6 +118,11 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `incremental-access.patch` keeps the guess between a statement and a
   declaration at the top of a cell from checking access early: it
   rejected `B::C::C() {}` for a private class `C` of `B` (§46).
+  `incremental-remove-decl.patch` lets `DeclContext::removeDecl`, which
+  takes the decls of a cell that failed back out, skip a name with no
+  lookup entry: the variable of a tuple-like binding is added hidden, and
+  a decl added to a namespace from a module is not in its lazy table; the
+  release build read past the table there (§48).
   `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the
