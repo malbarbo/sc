@@ -3207,3 +3207,189 @@ As fatias da sessão ficam fora do `make test`: elas precisam do engine
 nativo com a sessão, e o `make test` roda o `sc.wasm`. O critério de uma
 mudança no engine ou nos cortes passou a incluir o `make test-session`
 (AGENTS.md).
+
+## 48. Fase 5 do REPL: o `sc.wasm` reactor com a sessão
+
+O `sc.wasm` passou a ser um módulo só, que roda como comando e exporta a
+sessão do `sc.h` (PLANO-REPL.md §5.2):
+- é ligado com `-mexec-model=reactor`, e o `_start` é nosso
+  (`engine/sc_start.cpp`, só do wasm): `exit(__main_void())`. O
+  `_initialize` do `crt1-reactor.o` roda os construtores, e o
+  `wasmtime run` o chama antes do `_start`;
+- o wasm tem uma lista de objetos própria no Makefile,
+  `WENGINE := $(ENGINE) sc_session sc_api sc_start`, e o `link.py` a
+  repete sem `--native`;
+- as exports vêm de uma lista no `link.py`: as sete funções da sessão,
+  `malloc`, `free` e `chdir`, além do `memory`, do `_initialize` e do
+  `_start`. O guest começa no `/`, e o host chama o `chdir` para o
+  diretório da célula.
+
+**As bases congeladas.** Antes de mudar, as seis bases foram copiadas
+para `build/res/<nome>-pre5`. Os `summary.json`:
+
+| base | sha256 |
+|---|---|
+| `base` | `a6d409a7d3ef5055...` |
+| `wev-base` | `6826119050f0fb04...` |
+| `native-base` | `11d513f42dc7e492...` |
+| `native-wev-base` | `4d5113a1a078fb59...` |
+| `session-base` | `1a196cba99b5713e...` |
+| `session-wev-base` | `5197704e56cadfb2...` |
+
+Resultados:
+- o `sc-full.wasm` novo deu `base` e `wev-base` iguais às congeladas,
+  arquivo por arquivo (17.715 cada);
+- o `sc-host-full`, o `build/sc` e os argumentos de link do `sc-engine`
+  religados são idênticos byte a byte, então as bases nativas valem;
+- o `sc-engine-full`, recompilado com a mudança no `proto/`, deu
+  `session-base` e `session-wev-base` iguais às congeladas.
+
+Um cuidado: esta máquina estava com `ulimit -s` de 16 MB. Com ele, seis
+resultados nativos da sessão que caem por pilha com 8 MB
+(`instantiation-depth-*`, `limits-exprparen`) passam. As bases congeladas
+são de 8 MB, e com `ulimit -s 8192` todas se reproduzem. As baterias
+nativas dependem do limite de pilha do shell.
+
+**Um `long double` no `printf`.** O `wasm-ld` escreve a seção de nomes
+do `.so` de cada célula com os nomes demangled. O demangler do LLVM
+imprime um literal `long double` de um nome (`FloatLiteralImpl<long
+double>`) com `snprintf`, e o `printf` do wasi-libc sem suporte a `long
+double` chama `abort`. Na sessão wasm, três testes de mangling do clang
+(`mangle-template`, `mangle-class-nttp`, `mangle-literal-suffix`)
+derrubavam o engine. O `sc.wasm ld` one-shot já tinha o problema: o
+corpus não liga programas com esses nomes. O `sc.wasm` passa a ser
+ligado com `-lc-printscan-long-double`, por +11,7 KB crus e +3,5 KB em
+zstd. As bases do corpus não mudaram.
+
+**O host de teste.** O `build/sc-engine-wasm` é o
+`proto/src/bin/sc-engine.rs` com a feature `wasm`. Ela troca só as
+chamadas cruas (`proto/src/wasm.rs`): o `engine.rs` usa `raw::`, que é o
+`sys` com o engine ligado ou o `wasm` com a feature. O módulo é
+`<programa>.wasm`, um link simbólico para o `sc.wasm`, o `sc-full.wasm`
+ou o `sc-cut.wasm`. O `<programa> --precompile` o compila, com threads,
+para `<programa>.cwasm`, que o processo desserializa. Assim o processo
+que faz fork não compila nada.
+- **Instâncias.** Cada sessão é uma instância nova, numa `Store` própria:
+  `_initialize`, `chdir`, `sc_session_new`. O one-shot (`-cc1`, `ld`,
+  usado pelo `std_pcm()`) é outra instância, que roda o `_start`.
+- **Diretórios.** O guest vê a raiz do repositório no mesmo caminho e um
+  diretório do processo como `/tmp`.
+- **Fork.** A receita do plano funciona: `parallel_compilation(false)`,
+  um runtime tokio `current_thread` com `enter()`, e o
+  `allow_blocking_current_thread(true)` antes dos preopens. Antes de cada
+  fork, um assert confere que há 1 thread, e ele nunca falhou nas
+  baterias.
+- **Falhas.** Um trap ou um `proc_exit` do guest encerra o processo, com
+  `_exit`. A cópia do fork então responde "the engine crashed", como no
+  nativo.
+- **Função cortada.** O host escreve `sc: cut function called: __wrap_X`
+  quando o frame 0 do trap é um `__wrap_`, a mesma linha dos stubs
+  nativos. O `session.py` e o `learn_session.py` não mudaram para isso.
+  Só o `sc-cut.wasm` tem os nomes, num `sc-engine-wasm-cut`.
+
+**Contra o quê.** O plano comparava as fatias wasm com a `session-base`
+nativa. Só que o engine wasm não é o nativo onde o nativo cai: três
+fontes de `crash-` (`static-compound-literals-crash`,
+`builtins-eh-wasm`, `friend2`) não caem no one-shot wasm, e o `crash-`
+escolhe os fontes pelo one-shot. Então, com um engine wasm, o
+`session.py`:
+- decide o `ses-` e o `crash-` pelas bases do one-shot wasm (`base` e
+  `wev-base`);
+- no `mem-`, lê o `memory.size` que o host escreve depois de cada
+  célula (com `SC_MEMORY_SIZE`).
+
+As bases da sessão wasm são do `sc-engine-wasm-full`
+(`session-wasm-base` e `session-wasm-wev-base`), e o `sc-engine-wasm`
+cortado é comparado com elas, como no nativo. O `split-` compara com o
+`pic-`, como sempre.
+
+**Cortes (passo 5).** O `make learn-session-wasm`
+(`learn_session.py --wasm`) aprende sobre o `sc.wasm` cortado com nomes,
+pelo host, e escreve na mesma lista `cuts/symbols.session.used`. Achou
+uma função, `clang::ASTReader::GetHeaderFileInfo(FileEntryRef)`, que o
+`import std;` numa célula chama no wasm (`seq-import-std` e os três
+`mod-` do `split-`). Levou 5 minutos.
+
+**Um resultado instável.** O `ses-` do `CXX/dcl.decl/dcl.decomp/p3`, com
+`-Weverything`, cai na limpeza da célula com erro: `IncrementalParser::Fail`,
+o `ASTDeclUnmerger` e `DeclContext::removeDecl` leem um ponteiro ruim. No
+wasm, isso é "memory fault at wasm address 0x8004010". Se cai ou não
+depende do engine e da pilha:
+- no wasm, cai no sem cortes e não cai no cortado;
+- no nativo, cai com 8 MB de pilha e no cortado com 16 MB.
+
+É um bug da sessão, de antes da fase 5. Fica no `UNSTABLE` do
+`corpuslib.py`, fora da comparação com a base, até ser corrigido.
+
+**O `test-checks`.** O `optional.cpp` e outro programa com UB em `off`
+imprimiam um valor lido de memória não iniciada. Esse valor dependia do
+tamanho do ambiente, que o loader passa ao programa (`inherit_env`): 512
+com `env -i`, 2.560 com uma variável de 2.000 bytes. O `checks.py` passa
+a rodar o `sc` com o ambiente vazio, só com `NO_COLOR`, e o
+`expected.txt` foi atualizado nessas duas linhas.
+
+**Tamanho.**
+
+| | fase 4 | fase 5 | |
+|---|---|---|---|
+| `sc.wasm` | 20.010.260 | 20.047.936 | +37,7 KB |
+| `sc.wasm` zstd | 5.641.258 | 5.654.725 | +0,24% |
+
+O orçamento do §5.1 do plano é +1%. Sem o `long double` seriam
+5.650.654 (+0,17%), perto da estimativa do §47 (5.650.733). O `build/sc`
+não mudou.
+
+**Memória e tempo da sessão no wasm.** O `mem-` do `sc-engine-wasm`
+cortado mede o `memory.size`:
+
+| | C | C++ |
+|---|---|---|
+| depois de 100 células | 16 MB | 38 MB |
+| depois de 1.000 células | 17 MB | 41 MB |
+| inclinação | 0,5 KB/célula | 3,5 KB/célula |
+| maior salto em 100 células | 320 KB | 512 KB |
+| tempo por célula | 20,9 ms | 30,0 ms |
+
+A inclinação fica abaixo do limite de 64 KB por célula do §4. O tempo
+por célula está perto do nativo cortado (23,5 ms e 29,1 ms nesta
+rodada), sem contar o fork.
+
+**Snapshot, para a fase 6.** Depois de 100 células, a memória linear tem
+19 MB em C e 42 MB em C++ (no sem cortes). No V8 (Node 24):
+
+| memória linear | copiar (`slice`) | restaurar (`set`) |
+|---|---|---|
+| 19 MB | 3,7 ms | 2,5 ms |
+| 42 MB | 16,9 ms | 4,4 ms |
+
+Um snapshot antes de cada célula custaria de 15% a 50% de uma célula.
+Além da memória, ele precisa:
+- do `__stack_pointer`, que pode ser exportado;
+- de zerar o trecho que a memória cresceu;
+- de lidar com os arquivos que a célula deixou abertos na `WasiCtx`.
+
+**Tempo do `make test`.** Com o `sc.wasm` da fase 4, religado com o
+`link.py` antigo (o mesmo sha256), o corpus levou 2m31s. Com o novo,
+2m34s, e 2m22s numa segunda rodada. O `wasmtime compile` foi de 2,06 s
+para 2,25 s. Não há diferença que pese.
+
+**As baterias.**
+
+| bateria | resultado |
+|---|---|
+| `make test` | 17.715 arquivos, 0 diferenças |
+| `test-warn` | 17.715 arquivos, 0 diferenças |
+| `test-native` | 17.715 arquivos, 0 diferenças |
+| `test-session-wasm` | 11.925 resultados, 0 ruins (38 conhecidos) |
+| `test-session-wasm-warn` | 11.924 resultados, 0 ruins |
+| `test-split-wasm` | 1.947 programas, 0 diferenças |
+| `test-session` | 11.917 resultados, 0 ruins |
+| `test-session-warn` | 11.916 resultados, 0 ruins |
+| `test-split` | 1.947 programas, 0 diferenças |
+| `checkinv` | SAME |
+| `test-proto` | passou |
+| `test-aluno` | passou |
+| `test-checks` | passou |
+
+O `node:wasi` recusa um módulo com `_initialize` e `_start`. O
+`bench/cc.mjs` usa o contorno do README e roda.

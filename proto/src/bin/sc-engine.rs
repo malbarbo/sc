@@ -10,6 +10,10 @@
 //!       shared object of each accepted cell as <dir>/<k>.so (k: the cell's
 //!       position, from 1, in three digits); an undo removes the last one.
 //!       Exits with 1 if the session cannot go on.
+//!
+//! With the `wasm` feature (build/sc-engine-wasm) the engine is
+//! `<this program>.wasm`, which `<this program> --precompile` compiles
+//! first (sc_proto::wasm).
 use sc_proto::{main as sc_main, serve, Repl, Status};
 use std::ffi::c_int;
 use std::fs::{self, File};
@@ -74,10 +78,19 @@ fn repl(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> ExitCode {
+    let code = run();
+    #[cfg(feature = "wasm")]
+    sc_proto::wasm::cleanup();
+    code
+}
+
+fn run() -> ExitCode {
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     let res = match args.get(1).map(String::as_str) {
         Some("session") => session(),
         Some("repl") => repl(&args[2..]),
+        #[cfg(feature = "wasm")]
+        Some("--precompile") => sc_proto::wasm::precompile().map_err(Into::into),
         _ => return match sc_main(&args) {
             Ok(code) => ExitCode::from(code as u8),
             Err(e) => {

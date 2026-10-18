@@ -27,7 +27,9 @@ def one(job):
     else:
         inp = f'{prog}.in'
         cmd, stdin = [SC, f'--safety={level}', name], open(inp, 'rb').read() if os.path.exists(inp) else b''
-    r = subprocess.run(cmd, cwd=D, input=stdin, capture_output=True, timeout=120, env=os.environ | {'NO_COLOR': '1'})
+    # the program gets the environment, whose size moves what an unset
+    # value reads at off (optional.cpp): none
+    r = subprocess.run(cmd, cwd=D, input=stdin, capture_output=True, timeout=120, env={'NO_COLOR': '1'})
     out = (r.stdout + r.stderr).decode(errors='replace')
     return f'== {name} {level} exit={r.returncode}\n{out}'
 

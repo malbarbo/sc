@@ -18,6 +18,9 @@
 //!
 //! The compiler still ends the process on a fatal error or a crash: the
 //! native REPL runs the engine in a child process (PLANO-REPL.md §1.1).
+//!
+//! With the `wasm` feature, the same API calls `sc.wasm`'s exports through
+//! wasmtime in place of the linked engine ([`wasm`]).
 
 #[allow(non_camel_case_types, non_upper_case_globals, dead_code)]
 pub mod sys {
@@ -112,5 +115,7 @@ pub use child::{Answer, Child, Repl, ReplError};
 
 #[cfg(feature = "engine")]
 mod engine;
+#[cfg(feature = "wasm")]
+pub mod wasm;
 #[cfg(feature = "engine")]
 pub use engine::*;

@@ -10,6 +10,15 @@ links = "sc"
 # link the engine (Session, main): SC_LINK_ARGS names the file that
 # scripts/link.py --emit-link writes (make test-proto)
 engine = []
+# the same API over sc.wasm's exports through wasmtime (src/wasm.rs), in
+# place of the linked engine: build/sc-engine-wasm (PLANO-REPL.md §5.2)
+wasm = ["engine", "dep:wasmtime", "dep:wasmtime-wasi", "dep:tokio"]
+
+[dependencies]
+# the versions of loader/
+wasmtime = { version = "=48.0.3", optional = true }
+wasmtime-wasi = { version = "=48.0.3", optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
 
 [build-dependencies]
 bindgen = { version = "0.72", default-features = false, features = ["runtime"] }

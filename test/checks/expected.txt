@@ -385,7 +385,7 @@ error: member access within null pointer of type 'struct no'
 error: member access within null pointer of type 'struct no'
     at main (null.c:11:27)
 == optional.cpp off exit=0
-4352
+0
 == optional.cpp on exit=134
 error: optional operator* called on a disengaged value
     at main (optional.cpp:12:18)
@@ -718,7 +718,7 @@ saldo: 4294967286
 error: unsigned integer overflow: 10 - 20 cannot be represented in type 'unsigned int'
     at main (unsigned.c:5:19)
 == unterminated.c off exit=0
-não achou
+achou
 == unterminated.c on exit=134
 unterminated.c:5:20: warning: initializer-string for character array is too long, array size is 5 but initializer has size 6 (including the null terminating character); did you mean to use the 'nonstring' attribute? [-Wunterminated-string-initialization]
     5 |     char nome[5] = "Maria";

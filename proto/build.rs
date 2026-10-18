@@ -14,7 +14,7 @@ fn main() {
         .write_to_file(PathBuf::from(env::var("OUT_DIR").unwrap()).join("sc.rs"))
         .unwrap();
 
-    if env::var_os("CARGO_FEATURE_ENGINE").is_none() {
+    if env::var_os("CARGO_FEATURE_ENGINE").is_none() || env::var_os("CARGO_FEATURE_WASM").is_some() {
         return;
     }
     println!("cargo:rerun-if-env-changed=SC_LINK_ARGS");

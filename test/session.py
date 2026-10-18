@@ -30,6 +30,11 @@ mem-    1000 small cells, C and C++, each in one session: after the first
         100, the child's RSS grows by less than 50 KB a cell, and by less
         than 5 MB over any 100 cells, each a link (§4).
 
+A host of sc.wasm (build/sc-engine-wasm, the engine <engine>.wasm,
+PLANO-REPL.md §5.2) is checked against the one-shot sc.wasm (build/res/base
+and wev-base), where the native engine differs (a crash, the stack), and in
+mem- its memory.size stands for the RSS.
+
 Writes <outdir>/<name>.txt and <outdir>/summary.json (ses-, seq- and crash-,
 normalized as the corpus's); with a base summary, lists the results that
 differ from it. Fails if a slice's own check fails. A function the cuts
@@ -39,7 +44,7 @@ removed that the engine calls (scripts/link.py, native) is a line
 import difflib, glob, json, os, re, shutil, statistics, struct, subprocess, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from corpuslib import IGNORE, diff, kill_session, norm_hash, only_names, run_all, sources, source_name
+from corpuslib import IGNORE, UNSTABLE, diff, kill_session, norm_hash, only_names, run_all, sources, source_name
 from spike import expected, run, same, std_pcm
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -50,10 +55,11 @@ SEQ = f'{R}/test/seq'
 W_EXTRA = os.environ.get('WFLAGS', '').split()
 # the one-shot engine's results, with the same warnings: -Weverything turns
 # some errors into warnings
-BASE = f'{B}/res/native-wev-base' if W_EXTRA else f'{B}/res/native-base'
 UPDATE = sys.argv[1:2] == ['--update']
 ARGS = sys.argv[1 + UPDATE:]
 ENG = os.path.realpath(ARGS[0] if ARGS else f'{B}/sc-engine')
+WASM = os.path.exists(ENG + '.wasm')
+BASE = f'{B}/res/{"" if WASM else "native-"}{"wev-" if W_EXTRA else ""}base'
 OUT = os.path.realpath(ARGS[1] if len(ARGS) > 1 else f'{B}/res/session')
 # where a session is not the whole compile (ANALISE.md §46)
 FILE = '__FILE__ (#include, #embed, __has_embed) names the cell, which is no file'
@@ -213,7 +219,8 @@ class Child:
         """the child, in a session of its own with the copies it forks: all
         of them killed after timeout seconds, when a reply is an EOFError"""
         self.p = subprocess.Popen([ENG, 'session'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  start_new_session=True)
+                                  stderr=subprocess.PIPE if WASM else None, start_new_session=True,
+                                  env=dict(os.environ, SC_MEMORY_SIZE='1') if WASM else None)
         self.timer = threading.Timer(timeout, self.kill)
         self.timer.start()
 
@@ -240,7 +247,16 @@ class Child:
         return st, parts
 
     def rss(self):
-        """the RSS of the process spawned, in KB: the session while its cells are accepted"""
+        """the RSS of the process spawned, in KB: the session while its cells
+        are accepted; in sc.wasm, the memory.size the host writes after each
+        cell (one line a cell)"""
+        while WASM:
+            l = self.p.stderr.readline()
+            if m := re.match(rb'sc: memory.size (\d+)$', l):
+                return int(m[1]) // 1024
+            if not l:
+                raise EOFError('no memory.size')
+            sys.stderr.buffer.write(l)
         return int(re.search(r'VmRSS:\s+(\d+)', open(f'/proc/{self.p.pid}/status').read())[1])
 
     def close(self):
@@ -325,7 +341,8 @@ def main():
         print('BAD', n)
     if len(ARGS) > 2:
         # the corpus's IGNORE, in each slice
-        base = {k: v for k, v in json.load(open(ARGS[2])).items() if k in summary and k.split('-', 1)[1] not in IGNORE}
+        base = {k: v for k, v in json.load(open(ARGS[2])).items()
+                if k in summary and k.split('-', 1)[1] not in IGNORE and k not in UNSTABLE}
         for k in diff(base, summary):
             print('DIFF', k)
             bad.append(k)

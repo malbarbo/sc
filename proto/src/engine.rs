@@ -1,5 +1,10 @@
 //! The safe API over the linked engine.
 use crate::{msg, sys, wire, Mode, Status};
+// the raw functions: the linked engine's, or sc.wasm's exports
+#[cfg(not(feature = "wasm"))]
+use crate::sys as raw;
+#[cfg(feature = "wasm")]
+use crate::wasm as raw;
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, CString};
 use std::fmt;
@@ -92,7 +97,7 @@ where
     claim()?;
     let mut argv = Argv::new(args)?;
     // sc_main does not write to argv
-    Ok(unsafe { sys::sc_main(argv.argc(), argv.ptrs.as_mut_ptr()) })
+    Ok(unsafe { raw::sc_main(argv.argc(), argv.ptrs.as_mut_ptr()) })
 }
 
 /// A REPL session: each cell is compiled on top of the ones before.
@@ -115,7 +120,7 @@ impl Session {
         let argv = Argv::new(args)?;
         let mut raw = ptr::null_mut();
         // argv outlives the call; *out is always set
-        let st = unsafe { sys::sc_session_new(argv.argc(), argv.ptrs.as_ptr(), &mut raw) };
+        let st = unsafe { raw::sc_session_new(argv.argc(), argv.ptrs.as_ptr(), &mut raw) };
         let session = Session {
             raw: NonNull::new(raw).expect("sc_session_new sets *out"),
             _thread: PhantomData,
@@ -133,7 +138,7 @@ impl Session {
         let src = src.as_ref();
         let len = u32::try_from(src.len()).map_err(|_| Error::TooLong)?;
         // the engine copies src[0, len)
-        let st = unsafe { sys::sc_session_cell(self.raw.as_ptr(), src.as_ptr().cast(), len, mode.to_raw() as c_int) };
+        let st = unsafe { raw::sc_session_cell(self.raw.as_ptr(), src.as_ptr().cast(), len, mode.to_raw() as c_int) };
         Ok(self.reply(st))
     }
 
@@ -143,14 +148,14 @@ impl Session {
         let src = src.as_ref();
         let len = u32::try_from(src.len()).map_err(|_| Error::TooLong)?;
         // the engine copies src[0, len)
-        Ok(unsafe { sys::sc_session_depth(self.raw.as_ptr(), src.as_ptr().cast(), len) } as u32)
+        Ok(unsafe { raw::sc_session_depth(self.raw.as_ptr(), src.as_ptr().cast(), len) } as u32)
     }
 
     /// Undoes the last accepted cell. Its code is already generated, so the
     /// session is lost and the host replays the log without it; an error if
     /// no cell was accepted.
     pub fn undo(&mut self) -> Reply<'_> {
-        let st = unsafe { sys::sc_session_undo(self.raw.as_ptr()) };
+        let st = unsafe { raw::sc_session_undo(self.raw.as_ptr()) };
         self.reply(st)
     }
 
@@ -162,8 +167,8 @@ impl Session {
         // the result lives in the session until the next call, which needs
         // &mut self and so outlives this borrow
         unsafe {
-            let p = sys::sc_result_ptr(self.raw.as_ptr(), part as c_int);
-            let len = sys::sc_result_len(self.raw.as_ptr(), part as c_int) as usize;
+            let p = raw::sc_result_ptr(self.raw.as_ptr(), part as c_int);
+            let len = raw::sc_result_len(self.raw.as_ptr(), part as c_int) as usize;
             if p.is_null() || len == 0 {
                 &[]
             } else {
@@ -175,7 +180,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        unsafe { sys::sc_session_free(self.raw.as_ptr()) }
+        unsafe { raw::sc_session_free(self.raw.as_ptr()) }
     }
 }
 
@@ -357,6 +362,8 @@ impl Copy {
         let Ok((mut from, to)) = io::pipe() else {
             return Ok(Fork::Original(None));
         };
+        #[cfg(feature = "wasm")]
+        crate::wasm::assert_one_thread();
         match unsafe { fork() } {
             pid if pid < 0 => Ok(Fork::Original(None)),
             0 => {

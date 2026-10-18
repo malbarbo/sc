@@ -13,6 +13,12 @@ SKIP = ('warn-date-time', 'SOURCE_DATE_EPOCH', 'pr133574', 'builtin_redef')
 # source lines are shown, changes from run to run in the native engine
 IGNORE = {'src_clang_test_C_C99_n590', 'src_clang_test_CodeGen_alias', 'src_clang_test_Sema_c2x-fallthrough'}
 
+# the same for the session's slices (test/session.py): with -Weverything, the
+# cleanup of the failed cell (IncrementalParser::Fail, ASTDeclUnmerger,
+# DeclContext::removeDecl) reads a bad pointer, a crash or not by the engine
+# and the stack (ANALISE.md §48)
+UNSTABLE = {'ses-src_clang_test_CXX_dcl.decl_dcl.decomp_p3'}
+
 
 def sources(R, B, full=True):
     """(path, runs) of each source of the corpus: runs, a program to link and

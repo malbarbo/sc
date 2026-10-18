@@ -16,6 +16,24 @@ sc.wasm -cc1 <cc1 flags> -emit-module-interface -o std.pcm std.cppm
 sc.wasm -cc1 <cc1 flags> -fmodule-file=std=std.pcm -o out.o file.cpp  # import std;
 ```
 
+`sc.wasm` is also a library: a reactor that exports the REPL's session
+(`engine/sc.h`) besides `_start`. As a command (`wasmtime run`) it runs as
+above. A host of the session:
+- calls `_initialize` once per instance (a second call traps), and never
+  `_start`;
+- calls the exported `chdir` with the directory where a cell's
+  `#include "..."` files are: the guest starts in `/`;
+- puts the arguments and the cells in the guest's memory with the exported
+  `malloc` and `free`, and reads a result at `sc_result_ptr`;
+- gives the guest a writable `/tmp` (or `TMPDIR`), where a session keeps
+  its cells' objects.
+
+`node:wasi` refuses a module with both `_initialize` and `_start`, so pass
+it an object in place of the instance (`e` its exports):
+`wasi.start({exports: {memory: e.memory, _start() { e._initialize(); e._start(); }}})`
+for the command, `wasi.initialize({exports: {memory: e.memory, _initialize: e._initialize}})`
+for the library (`bench/cc.mjs`).
+
 The same engine is also built natively (`build/sc`, x86-64 Linux), for the
 native REPL, with the same cuts: 24.5 MB (7.6 MB zstd) against 52 MB uncut.
 It still compiles to wasm, so the student's code runs in wasm either way.
@@ -48,9 +66,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   REPL's session (one clang instance, each cell parsed on top of the ones
   before), `sc_api.cpp` the session part of `sc.h` over it (each cell linked
   into a shared object) and `sc_spike.cpp` the driver of phase 0 of
-  `PLANO-REPL.md` (`make spike`, `ANALISE.md` §22). The session is not in
-  `sc.wasm` and `build/sc` yet, only in the uncut native engine that
-  `proto/` links.
+  `PLANO-REPL.md` (`make spike`, `ANALISE.md` §22). `sc_start.cpp` is
+  `sc.wasm`'s `_start`, which has the session too. `build/sc` does not:
+  the REPL links the native engine with the session through `proto/`.
 - `proto/` is the `sc-proto` crate: bindgen over `engine/sc.h`, the
   protocol between the REPL and its child (`wire`), the REPL's side of it
   (`Child`, and `Repl`, which replays a lost session) and, with the
@@ -58,7 +76,10 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `main`, `serve`; `ANALISE.md` §23 and §24). `make test-proto` runs its
   tests. `src/bin/sc-engine.rs` is `build/sc-engine` (cut, the REPL's) and
   `build/sc-engine-full` (uncut): the one-shot engine, the child
-  (`session`) and a test of the REPL's side (`repl`).
+  (`session`) and a test of the REPL's side (`repl`). With the `wasm`
+  feature, the same API calls `sc.wasm`'s exports through wasmtime
+  (`src/wasm.rs`): `build/sc-engine-wasm`, the test host of the module
+  (`ANALISE.md` §48).
 - `llvm/` has the patches over the LLVM pin (`Makefile` has the commit) and the
   CMake toolchain file for wasi-sdk. `wasi-host.patch` makes LLVM build for
   WASI, from YoWASP's patch. `no-veclibs.patch` lets `scripts/trim.py` build
@@ -159,9 +180,13 @@ make test-native # the corpus on build/sc against the uncut native engine
 make learn-native # after make learn: what only the native engine calls
 make test-proto  # the Rust API (proto/) over the uncut native engine
 make learn-session # after make learn-native: what only the REPL's session calls
+make learn-session-wasm # then what only sc.wasm's session calls
 make test-split  # the corpus's programs as REPL cells (build/sc-engine)
 make test-session # the session's other slices (test/session.py) against the uncut engine
 make test-session-warn # ses-, seq- and crash- with -Weverything
+make test-session-wasm # the same slices on sc.wasm's session (build/sc-engine-wasm)
+make test-session-wasm-warn
+make test-split-wasm
 ```
 
 The first `make` fetches wasi-sdk 29, the LLVM pin with the patches, and the
@@ -203,7 +228,7 @@ function prints its name and aborts; cut data is zeros, as at address 0 in
 The REPL's engine (`build/sc-engine`) is the native engine with the
 session, cut the same way. What only the session calls is in
 `cuts/symbols.session.used`, by demangled name, which both engines keep:
-`sc.wasm` will have the session too. `make learn-session`
+`sc.wasm` has the session too. `make learn-session`
 (`scripts/learn_session.py`) learns it on the native engine, from the
 functions that abort in the session's slices (`ses-` and `seq-` and
 `crash-` with `-Weverything`, and `split-`), and puts back the objects they

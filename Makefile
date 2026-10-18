@@ -28,6 +28,9 @@ WASM_OPTS := -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/$(B)/Toolchain-WASI-LLVM.cmake -DL
   -DLLD_BUILD_TOOLS=OFF -DDEFAULT_SYSROOT=/usr -DCLANG_RESOURCE_DIR=/usr
 
 ENGINE := sc_entry sc_main sc_inv sc_backend sc_cuts
+# sc.wasm: a reactor with the session too (PLANO-REPL.md §5.2); scripts/link.py
+# has the same lists
+WENGINE := $(ENGINE) sc_session sc_api sc_start
 ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI_EMULATED_MMAN \
   -DLLVM_BUILD_STATIC -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS \
   -I$(B)/src/clang/include -I$(B)/wasm/tools/clang/include -I$(B)/wasm/include -I$(B)/src/llvm/include \
@@ -35,7 +38,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session checkinv size spike test-proto test-split test-session test-session-warn test-aluno test-checks repl clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size spike test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-aluno test-checks repl clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -159,21 +162,21 @@ $(SR)/.setjmp: rt/c_longjmp.s | $(SR)/lib/wasm32-wasip1/libc++.so
 sysroot: $(SR)/lib/wasm32-wasip1/libc++.so $(SR)/.setjmp $(RT).a $(RT).so $(IGNORELIST) $(SR)/.ctype
 
 # --- the engine
-$(B)/engine/%.o: engine/%.cpp engine/sc.h engine/sc_inv.h | $(B)/wasm/lib/libclangSema.a
+$(B)/engine/%.o: engine/%.cpp engine/sc.h engine/sc_inv.h engine/sc_session.h | $(B)/wasm/lib/libclangSema.a
 	@mkdir -p $(@D)
 	$(W)/bin/clang++ $(ENGINE_FLAGS) -c $< -o $@
 
-engine: $(ENGINE:%=$(B)/engine/%.o)
+engine: $(WENGINE:%=$(B)/engine/%.o)
 
 $(B)/trim/Intrinsics.cpp.obj: scripts/trim.py scripts/trim_intrinsics.py | $(B)/wasm/lib/libclangSema.a
 	scripts/trim.py
 
 trim: $(B)/trim/Intrinsics.cpp.obj
 
-$(B)/sc-full.wasm: $(ENGINE:%=$(B)/engine/%.o) scripts/link.py
+$(B)/sc-full.wasm: $(WENGINE:%=$(B)/engine/%.o) scripts/link.py
 	scripts/link.py --full $@
 
-$(B)/sc-cut.wasm: $(ENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj scripts/link.py \
+$(B)/sc-cut.wasm: $(WENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj scripts/link.py \
     cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/symbols.session.used cuts/o0init.txt
 	scripts/link.py $@
 
@@ -281,6 +284,36 @@ test-session: $(B)/sc-engine $(SCLOAD) $(B)/res/session-base/summary.json
 test-session-warn: $(B)/sc-engine $(SCLOAD) $(B)/res/session-wev-base/summary.json
 	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $(B)/sc-engine $(B)/res/session-wev $(B)/res/session-wev-base/summary.json
 
+# --- sc.wasm's session through its exports (PLANO-REPL.md §5.2): the same
+# protocol's loop over wasmtime (proto/, feature wasm). <host>.wasm is its
+# engine, compiled to <host>.cwasm; -cut has the names, for the cut function
+# a trap calls. The slices are checked against the one-shot sc.wasm's bases
+SC_ENGINE_WASM := $(B)/proto-wasm/release/sc-engine
+$(SC_ENGINE_WASM): $(wildcard proto/*.toml proto/*.lock proto/*.rs proto/src/*.rs proto/src/bin/*.rs) engine/sc.h
+	cargo build --release --locked --manifest-path proto/Cargo.toml --features wasm --target-dir $(B)/proto-wasm --bin sc-engine
+
+$(B)/sc-engine-wasm-full: $(SC_ENGINE_WASM) $(B)/sc-full.wasm
+$(B)/sc-engine-wasm-cut: $(SC_ENGINE_WASM) $(B)/sc-cut.wasm
+$(B)/sc-engine-wasm: $(SC_ENGINE_WASM) $(B)/sc.wasm
+$(B)/sc-engine-wasm-full $(B)/sc-engine-wasm-cut $(B)/sc-engine-wasm:
+	cp $< $@ && ln -sf $(notdir $(word 2,$^)) $@.wasm && $@ --precompile
+
+$(B)/res/session-wasm-base/summary.json: $(B)/sc-engine-wasm-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/base/summary.json
+	test/session.py $< $(@D)
+
+$(B)/res/session-wasm-wev-base/summary.json: $(B)/sc-engine-wasm-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/wev-base/summary.json
+	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $< $(@D)
+
+test-session-wasm: $(B)/sc-engine-wasm $(SCLOAD) $(B)/res/session-wasm-base/summary.json
+	test/session.py $(B)/sc-engine-wasm $(B)/res/session-wasm $(B)/res/session-wasm-base/summary.json
+
+test-session-wasm-warn: $(B)/sc-engine-wasm $(SCLOAD) $(B)/res/session-wasm-wev-base/summary.json
+	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $(B)/sc-engine-wasm $(B)/res/session-wasm-wev \
+	  $(B)/res/session-wasm-wev-base/summary.json
+
+test-split-wasm: $(B)/sc-engine-wasm $(SCLOAD) $(B)/res/native-base/summary.json
+	test/split.py $(B)/sc-engine-wasm $(B)/res/split-wasm
+
 # --- the REPL's loader: runs the shared objects (native, wasmtime). The same
 # crate has sc, the REPL (a prototype of phase 6b: its compiler is the child
 # sc-engine session, with the arguments in build/repl)
@@ -341,7 +374,7 @@ test-warn: $(B)/sc.wasm $(B)/res/wev-base/summary.json $(SCLOAD)
 
 # rebuild what the cuts keep from the corpus with -Weverything (after an LLVM
 # bump or new cuts)
-learn: $(ENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj $(B)/res/wev-base/summary.json
+learn: $(WENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj $(B)/res/wev-base/summary.json
 	WFLAGS=-Weverything SC_BASE=$(CURDIR)/$(B)/res/wev-base/summary.json scripts/link.py --learn $(B)/sc-cut.wasm
 
 # what only the native engine calls (cuts/symbols.host.used), after learn
@@ -352,6 +385,11 @@ learn-native: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o $
 learn-session: $(SESSION:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o $(B)/res/session-wev-base/summary.json \
     $(B)/res/native-base/summary.json $(SCLOAD)
 	scripts/learn_session.py
+
+# after learn-session: what only sc.wasm's session calls, into the same list
+learn-session-wasm: $(WENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj $(B)/res/session-wasm-wev-base/summary.json \
+    $(B)/res/native-base/summary.json $(SCLOAD) $(SC_ENGINE_WASM)
+	scripts/learn_session.py --wasm
 
 # the invocation built by engine/sc_inv.cpp against clang's option parser (native)
 N := $(B)/native
@@ -392,4 +430,4 @@ size: $(B)/sc.wasm
 	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
 clean:
-	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/proto $(B)/proto-cut $(B)/sc-engine-full $(B)/sc-engine $(B)/res/split $(B)/res/session* $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native
+	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/proto $(B)/proto-cut $(B)/proto-wasm $(B)/sc-engine-full $(B)/sc-engine $(B)/sc-engine-wasm* $(B)/res/split $(B)/res/session* $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native

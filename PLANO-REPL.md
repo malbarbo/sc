@@ -111,8 +111,7 @@ sinais, e compilar dentro do processo do REPL não é seguro:
   módulo roda como comando e como biblioteca (exports).
 - **Testes inalterados.** O corpus (`wasmtime run sc.cwasm`), o `link.py
   --learn` e as bases **não mudam**.
-- **Exports:** `sc_session_new`, `sc_session_cell`, `sc_session_undo`,
-  `sc_result_ptr`, `sc_result_len` e `malloc`.
+- **Exports:** a lista atual está no §5.2, passo 3.
 - **Navegador:** o engine roda num Web Worker. Recuperar uma falha é
   `terminate` + worker novo + repasse.
 - **Pilha:** os 16 "call stack exhausted" do corpus vêm do limite de pilha
@@ -611,7 +610,7 @@ só entra na fase 4, depois do aprendizado.
 | 2. sessão | §3 completo no `sc-host-full`; `build/sc-engine-full session` (laço do protocolo, em Rust); um modo de teste `build/sc-engine-full repl <dir> <células...> -- <args>` que grava os `.so` e faz o repasse | `split-` (`make test-split`) igual ao `pic-` no engine sem cortes, fora os `KNOWN` |
 | 3. testes | as fatias `ses-`, `split-`, `seq-`, `crash-` e `mem-` no `corpus.py` (§6) | todas verdes no engine sem cortes |
 | 4. cortes | `make learn` e `learn-native` dirigindo o `build/sc-engine repl` com as fatias novas; `test-warn` delas | `make test` 0 diferenças com as fatias novas; tempo do learn medido; tamanho dentro do orçamento (§5.1) |
-| 5. reactor | `sc.wasm` reactor + `_start`; as exports | antes de trocar, congelar `res/base/summary.json`; depois, o `sc-full.wasm` novo reproduz a base hash por hash (T-B2) |
+| 5. reactor (feita, §5.2) | `sc.wasm` reactor + `_start`; as exports | antes de trocar, congelar `res/base/summary.json`; depois, o `sc-full.wasm` novo reproduz a base hash por hash (T-B2) |
 | 6a. loader mínimo | o loader com as features mínimas do §1.4, exceções ligadas e tags compartilhadas, `epoch_interruption` | `pic-` e `repl-` com a mesma saída; tamanho do loader registrado |
 | 6b. hosts | crate `sc-proto` (bindgen sobre `sc.h`), binário único `build/sc` (engine ligado pelo `--emit-link`), filho `sc --engine`, timeout, válvula, repasse; host JS documentado | `crash-` pelo REPL nativo: o REPL segue vivo e a célula seguinte funciona |
 | 7. docs | ANALISE.md (§20), README, AGENTS (alvos novos), Makefile (`.PHONY`, `clean` de `res/ses*` etc.) | — |
@@ -621,6 +620,297 @@ só entra na fase 4, depois do aprendizado.
 - No máximo **+1% em zstd** sobre os 5.452.450 do `sc.wasm`.
 - Acima disso, o plano passa a gerar dois engines, one-shot e sessão, a
   partir dos mesmos objetos.
+- Os 5.452.450 eram o `sc.wasm` antes da fase E+N. A base da fase 5 é o
+  `sc.wasm` da fase 4, com 5.641.258 em zstd (ANALISE.md §47). Pela
+  estimativa do §47, a sessão no wasm custa +0,47% sobre o `sc.wasm` de
+  antes da fase 4.
+
+### 5.2 Fase 5 em detalhe: o reactor
+
+**Entrega.** O `sc.wasm` (e o `sc-full.wasm`) passa a ser um módulo só:
+- roda como comando (`wasmtime run`), exatamente como hoje;
+- exporta a sessão do `sc.h` para um host.
+
+Um host nativo de teste, o `build/sc-engine-wasm`, dirige essas exports com
+as mesmas fatias da fase 3.
+
+**Fora da fase 5:**
+- o host do navegador (Worker, JS);
+- a válvula de memória;
+- o REPL usar o `sc.wasm`;
+- o snapshot de memória para o navegador (passo 6 só mede).
+
+Tudo isso é da fase 6.
+
+**O que não muda:**
+- o `build/sc` one-shot nativo e o `build/sc-engine`, nem os objetos deles;
+- o `corpus.py`, com os mesmos argumentos;
+- o `link.py --learn`, que segue rodando o corpus one-shot.
+
+#### Passo 1. O reactor com `_start` (já verificado)
+
+A revisão do plano verificou, com o wasi-sdk 29, o `wasm-ld` do pin e o
+wasmtime 48:
+- um módulo ligado com `-mexec-model=reactor` e com o nosso `_start`, que
+  faz `exit(__main_void())`, roda como comando. A saída e os códigos de
+  saída (0 e 3) são os de antes;
+- o `wasmtime run` chama o `_initialize` antes do `_start`, também com
+  `--invoke` e com um `.cwasm`, e o construtor global roda uma vez;
+- o `_initialize` do `crt1-reactor.o` tem uma guarda: uma segunda chamada
+  cai num `unreachable`. Todo host chama o `_initialize` uma vez por
+  instância.
+
+**O `node:wasi` recusa** um módulo que exporta o `_initialize` e o `_start`.
+O `wasi.start` exige que o `_initialize` não exista, e o `wasi.initialize`
+exige o contrário. Isso quebra o `bench/cc.mjs`. O contorno, verificado, é
+passar um objeto no lugar da instância:
+- comando: `wasi.start({exports: {memory, _start() { e._initialize(); e._start(); }}})`;
+- biblioteca: `wasi.initialize({exports: {memory, _initialize: e._initialize}})`.
+
+O contorno fica documentado no README, e o `bench/cc.mjs` passa a usá-lo.
+
+**Alternativa sem o reactor, também verificada.**
+- O módulo é ligado com `-nostartfiles` e exporta um `sc_init`, que chama
+  o `__wasi_init_tp` e o `__wasm_call_ctors` uma vez.
+- O nosso `_start` chama o `sc_init` e depois faz `exit(__main_void())`.
+- Assim o `wasi.start` do Node funciona sem mudança.
+
+A recomendação é o reactor padrão, porque não reimplementa o crt. A
+alternativa fica registrada.
+
+#### Passo 2. Congelar as bases
+
+As bases dependem dos engines no Makefile. Religar um engine regera a base
+dele, e o critério do T-B2 se perde. Antes de qualquer mudança, as bases
+vão para `build/res/<nome>-pre5/`, e os hashes dos `summary.json` vão
+para o ANALISE. São seis bases:
+- `base` e `wev-base` (`sc-full.wasm`);
+- `native-base` e `native-wev-base` (`sc-host-full`);
+- `session-base` e `session-wev-base` (`sc-engine-full`).
+
+Os critérios comparam com essas cópias.
+
+**O que não pode mudar.** O plano não muda os objetos nativos:
+- o `_start` vai para um arquivo só do wasm, o `engine/sc_start.cpp`, e não
+  para o `sc_entry.cpp`;
+- a nota do diretório temporário vai para o README, e não para o `sc.h`,
+  que todo objeto inclui;
+- a mudança no `proto/` (passo 4) muda o código do `sc-engine-full`, e as
+  bases da sessão são comparadas com as congeladas para mostrar que ele não
+  mudou de comportamento.
+
+#### Passo 3. O módulo
+
+1. **Objetos.**
+   - O wasm ganha uma lista própria no Makefile:
+     `WENGINE := $(ENGINE) sc_session sc_api sc_start`.
+   - O `WENGINE` vale nas regras `engine`, `sc-full.wasm`, `sc-cut.wasm` e
+     `learn`. O `ENGINE` continua sendo a lista do nativo.
+   - A regra `$(B)/engine/%.o` passa a depender do `engine/sc_session.h`.
+   - O `link.py` tem a lista no código (`ENGINE = [...]`). Sem `--native`,
+     ela ganha os três objetos.
+2. **Modelo.**
+   - O `link.py` repete o comando de link do clang. Com
+     `-mexec-model=reactor` nos `flags` do wasm, o modelo chega a todo link:
+     os stubs, o trace e o link final.
+   - O `sc_start.cpp` tem o `_start` do passo 1.
+3. **Exports.** São ligadas com `-Wl,--export=` a partir de uma lista
+   única, no `link.py`:
+   - `sc_session_new`, `sc_session_free`, `sc_session_cell`,
+     `sc_session_undo` e `sc_session_depth`;
+   - `sc_result_ptr` e `sc_result_len`;
+   - `malloc` e `free`, para o host pôr o argv e o fonte na memória;
+   - `chdir` (do wasi-libc). O guest começa no `/` qualquer que seja o cwd
+     do host (verificado), e a sessão acha os `#include "..."` pelo cwd: o
+     `session.py` roda cada sessão no diretório do fonte. O host chama o
+     `chdir` depois do `_initialize`;
+   - o `memory`, que já é exportado.
+
+   O `sc_main` não é exportado: o one-shot entra pelo `_start`. A lista
+   substitui a do §1.2, que era anterior ao `sc.h`.
+
+   A revisão confirmou que o wrap e o `noop:` não alcançam as exports: os
+   candidatos vêm só dos membros `.obj` do LLVM. As exports viram raízes
+   do `--gc-sections`, e os nomes delas passam pelo `wasm-opt`.
+4. **Diretório temporário.**
+   - O `sc_session_new` cria o diretório das células pelo
+     `system_temp_directory` do LLVM. No WASI, esse diretório é o `TMPDIR`
+     (ou `TMP`, `TEMP`, `TEMPDIR`), ou então o `P_tmpdir` do wasi-libc,
+     que é o `/tmp`.
+   - O host dá ao guest um `/tmp` gravável: `--dir` no wasmtime, e no
+     navegador um sistema de arquivos em memória. Isso vai para o README.
+
+**Critério do passo 3:**
+- O `sc-full.wasm` novo reproduz `base-pre5` e `wev-base-pre5` hash por
+  hash.
+- `make test` e `test-warn` dão 0 diferenças no `sc.wasm` cortado.
+- `checkinv` imprime SAME.
+- Os objetos nativos não mudam: o `make -n` do `sc-host-full` não religa
+  nada.
+
+#### Passo 4. O host de teste: `build/sc-engine-wasm`
+
+As fatias da fase 3 são o oráculo. Para rodá-las sem mudar o `session.py`
+nem o `split.py`, o `sc-engine-wasm` é o `sc-engine` compilado com outra
+feature e faz o mesmo que ele:
+- `session`, o protocolo;
+- `repl`;
+- o one-shot (`-cc1 ...`, `ld ...`), que o `std_pcm()` do
+  `test/spike.py` usa para o `.pcm` do `import std;`.
+
+1. **Onde fica.**
+   - O `proto/` ganha a feature `wasm`. Ela troca só a camada crua: as sete
+     chamadas `sys::sc_*` atrás de `Session` e `Reply`, por chamadas das
+     exports pelo wasmtime. Não precisa de trait.
+   - O `serve`, o `Copy`, o `Repl` e o `sc-engine.rs` ficam como estão. O
+     `Reply::part` empresta o `memory.data(&store)` como hoje empresta o
+     ponteiro nativo.
+   - O `sc_main` do `sc-engine.rs`, com `wasm`, vira uma instância nova
+     que roda o `_start`: uma instância por compilação one-shot (§4).
+   - O `wasmtime` e o `wasmtime-wasi` entram nas versões exatas do
+     `loader/` (48.0.3). O `proto/Cargo.lock` e o `loader/Cargo.lock` são
+     regerados, porque o `loader` depende do `sc-proto` e todo build usa
+     `--locked`.
+2. **Instância.**
+   - Uma `Store` por sessão (`SC_MSG_NEW`): `_initialize`, `chdir` com o
+     cwd do processo, e depois `sc_session_new`. Antes de descartar a
+     `Store`, o host chama o `sc_session_free`, que apaga o diretório
+     temporário.
+   - O argv e o fonte vão para a memória pelo `malloc` exportado. Os
+     resultados são lidos pelo `sc_result_ptr` e pelo `sc_result_len`.
+   - O `.cwasm` do CLI não serve, porque o CLI é a versão 48.0.0 e o crate
+     é a 48.0.3: o wasmtime recusa um módulo de outra versão. O host
+     compila o módulo com o próprio `Engine` e guarda o resultado num
+     cache, como faz o `loader/src/lib.rs`.
+   - O `max_wasm_stack` fica no padrão (512 KiB, o mesmo do CLI), de onde
+     vêm os "call stack exhausted".
+3. **Diretórios e saída.**
+   - Um `--dir` da raiz do repositório no mesmo caminho do guest. O
+     `build/` está dentro dela, e o `session.py` passa caminhos absolutos
+     do host (sysroot, `-I`, `-L`, o `.pcm`).
+   - Um diretório temporário do host mapeado como `/tmp`.
+   - O stdout do guest vai para o stderr do host, como o `dup2(2, 1)` de
+     hoje, para não quebrar as mensagens do protocolo.
+   - O stdin não é herdado: o wasmtime-wasi o leria numa thread.
+4. **Fork.** O `serve` faz um fork por célula, e o fork só é seguro com uma
+   thread. Sem cuidado, o wasmtime tem 57 threads depois de compilar o
+   módulo (o rayon) e 114 depois das primeiras chamadas WASI (o tokio do
+   p1 síncrono). A receita verificada fica em 1 thread mesmo com arquivos:
+   - `Config::parallel_compilation(false)`, ou um módulo desserializado;
+   - um runtime tokio próprio, `new_current_thread().enable_all()`, com
+     `enter()`;
+   - `WasiCtxBuilder::allow_blocking_current_thread(true)` chamado **antes**
+     do `preopened_dir`, que captura o valor.
+
+   Antes de cada fork, um assert de que o `/proc/self/task` tem uma
+   entrada. Com essa receita, um trap no processo depois do fork voltou
+   como `Err`, e a `Store` do pai continuou usável.
+5. **Falhas.** No `serve`, o original roda a célula e a cópia espera.
+   - Um trap (erro fatal, pilha esgotada) ou o `proc_exit` (o `I32Exit`
+     do wasmtime) volta como `Err` da chamada.
+   - Com um `Err`, o host faz `_exit` no original, sem ler resultado. A
+     cópia então responde "the engine crashed", como no SIGSEGV do nativo.
+   - Nos modos sem fork (`REPLAY`, `NEW`, `UNDO`, `DEPTH`), o mesmo `Err`
+     encerra o processo, como uma queda nativa.
+6. **`mem-`.** O `session.py` lê o RSS no `/proc`. Com `wasm`, o host
+   escreve no stderr uma linha com o `memory.size` depois de cada célula,
+   e o `session.py` a lê.
+
+**Alvos novos no Makefile:**
+- `$(B)/sc-engine-wasm` (sobre o `sc.wasm`) e
+  `$(B)/sc-engine-wasm-full` (sobre o `sc-full.wasm`);
+- `test-session-wasm` (ses-, seq-, crash-, mem-), contra a
+  `session-base`;
+- `test-split-wasm`;
+- `test-session-wasm-warn`, contra a `session-wev-base`.
+
+**Critério do passo 4:**
+- `test-session-wasm` e `test-split-wasm` com 0 ruins, no `sc-full.wasm` e
+  no `sc.wasm`.
+- `test-session` e `test-split` nativos com 0 ruins contra as bases
+  congeladas.
+- As exceções conhecidas são listadas com o motivo, como os `KNOWN`:
+  - os estouros de pilha, porque o limite de pilha do wasm não é o do
+    nativo (§1.2);
+  - as diferenças de texto do trap.
+
+#### Passo 5. Cortes do wasm com a sessão
+
+Um resultado ruim no `sc.wasm` que não aparece no `sc-full.wasm` é uma
+função cortada. No wasm, a função cortada é um `unreachable`, sem o
+`sc_cut_called` do nativo. O nome só aparece no backtrace do trap, e o
+`sc.wasm` não tem a seção de nomes (o `wasm-opt --strip-debug` a tira).
+Então:
+- as fatias rodam também sobre o `sc-cut.wasm`, que tem os nomes, num
+  `sc-engine-wasm-cut`;
+- o host escreve o trap com o backtrace no stderr;
+- o `session.py` e o `learn_session.py` leem o frame 0 `__wrap_X`, além
+  da linha `sc: cut function called:`.
+
+Os casos aparecem onde o código do wasm difere do nativo (`#ifdef __wasi__`
+no LLVM, a libc).
+- Primeiro, rodar e contar.
+- Se houver casos, o `learn_session.py` ganha um `--wasm`: liga com o
+  `link.py` sem `--native`, usa o `sc-engine-wasm-cut` e escreve na mesma
+  lista.
+- Se não houver, nada muda, e isso fica registrado.
+
+#### Passo 6. Medidas
+
+- **Tamanho:** `sc.wasm` cru e zstd contra os 5.641.258 da fase 4.
+  Orçamento: +1% (§5.1).
+- **`mem-`:** a inclinação do `memory.size` (limite de 64 KB/célula, §4) e
+  o tempo por célula no wasm, contra os 33 ms em C e 41 ms em C++ do
+  nativo cortado.
+- **Snapshot**, para a fase 6 decidir se o navegador recupera um
+  `SC_ERROR` por snapshot ou por repasse.
+  - Mede o custo de copiar a memória linear depois de 100 células, em MB e
+    em ms.
+  - O que um snapshot precisa, segundo a revisão:
+    - a memória linear;
+    - o `__stack_pointer`, exportado com `--export`, o que foi verificado.
+      Depois de um trap, ele fica onde o trap aconteceu e precisa ser
+      restaurado;
+    - a memória só cresce: ao restaurar, o trecho que cresceu é zerado;
+    - os arquivos abertos na célula ficam abertos na `WasiCtx`, um
+      vazamento pequeno.
+- **Tempo** do `make test`, para ver se o módulo maior pesa no
+  `wasmtime compile`.
+
+#### Passo 7. Documentação
+
+- ANALISE §48: o reactor, as bases congeladas, as exports, o host de
+  teste, a receita do fork, as medidas e os cortes.
+- README:
+  - o `sc.wasm` como reactor e as exports;
+  - o `_initialize` uma vez por instância;
+  - o `chdir` e o `/tmp`;
+  - o contorno do `node:wasi`.
+- `bench/cc.mjs`: o contorno do `node:wasi`.
+- AGENTS: os alvos novos, e a regra de que `test-session-wasm` não mostra
+  diferenças.
+- Makefile: `.PHONY` e `clean`.
+- O §1.2 passa a apontar para cá.
+
+**Critério de saída da fase 5:**
+- os critérios dos passos 3 e 4;
+- tamanho dentro do orçamento.
+
+**Feita** (ANALISE.md §48). O que mudou em relação a este plano:
+- o `sc.wasm` é ligado também com `-lc-printscan-long-double`: o
+  demangler do `wasm-ld` imprime literais `long double`, e o `printf` do
+  wasi-libc sem eles aborta;
+- as fatias no wasm são comparadas com as bases do `sc-engine-wasm-full`
+  (`session-wasm-base` e `session-wasm-wev-base`), e o `ses-` e o
+  `crash-` decidem pelo one-shot wasm, e não pela `session-base` nativa:
+  onde o nativo cai, o wasm nem sempre cai;
+- o host compila o módulo com `--precompile`, em vez do cache do
+  wasmtime, e escreve ele mesmo a linha `sc: cut function called:`;
+- o learn no wasm é o alvo `learn-session-wasm`. Achou uma função;
+- o `loader/Cargo.lock` não precisou mudar;
+- o `ses-` do `dcl.decomp/p3` com `-Weverything` ficou fora da
+  comparação (`UNSTABLE`). É um bug da limpeza da célula com erro, de
+  antes da fase 5.
 
 ## 6. Testes
 

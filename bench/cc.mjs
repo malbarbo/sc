@@ -15,6 +15,10 @@ for (let i = 0; i < +n; i++) {
     preopens: { '/c': `${R}test/samples`, '/sysroot': `${W}/share/wasi-sysroot`, '/res': `${W}/lib/clang/21`, '/dev': '/dev' } });
   t = performance.now();
   const inst = await WebAssembly.instantiate(mod, wasi.getImportObject());
-  const rc = wasi.start(inst);
+  // sc.wasm is a reactor with a _start, which wasi.start refuses: _start
+  // through an object without _initialize, which it calls first
+  const e = inst.exports;
+  const rc = e._initialize ? wasi.start({ exports: { memory: e.memory, _start() { e._initialize(); e._start(); } } })
+    : wasi.start(inst);
   console.error(`run ${i}: rc=${rc} ${(performance.now() - t).toFixed(0)} ms`);
 }

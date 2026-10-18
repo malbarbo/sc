@@ -3,7 +3,7 @@
 phase 4: rewrites cuts/symbols.session.used (demangled names, which
 scripts/link.py keeps in both engines).
 
-usage: learn_session.py   (make learn-session, after make learn and learn-native)
+usage: learn_session.py [--wasm]   (make learn-session, after make learn and learn-native)
 
 The session runs only in the native engine (sc.wasm has none before phase
 5), so it learns there, as link.py --native --learn does: from the list
@@ -16,19 +16,26 @@ then all of them again. The slices:
   test/session.py ses-, seq- and crash-, with -Weverything, against the
   uncut engine's (build/res/session-wev-base);
   test/split.py, against pic-.
+
+--wasm learns what only sc.wasm's session calls (PLANO-REPL.md §5.2),
+into the same list: the cut sc.wasm with its names (link.py, as
+sc-cut.wasm) under the test host build/sc-engine-wasm (proto/, feature
+wasm), which says the cut function a trap calls; the base is
+build/res/session-wasm-wev-base.
 """
 import json, os, re, shutil, subprocess, sys, time
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/test')
-from corpuslib import IGNORE, norm_hash
+from corpuslib import IGNORE, UNSTABLE, norm_hash
 
 B = f'{R}/build'
-D = f'{B}/link-session-learn'
+WASM = sys.argv[1:] == ['--wasm']
+D = f'{B}/link-session-learn{"-wasm" * WASM}'
 ENG = f'{D}/sc-engine'
 FILE = f'{R}/cuts/symbols.session.used'
-BASE = json.load(open(f'{B}/res/session-wev-base/summary.json'))
-BASE = {k: v for k, v in BASE.items() if k.split('-', 1)[1] not in IGNORE}
+BASE = json.load(open(f'{B}/res/session-{"wasm-" * WASM}wev-base/summary.json'))
+BASE = {k: v for k, v in BASE.items() if k.split('-', 1)[1] not in IGNORE and k not in UNSTABLE}
 os.makedirs(D, exist_ok=True)
 log = open(f'{D}/learn.log', 'w')
 
@@ -47,6 +54,14 @@ def write(names):
 
 def link():
     """the cut engine with the session, at ENG"""
+    if WASM:  # ENG.wasm is the engine of the host
+        subprocess.check_call([f'{R}/scripts/link.py', f'{D}/engine.wasm'], env=dict(os.environ, SC_LINKDIR=D),
+                              stdout=subprocess.DEVNULL)
+        shutil.copy(f'{B}/proto-wasm/release/sc-engine', ENG)
+        if not os.path.exists(f'{ENG}.wasm'):
+            os.symlink('engine.wasm', f'{ENG}.wasm')
+        subprocess.check_call([ENG, '--precompile'])
+        return
     e = dict(os.environ, SC_LINKDIR=D, SC_EXTRA=f'{B}/engine-host/sc_session.o {B}/engine-host/sc_api.o')
     subprocess.check_call([f'{R}/scripts/link.py', '--native', '--emit-link', f'{D}/engine.args', f'{D}/engine'],
                           env=e, stdout=subprocess.DEVNULL)
@@ -100,10 +115,11 @@ def put_back(syms):
         if l:
             (keep if l.startswith('!') else rm).append(re.compile(l.lstrip('!')))
     back = []
-    for o in (o for ms in json.load(open(f'{B}/link-host-members.json')).values() for o in ms):
-        p = o[:-2] + '.obj'  # the paths of the rules are the wasm build's
+    for o in (o for ms in json.load(open(f'{B}/link{"" if WASM else "-host"}-members.json')).values() for o in ms):
+        p = o if WASM else o[:-2] + '.obj'  # the paths of the rules are the wasm build's
         if any(r.search(p) for r in rm) and not any(k.search(p) for k in keep):
-            nm = subprocess.run(['llvm-nm', '--defined-only', '-g', '-j', f'{B}/host/{o}'], capture_output=True, text=True)
+            nm = subprocess.run(['llvm-nm', '--defined-only', '-g', '-j', f'{B}/{"wasm" if WASM else "host"}/{o}'],
+                                capture_output=True, text=True)
             if syms & set(nm.stdout.split()):
                 back.append(p)
     if not back:

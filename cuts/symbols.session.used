@@ -2,6 +2,7 @@
 # (scripts/learn_session.py), on top of symbols.used and symbols.host.used
 clang::ASTDeclMerger::MergeDefinitionData(clang::CXXRecordDecl*, clang::CXXRecordDecl::DefinitionData&&)
 clang::ASTDeclMerger::mergeTemplatePattern(clang::RedeclarableTemplateDecl*, clang::RedeclarableTemplateDecl*, bool)
+clang::ASTReader::GetHeaderFileInfo(clang::FileEntryRef)
 clang::ASTReader::ReadModuleMapFileBlock(llvm::SmallVector<unsigned long, 64u>&, clang::serialization::ModuleFile&, clang::serialization::ModuleFile const*, unsigned int)
 clang::ASTReader::getModuleForRelocationChecks(clang::serialization::ModuleFile&, bool)
 clang::ASTReader::mergeDefinitionVisibility(clang::NamedDecl*, clang::NamedDecl*)

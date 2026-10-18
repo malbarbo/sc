@@ -80,11 +80,17 @@ def ninja_cmd(target):
 
 
 # --- the link line: clang's, with the engine objects in place of the driver
-ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine{H}')}/{f}.o" for f in ('sc_entry', 'sc_main', 'sc_inv', 'sc_backend', 'sc_cuts')]
+# sc.wasm is a reactor with the session (sc.h) too: its exports below
+ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine{H}')}/{f}.o" for f in ('sc_entry', 'sc_main', 'sc_inv', 'sc_backend', 'sc_cuts')
+          + (() if NATIVE else ('sc_session', 'sc_api', 'sc_start'))]
 ENGINE += os.environ.get('SC_EXTRA', '').split()  # more engine objects, for experiments
 toks = shlex.split(ninja_cmd('bin/clang-23').split(': && ', 1)[1].removesuffix(' && :'))
 flags = [t for t in toks if not t.endswith(('.a', '.obj', '.o')) and t not in ('-o', 'bin/clang-23', '-Os', '-Xlinker')
          and not t.startswith(('--dependency-file', '-Wl,--color-diagnostics', '-fdiagnostics-color'))]
+EXPORTS = ('sc_session_new', 'sc_session_free', 'sc_session_cell', 'sc_session_undo', 'sc_session_depth',
+           'sc_result_ptr', 'sc_result_len', 'malloc', 'free', 'chdir')
+if not NATIVE:  # _start is sc_start.cpp's; the host calls chdir after _initialize
+    flags += ['-mexec-model=reactor', '-lc-printscan-long-double'] + [f'-Wl,--export={f}' for f in EXPORTS]
 archives = [t for t in shlex.split(ninja_cmd('bin/lld')) if t.startswith('lib/liblld') and t.endswith('.a')]
 archives = list(dict.fromkeys(archives + [t for t in toks if t.endswith('.a')]))
 
