@@ -87,8 +87,8 @@ impl Argv {
     }
 }
 
-/// The one-shot engine, `sc -cc1 ...` or `sc ld ...` (`sc_main`); `args[0]`
-/// is the program. Returns the exit code.
+/// The one-shot engine, `sc_main`: `args[0]` is the program, then `-cc1 ...`
+/// or `ld ...`. Returns the exit code.
 pub fn main<I, S>(args: I) -> Result<i32, Error>
 where
     I: IntoIterator<Item = S>,

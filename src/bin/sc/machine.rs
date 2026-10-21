@@ -9,7 +9,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use wasmtime::{Engine, Error, ThrownException, Trap, Val, ValType};
+use wasmtime::{Error, ThrownException, Trap, Val, ValType};
 use wasmtime_wasi::{I32Exit, WasiCtxBuilder};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,24 +89,10 @@ pub struct Machine {
     shown: Arc<Mutex<Option<String>>>,
 }
 
-/// The engine Ctrl-C interrupts: the last session's.
-static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
-
 /// How long a cell may take to compile, and how much memory the compiler
 /// may keep: above it, a new one replays the cells (PLANO-REPL.md §4).
 const TIMEOUT: Duration = Duration::from_secs(60);
 const MEMORY: u64 = 1 << 30;
-
-/// A Ctrl-C stops the compile or the code that runs, whichever it is.
-extern "C" fn interrupt(_: libc::c_int) {
-    sc::engine::interrupt();
-    // the main thread holds the lock only to put a new engine there
-    if let Ok(e) = ENGINE.try_lock() {
-        if let Some(e) = e.as_ref() {
-            e.increment_epoch();
-        }
-    }
-}
 
 /// The build directory: `SC_BUILD`, else the first one above this binary
 /// with the session's arguments (`build/sc`, `build/cargo/release/sc`).
@@ -158,9 +144,8 @@ impl Machine {
         loader.host("__sc_show_float", &[ValType::I32, ValType::I32, ValType::F64], move |mem, a| {
             *s.lock().unwrap() = Some(show::float(mem, a[0].unwrap_i32() as u32, a[1].unwrap_i32() as u32, a[2].unwrap_f64()));
         });
-        if interactive && ENGINE.lock().unwrap().replace(loader.interrupter()).is_none() {
-            // SAFETY: the handler only bumps an atomic counter
-            unsafe { libc::signal(libc::SIGINT, interrupt as *const () as libc::sighandler_t) };
+        if interactive {
+            sc::engine::on_ctrl_c(loader.interrupter());
         }
         Ok(Machine { lang, safety, argv, repl, build: b, loader, loaded: 0, pending: None, shown })
     }

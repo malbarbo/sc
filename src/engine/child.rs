@@ -9,6 +9,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Set by [`interrupt`]: the request waiting for the child gives up.
@@ -18,6 +19,31 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 /// a [`Repl`] replays the log in another. Safe in a signal handler (Ctrl-C).
 pub fn interrupt() {
     INTERRUPTED.store(true, Ordering::Relaxed);
+}
+
+/// The wasmtime engine Ctrl-C interrupts: the last session's.
+static ENGINE: Mutex<Option<wasmtime::Engine>> = Mutex::new(None);
+
+/// A Ctrl-C stops the compile ([`interrupt`]) or the code that runs,
+/// whichever it is.
+extern "C" fn on_sigint(_: c_int) {
+    interrupt();
+    // the main thread holds the lock only to put a new engine there
+    if let Ok(e) = ENGINE.try_lock() {
+        if let Some(e) = e.as_ref() {
+            e.increment_epoch();
+        }
+    }
+}
+
+/// From now on, Ctrl-C also stops the code `engine` runs, in place of the
+/// engine before (a loader made interruptible, armed: `Loader::arm`). The
+/// first call installs the SIGINT handler.
+pub fn on_ctrl_c(engine: wasmtime::Engine) {
+    if ENGINE.lock().unwrap().replace(engine).is_none() {
+        // SAFETY: the handler only stores to atomics
+        unsafe { libc::signal(libc::SIGINT, on_sigint as *const () as libc::sighandler_t) };
+    }
 }
 
 /// The answer to a request, owned.

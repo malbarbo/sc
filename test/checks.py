@@ -6,13 +6,15 @@ status. A NAME.c or NAME.cpp runs as `sc NAME`, with NAME.c.in or
 NAME.cpp.in as its input if there is one; a NAME.c.repl or
 NAME.cpp.repl goes, a line at a time, to the REPL.
 
-usage: checks.py [--update]   --update writes expected.txt
+usage: checks.py [--update] [SC]   --update writes expected.txt; SC: by
+default build/cargo/release/sc (make test-dist: the dist one)
 """
 import difflib, glob, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-SC = f'{R}/build/cargo/release/sc'
+ARGS = [a for a in sys.argv[1:] if a != '--update']
+SC = os.path.realpath(ARGS[0]) if ARGS else f'{R}/build/cargo/release/sc'
 D = f'{R}/test/checks'
 EXPECTED = f'{D}/expected.txt'
 LEVELS = ('off', 'on', 'strict')
@@ -41,7 +43,7 @@ def main():
     progs = sorted(glob.glob(f'{D}/*.c') + glob.glob(f'{D}/*.cpp') + glob.glob(f'{D}/*.repl'))
     with ThreadPoolExecutor(os.cpu_count()) as ex:
         got = ''.join(ex.map(one, [(p, l) for p in progs for l in LEVELS]))
-    if sys.argv[1:] == ['--update']:
+    if '--update' in sys.argv[1:]:
         open(EXPECTED, 'w').write(got)
         return
     exp = open(EXPECTED).read() if os.path.exists(EXPECTED) else ''

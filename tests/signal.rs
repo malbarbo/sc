@@ -2,32 +2,23 @@
 
 mod common;
 
-use std::sync::OnceLock;
 use std::time::Duration;
-use wasmtime::{Engine, Trap, Val};
+use wasmtime::{Trap, Val};
 
-/// The engine the signal interrupts, as `sc`'s SIGINT handler.
-static ENGINE: OnceLock<Engine> = OnceLock::new();
-
-extern "C" fn interrupt(_: libc::c_int) {
-    if let Some(e) = ENGINE.get() {
-        e.increment_epoch();
-    }
-}
-
+/// `sc`'s SIGINT handler ([`sc::engine::on_ctrl_c`]), on the loader of the
+/// second session, as after a %restart: the first one's engine is replaced.
 #[test]
 fn signal_stops_a_loop() {
+    sc::engine::on_ctrl_c(common::loader(true).interrupter());
     let mut l = common::loader(true);
-    ENGINE.set(l.interrupter()).unwrap();
-    // SAFETY: the handler only bumps an atomic counter
-    unsafe { libc::signal(libc::SIGUSR1, interrupt as *const () as libc::sighandler_t) };
+    sc::engine::on_ctrl_c(l.interrupter());
     // armed before the signal can come: one before would be lost
     l.arm();
     // to this thread, in the loop's code, as a Ctrl-C to the REPL
     let me = unsafe { libc::pthread_self() };
     let t = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(200));
-        unsafe { libc::pthread_kill(me, libc::SIGUSR1) };
+        unsafe { libc::pthread_kill(me, libc::SIGINT) };
     });
     // a loop the signal does not stop would hang the test. The process,
     // with only this test, ends with it

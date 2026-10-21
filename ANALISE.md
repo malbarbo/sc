@@ -3526,6 +3526,15 @@ comparar (`at fatorial (...), N times`). O teste continua conferindo a
 mensagem e os quadros, só não o número. O `expected.txt` foi refeito, e
 só essas 6 linhas mudaram.
 
+Fixar o número com uma pilha maior não compensa. Com `max_wasm_stack` de
+4 MiB (o wasmtime exige então `async_stack_size` maior), a recursão vai
+além do teto do backtrace (`wasm_backtrace_max_frames`, 2^15): a saída
+vira `at fatorial (...), 32767 times`, sem o `at main`, e o número fica
+fixo só por ser o teto. Ainda faltaria uma thread de pilha grande para não
+depender do `ulimit -s` do aluno. A pilha de 1 MiB na memória linear não
+chega a ser o limite. Fica o `N`, que no `expected.txt` só aparece nos
+estouros.
+
 **As baterias** usam o loader novo contra as bases do antigo:
 
 | bateria | resultado |
@@ -3765,3 +3774,33 @@ refeita pelo `build/sc-full`, igual à de antes, resultado por resultado),
 `test-session-wasm` (idem), `test-split-wasm`, `test-proto`,
 `test-loader`, `test-aluno` e `test-checks` sem diferença. O
 `build/cargo/dist/sc` tem 34,3 MB, como o `build/loader/dist/sc` da §50.
+
+**`sc --cc1` e `sc --ld`.** Os modos do motor no `sc` eram `-cc1` e `ld`,
+os do `sc_main`, e um programa do aluno chamado `ld` virava um link do
+wasm-ld (`sc ld`). No `sc` eles passam a `--cc1` e `--ld`, como `--engine`
+e `--replay`, e o `main` os traduz para o `sc_main`. O `sc_main` não muda:
+o `sc.wasm` e os `build/sc-host-*` seguem com `-cc1` e `ld`, sem aluno com
+quem colidir, e o `test/corpus.py` traduz só quando o motor é o `build/sc`.
+`test-native` e `test-loader` sem diferença.
+
+**As bases do `make test` e do `test-warn` refeitas.** A mudança no
+`corpus.py` as refaz (§49: duas guardavam `run exit=timeout` de uma
+rodada sob carga). Refeitas uma de cada vez, sem outra bateria junto,
+nenhuma tem timeout, e as duas baterias dão 17.715 arquivos, 0 diferenças.
+
+**O handler de Ctrl-C na biblioteca.** Ele estava no `machine.rs` do
+`sc`, e o `tests/signal.rs` testava uma cópia simplificada (um
+`OnceLock`, SIGUSR1). Agora é `sc::engine::on_ctrl_c(engine)`, ao lado de
+`interrupt`: troca o `Engine` que o Ctrl-C interrompe e, na primeira vez,
+instala o handler de SIGINT. O teste chama a mesma função duas vezes, como
+num `%restart`, e manda SIGINT para a thread do laço.
+
+**As baterias no `sc` distribuído.** O `build/cargo/dist/sc` (LTO, `"s"`,
+`panic=abort`) é o que o aluno recebe e nunca tinha passado pelas
+baterias. O `make test-dist` roda nele `test-split`, `test-session`,
+`test-aluno` e `test-checks`, contra as mesmas bases (o `aluno.py` e o
+`checks.py` aceitam o binário como argumento). Fica fora das baterias de
+cada mudança: é a conferência antes de distribuir. Na primeira vez: 1.947
+programas, 0 diferenças; 11.918 resultados, 0 ruins; aluno e checks como o
+`expected.txt`. O `spike.py` também chamava `-cc1` no `sc` (o `std.pcm`
+das sessões): o `std_pcm` recebe agora o modo.

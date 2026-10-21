@@ -2,8 +2,9 @@
 //! sgleam and spython: `sc` is the REPL, `sc FILE` runs a program.
 //!
 //! The engine is linked in (PLANO-REPL.md §1.1, phase 6b): the compiler is
-//! the child `sc --engine`, and `sc -cc1 ...` and `sc ld ...` are the
-//! one-shot engine. The session's arguments are the ones `make repl` writes
+//! the child `sc --engine`, and `sc --cc1 ...` and `sc --ld ...` are the
+//! one-shot engine, `sc_main`'s `-cc1` and `ld` (a student's program may be
+//! called `ld`). The session's arguments are the ones `make repl` writes
 //! to `build/repl` of the build directory (`SC_BUILD`, by default the one
 //! this binary is in).
 //!
@@ -149,7 +150,11 @@ fn modes() -> ExitCode {
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     let engine = match args.get(1).map(String::as_str) {
         Some("--engine") => sc::engine::serve_child().map(|()| 0).map_err(Into::into),
-        Some("-cc1" | "ld") => sc::engine::main(&args).map_err(Into::into),
+        Some(mode @ ("--cc1" | "--ld")) => {
+            let mode = if mode == "--cc1" { "-cc1" } else { "ld" };
+            let args = [args[0].as_str(), mode].into_iter().chain(args[2..].iter().map(String::as_str));
+            sc::engine::main(args).map_err(Into::into)
+        }
         Some("--replay") => replay(&args[2..]).map(|()| 0),
         #[cfg(feature = "wasm")]
         Some("--precompile") => sc::engine::wasm::precompile().map(|()| 0).map_err(Into::into),

@@ -47,11 +47,12 @@ def flags(cxx, mod):
     return real(pic(CXXFLAGS if cxx else FLAGS)[1:] + MODFILE * mod, B, f'{OUT}/std.pcm')
 
 
-def std_pcm(eng, out):
-    """<out>/std.pcm, libc++'s std module as corpus.py builds it"""
+def std_pcm(eng, out, cc1='-cc1'):
+    """<out>/std.pcm, libc++'s std module as corpus.py builds it; cc1: the
+    engine's mode, build/sc's --cc1"""
     src = [l for l in open(f'{SR}/share/libc++/v1/std.cppm') if 'csignal' not in l]
     open(f'{out}/std.cppm', 'w').writelines(src)
-    subprocess.check_call([eng, '-cc1'] + real(iface(pic(CXXFLAGS))[1:], B) + ['-o', f'{out}/std.pcm', f'{out}/std.cppm'])
+    subprocess.check_call([eng, cc1] + real(iface(pic(CXXFLAGS))[1:], B) + ['-o', f'{out}/std.pcm', f'{out}/std.cppm'])
 
 
 # --- one cell per top-level declaration

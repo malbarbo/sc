@@ -4,13 +4,15 @@ test/aluno through sc (make repl) at each level of --safety. What each one
 gets, its exit status and its warnings by flag, must be what
 test/aluno/expected.txt says; at the level on, no error.
 
-usage: aluno.py [--update]   --update writes expected.txt
+usage: aluno.py [--update] [SC]   --update writes expected.txt; SC: by
+default build/cargo/release/sc (make test-dist: the dist one)
 """
 import collections, glob, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-SC = f'{R}/build/cargo/release/sc'
+ARGS = [a for a in sys.argv[1:] if a != '--update']
+SC = os.path.realpath(ARGS[0]) if ARGS else f'{R}/build/cargo/release/sc'
 EXPECTED = f'{R}/test/aluno/expected.txt'
 LEVELS = ('off', 'on', 'strict')
 STDIN = b'1\n2\n2\n9\n'  # the menu's options, lines for those that read them
@@ -32,7 +34,7 @@ def main():
     with ThreadPoolExecutor(os.cpu_count()) as ex:
         rs = list(ex.map(one, [(p, l) for p in progs for l in LEVELS]))
     lines = [l for l, _ in rs]
-    if sys.argv[1:] == ['--update']:
+    if '--update' in sys.argv[1:]:
         open(EXPECTED, 'w').write('\n'.join(lines) + '\n')
         return
     bad = [l for l, e in rs if e and ' on ' in l]

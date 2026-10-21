@@ -111,7 +111,7 @@ impl Mode {
 
 pub mod wire;
 mod child;
-pub use child::{interrupt, Answer, Child, Repl, ReplError};
+pub use child::{interrupt, on_ctrl_c, Answer, Child, Repl, ReplError};
 
 mod session;
 #[cfg(feature = "wasm")]

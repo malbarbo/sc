@@ -55,6 +55,10 @@ required-features = ["engine"]
 name = "session"
 required-features = ["engine"]
 
+[[test]]
+name = "signal"
+required-features = ["engine"]
+
 # make loader and repl, for the batteries: quick to build
 [profile.release]
 debug = false

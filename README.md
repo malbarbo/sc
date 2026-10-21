@@ -38,8 +38,8 @@ The same engine is also built natively (x86-64 Linux), with the same cuts:
 24.5 MB (7.6 MB zstd) against 52 MB uncut. It still compiles to wasm, so the
 student's code runs in wasm either way. `build/sc` is what ships: the REPL
 (`sc`, `sc FILE`, `sc help`) with that engine and the session linked in.
-Its compiler is a child, `sc --engine`, and `sc -cc1 ...` and `sc ld ...`
-are the one-shot engine.
+Its compiler is a child, `sc --engine`, and `sc --cc1 ...` and `sc --ld ...`
+are the one-shot engine (`--`: a student's program may be called `ld`).
 
 `import std;` takes a hello from 2.8 s to 0.14 s in V8. The engine builds
 `std.pcm` once (6.8 s) from libc++'s `std.cppm`, without `<csignal>`, which

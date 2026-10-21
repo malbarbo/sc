@@ -96,7 +96,7 @@ def main():
     if only := only_names():
         progs = [x for x in progs if x[1] in only]
     if any('/test/mod/' in p for p, _ in progs):
-        std_pcm(ENG, OUT)
+        std_pcm(ENG, OUT, '--cc1')
     with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
         rs = list(ex.map(one, progs))
     bad = [r for r in rs if not r[2] and r[0] not in KNOWN]

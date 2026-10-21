@@ -34,6 +34,7 @@ make dist        # build/cargo/dist/scload and sc: small, LTO (~3 min)
 make test-aluno  # test/aluno, correct code, at each --safety level (scripts/flags.py)
 make test-checks # test/checks, one bug per program: what sc says of it at each level
 make test-loader # src/loader.rs: Ctrl-C, many exceptions, after changing the loader or wasmtime
+make test-dist   # before shipping: test-split, test-session, test-aluno, test-checks on the dist sc
 ```
 
 The cuts keep the code of every warning: `make learn` runs the corpus with

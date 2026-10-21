@@ -52,6 +52,9 @@ os.makedirs(tmp, exist_ok=True)
 M = f'{out}/m'  # the std module, built by the engine under test
 os.makedirs(M, exist_ok=True)
 NATIVE = not eng.endswith('.wasm')
+# build/sc, the REPL, names the engine's modes --cc1 and --ld (sc ld would be
+# a student's program called ld), sc.wasm and build/sc-host-* -cc1 and ld
+SC = os.path.basename(eng) == 'sc'
 if not NATIVE:
     cw = f'{out}/engine.cwasm'
     subprocess.check_call(['wasmtime', 'compile', eng, '-o', cw])
@@ -59,6 +62,8 @@ if not NATIVE:
 
 def engine(dirs, args):
     """the command that runs the engine with dirs {host: guest} mapped"""
+    if SC:
+        args = ['--' + args[0].lstrip('-')] + args[1:]
     if NATIVE:
         return ['bwrap', '--ro-bind', '/usr', '/usr', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
                 '--dev', '/dev', '--ro-bind', eng, '/sc'] + [x for h, g in dirs.items() for x in ('--bind', h, g)] + ['/sc'] + args

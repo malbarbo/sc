@@ -46,7 +46,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size spike test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-aluno test-checks repl sc-deps test-loader dist clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size spike test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-aluno test-checks test-dist repl sc-deps test-loader dist clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -220,7 +220,7 @@ $(B)/sc-host-cut: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp
 	scripts/link.py --native $@
 
 # the binary that ships (PLANO-REPL.md §1.1): the REPL with the engine
-# linked in. sc -cc1 and sc ld are the cut engine, as build/sc-host-cut
+# linked in. sc --cc1 and sc --ld are the cut engine, as build/sc-host-cut
 $(B)/sc: $(SC_REPL)
 	llvm-strip -o $@ $<
 
@@ -359,6 +359,14 @@ test-aluno: repl
 test-checks: repl
 	test/checks.py
 
+# before shipping: the batteries of the REPL on the dist sc (lto, "s",
+# panic=abort), against the same bases
+test-dist: dist $(SCLOAD) $(B)/res/native-base/summary.json $(B)/res/session-base/summary.json sc-deps
+	test/split.py $(B)/cargo/dist/sc $(B)/res/split-dist
+	test/session.py $(B)/cargo/dist/sc $(B)/res/session-dist $(B)/res/session-base/summary.json
+	test/aluno.py $(B)/cargo/dist/sc
+	test/checks.py $(B)/cargo/dist/sc
+
 # --- tests: the corpus against the uncut engine
 $(B)/res/base/summary.json: $(B)/sc-full.wasm test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 	test/corpus.py $< $(B)/res/base
@@ -447,4 +455,4 @@ size: $(B)/sc.wasm
 	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
 clean:
-	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/cargo* $(B)/sc-full $(B)/sc-engine-wasm* $(B)/res/split $(B)/res/session* $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native
+	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/cargo* $(B)/sc-full $(B)/sc-engine-wasm* $(B)/res/split* $(B)/res/session* $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native

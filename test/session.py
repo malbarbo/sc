@@ -315,7 +315,7 @@ def main():
                  for p in sorted(glob.glob(f'{SEQ}/*.c') + glob.glob(f'{SEQ}/*.cpp'))]
     if only:
         jobs = [j for j in jobs if j[0] in only]
-    std_pcm(ENG, OUT)
+    std_pcm(ENG, OUT, '--cc1')
     with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
         rs = list(ex.map(lambda j: (j[0], *j[1](j[0], j[2])), jobs))
     bad = [n for n, _, good in rs if good is False and n not in KNOWN]
