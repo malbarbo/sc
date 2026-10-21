@@ -303,10 +303,11 @@ pub struct Repl {
 }
 
 impl Repl {
-    /// A child `program --engine` with a session of `args`.
-    pub fn new(program: PathBuf, args: Vec<String>) -> Result<Repl, ReplError> {
-        let child = Repl::start(&program, &args, None, None)?;
-        Ok(Repl { program, args, child, log: vec![], timeout: None, memory: None })
+    /// A child `program --engine` with a session of `args`, which starts
+    /// within the limits ([`Repl::limit`]).
+    pub fn new(program: PathBuf, args: Vec<String>, timeout: Option<Duration>, memory: Option<u64>) -> Result<Repl, ReplError> {
+        let child = Repl::start(&program, &args, timeout, memory)?;
+        Ok(Repl { program, args, child, log: vec![], timeout, memory })
     }
 
     /// Limits each reply of the child to `timeout`, and its memory to

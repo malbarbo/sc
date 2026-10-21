@@ -127,8 +127,7 @@ impl Machine {
             // unused as a one-shot compile does
             args.insert(link, "-sc-one-cell".into());
         }
-        let mut repl = Repl::new(std::env::current_exe()?, args)?;
-        repl.limit(Some(TIMEOUT), Some(MEMORY));
+        let repl = Repl::new(std::env::current_exe()?, args, Some(TIMEOUT), Some(MEMORY))?;
 
         let mut wasi = WasiCtxBuilder::new();
         wasi.inherit_stdio().inherit_env().args(&argv);

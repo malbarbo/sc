@@ -3930,3 +3930,9 @@ serve: o `build/sc.wasm` fica ao lado do `build/sc` nativo. Por isso o
 `session.py` passou a receber `--wasm`, como o `learn_session.py`, e o host
 do `learn_session.py --wasm` passou a ser um `sc` qualquer. O
 `PLANO-REPL.md` §5 ganhou uma tabela que liga os nomes antigos aos de hoje.
+
+Os limites do `Repl` (60 s por resposta e 1 GB) passaram a valer também para
+o primeiro filho. Antes, o `Repl::new` começava a sessão sem limites e só o
+`limit` seguinte os punha. Um engine que travasse ao começar a sessão
+deixava o `sc` parado para sempre. Agora o `Repl::new` recebe os limites. O
+`limit` continua existindo, e os testes o usam para mudar os limites depois.

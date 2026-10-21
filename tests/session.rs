@@ -130,7 +130,7 @@ fn session() {
 
 #[test]
 fn repl() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
     let mut sos = vec![];
     fn cell(r: &mut Repl, sos: &mut Vec<Vec<u8>>, src: &str) -> sc::engine::Answer {
         let a = r.cell(src.as_bytes()).unwrap();
@@ -165,7 +165,7 @@ fn repl() {
     drop(r);
 
     // nothing to undo
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
     assert_eq!(r.undo().unwrap().status, Status::Error);
 }
 
@@ -174,7 +174,7 @@ fn repl() {
 /// replays again.
 #[test]
 fn replay_fails() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
     assert_eq!(r.cell(C[0].as_bytes()).unwrap().status, Status::Ok);
     r.limit(Some(std::time::Duration::ZERO), None);
     let a = r.cell(b"int x2 = 1;").unwrap();
@@ -191,7 +191,7 @@ fn replay_fails() {
 /// The memory is looked at once a reply takes more than a poll (200 ms).
 #[test]
 fn memory() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true), None, None).unwrap();
     r.limit(None, Some(1));
     let a = r.cell(b"#include <regex>\n#include <format>\n#include <iostream>").unwrap();
     assert_eq!(a.status, Status::Lost);
@@ -202,7 +202,7 @@ fn memory() {
 /// leaves nothing; the depth comes from the lexer.
 #[test]
 fn whole() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
     let mut st = |src: &str| r.cell_if_whole(src.as_bytes()).unwrap().status;
     for src in [
         "int main(void)",
@@ -250,7 +250,7 @@ fn whole() {
 
 #[test]
 fn show() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
     let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
     let has = |so: &[u8], s: &str| so.windows(s.len()).any(|w| w == s.as_bytes());
     assert_eq!(cell("int x = 3; struct p { int a; } q;").status, Status::Ok);
@@ -276,7 +276,7 @@ fn show() {
     assert!(a.diags.contains("must be directly called"), "{}", a.diags);
 
     // C++: the temporaries die after the call
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true), None, None).unwrap();
     let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
     assert_eq!(cell("struct T { ~T() {} int n() { return 1; } }; T t;").status, Status::Ok);
     let a = cell("T().n()");
@@ -291,7 +291,7 @@ fn show() {
 /// of the expression stays in the session.
 #[test]
 fn type_of() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
     assert_eq!(r.cell(b"int x = 3; struct p { int a; } q;").unwrap().status, Status::Ok);
     let mut ty = |src: &str| {
         let a = r.type_of(src.as_bytes()).unwrap();
@@ -314,7 +314,7 @@ fn type_of() {
 
     // C++: the names of a class or a template's inside are left out; the
     // copy constructor Sema defines goes with the expression
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true), None, None).unwrap();
     let src = "#include <string>\n#include <vector>\nstd::string s; std::vector<int> v; struct T { std::string a; } t;";
     assert_eq!(r.cell(src.as_bytes()).unwrap().status, Status::Ok);
     for (src, want) in [("s", "std::string"), ("s + \"c\"", "std::string"), ("s.size()", "size_t"),
