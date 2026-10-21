@@ -75,11 +75,13 @@ $(B)/gcc-ts/.git:
 CORPUS := $(B)/c-testsuite/.git $(B)/gcc-ts/.git $(B)/src/llvm/CMakeLists.txt
 fetch: $(W)/bin/clang $(CORPUS)
 
-# --- LLVM: native tools (tablegen, wasm-ld, llc), then the wasm libraries
+# --- LLVM: native tools, then the wasm libraries. Of the native tools only
+# the tablegens (for the wasm and host builds), clang (the sysroot's) and
+# wasm-ld (every link) are used; clang's libraries are checkinv's
 $(B)/native/bin/wasm-ld: | $(B)/src/llvm/CMakeLists.txt
 	cmake -G Ninja -S $(B)/src/llvm -B $(B)/native $(LLVM_OPTS) \
 	  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_USE_LINKER=lld
-	ninja -C $(B)/native
+	ninja -C $(B)/native clang lld llvm-tblgen clang-tblgen llvm-min-tblgen
 
 $(B)/Toolchain-WASI-LLVM.cmake: llvm/toolchain.cmake.in
 	sed 's#@WASI_SDK@#$(W)#g' $< > $@

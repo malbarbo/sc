@@ -3936,3 +3936,35 @@ o primeiro filho. Antes, o `Repl::new` começava a sessão sem limites e só o
 `limit` seguinte os punha. Um engine que travasse ao começar a sessão
 deixava o `sc` parado para sempre. Agora o `Repl::new` recebe os limites. O
 `limit` continua existindo, e os testes o usam para mudar os limites depois.
+
+**O `cargo build` do zero.** Ele não precisa do `make learn`, porque as
+listas dos cortes estão em `cuts/`. Também não precisa do build wasm do
+LLVM nem do corpus. Precisa do pin, do LLVM nativo (as ferramentas), do
+LLVM do host (as bibliotecas que o engine linka) e do sysroot. O
+`build/native` construía todas as ferramentas do LLVM (141 em `bin/`). Hoje
+ele constrói só as que são usadas: os tablegens (`llvm-tblgen`,
+`clang-tblgen` e `llvm-min-tblgen`, para os builds wasm e do host), o
+`clang` (o do sysroot) e o `lld` (o `wasm-ld` de todo link). Sobram 14
+binários, e as bibliotecas do clang que o `checkinv` usa vêm com eles.
+
+| | antes | com os alvos restritos |
+|---|---|---|
+| passos do `build/native` | 5674 | 3707 |
+| CPU do `build/native` | ~7 h | ~4,5 h |
+| `build/native` em disco | 2,7 GB | 1,2 GB |
+
+Num clone limpo, o `cargo build --release` levou 13 min 45 s em 56 núcleos
+(7,3 h de CPU) e ocupou 6,6 GB em `build/`. Os passos foram:
+
+| passo | tempo |
+|---|---|
+| `build/native` | 5 min |
+| `build/host` | 4,4 min |
+| sysroot | 15 s |
+| resto: fetch do pin, link e cargo | ~4 min |
+
+O `sc` que saiu dele compila C e C++ com exceções, e o REPL funciona. No
+mesmo clone, o `make build/sc.wasm checkinv` passou: o `checkinv` deu SAME.
+O `sc.wasm` só difere do checkout pelos caminhos de `build/src` que ficam
+gravados nele. O código é o mesmo, e o `wasm-opt` juntou os dados num
+segmento a menos.

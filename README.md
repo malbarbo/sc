@@ -75,6 +75,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `build/cargo/release/sc` and `scload`: without `SC_LINK_ARGS`, `build.rs`
   runs `make sc-deps` (the cut engine's link arguments, and what `sc`
   reads at run time) and links `build/link-session-cut/engine.args`.
+  From a clean checkout that is the LLVM pin built twice (native tools,
+  host libraries) and the sysroot, without `make learn`: the cuts are in
+  `cuts/`. It took 14 min on 56 cores (7.3 h of CPU) and 6.6 GB.
   - `src/engine/` (the `engine` feature, the default) is bindgen over
     `engine/sc.h`, the protocol between the REPL and its child (`wire`),
     the REPL's side of it (`Child`, and `Repl`, which replays a lost
