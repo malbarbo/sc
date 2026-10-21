@@ -23,7 +23,8 @@ gimli = { version = "0.33", default-features = false, features = ["read", "std",
 bpaf = { version = "0.9", features = ["derive", "bright-color"], optional = true }
 rustyline = { version = "18", features = ["derive", "custom-bindings"], optional = true }
 dirs = { version = "6", optional = true }
-libc = { version = "0.2", optional = true }
+# Ctrl-C (the loader), the child's signals and pipes (the engine)
+libc = "0.2"
 # the wasm feature: WASI of sc.wasm's sessions
 tokio = { version = "1", features = ["rt"], optional = true }
 
@@ -34,14 +35,13 @@ bindgen = { version = "0.72", default-features = false, features = ["runtime"], 
 # make test-loader and test-proto (tests/)
 [dev-dependencies]
 wat = "=1.254.0"
-libc = "0.2"
 
 [features]
 default = ["engine"]
 # sc, with the engine linked in (PLANO-REPL.md §1.1): build.rs links the
 # arguments of SC_LINK_ARGS, by default build/link-session-cut/engine.args,
 # which it asks make for
-engine = ["dep:bindgen", "dep:bpaf", "dep:rustyline", "dep:dirs", "dep:libc"]
+engine = ["dep:bindgen", "dep:bpaf", "dep:rustyline", "dep:dirs"]
 # the same API over sc.wasm's exports through wasmtime (src/engine/wasm.rs),
 # in place of the linked engine: build/sc-engine-wasm (PLANO-REPL.md §5.2)
 wasm = ["engine", "dep:tokio"]
@@ -55,9 +55,6 @@ required-features = ["engine"]
 name = "session"
 required-features = ["engine"]
 
-[[test]]
-name = "signal"
-required-features = ["engine"]
 
 # make loader and repl, for the batteries: quick to build
 [profile.release]

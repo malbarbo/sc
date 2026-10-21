@@ -853,15 +853,37 @@ impl Loader {
         self.sp.set(&mut self.store, v)
     }
 
-    /// From now on, an `increment_epoch` of the [`Loader::interrupter`] stops
-    /// the code running with a trap (in a loader made `interruptible`).
+    /// From now on, a Ctrl-C ([`Loader::on_ctrl_c`]) stops the code running
+    /// with a trap (in a loader made `interruptible`).
     pub fn arm(&mut self) {
         self.store.set_epoch_deadline(1);
     }
 
-    /// The engine, whose `increment_epoch` may be called from another thread
-    /// or a signal handler.
-    pub fn interrupter(&self) -> Engine {
-        self.engine.clone()
+    /// From now on, Ctrl-C stops the code this loader runs (armed), in place
+    /// of the loader's before, and calls `also`, which must be safe in a
+    /// signal handler (`sc::engine::interrupt`: the compile). The first call
+    /// installs the SIGINT handler.
+    pub fn on_ctrl_c(&self, also: fn()) {
+        let _ = CTRL_C_ALSO.set(also);
+        if CTRL_C.lock().unwrap().replace(self.engine.clone()).is_none() {
+            // SAFETY: the handler only increments the epoch and calls `also`
+            unsafe { libc::signal(libc::SIGINT, on_sigint as *const () as libc::sighandler_t) };
+        }
+    }
+}
+
+/// The engine Ctrl-C interrupts: the last loader's ([`Loader::on_ctrl_c`]).
+static CTRL_C: std::sync::Mutex<Option<Engine>> = std::sync::Mutex::new(None);
+static CTRL_C_ALSO: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+extern "C" fn on_sigint(_: libc::c_int) {
+    if let Some(also) = CTRL_C_ALSO.get() {
+        also();
+    }
+    // the main thread holds the lock only to put a new engine there
+    if let Ok(e) = CTRL_C.try_lock() {
+        if let Some(e) = e.as_ref() {
+            e.increment_epoch();
+        }
     }
 }

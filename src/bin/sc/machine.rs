@@ -145,7 +145,7 @@ impl Machine {
             *s.lock().unwrap() = Some(show::float(mem, a[0].unwrap_i32() as u32, a[1].unwrap_i32() as u32, a[2].unwrap_f64()));
         });
         if interactive {
-            sc::engine::on_ctrl_c(loader.interrupter());
+            loader.on_ctrl_c(sc::engine::interrupt);
         }
         Ok(Machine { lang, safety, argv, repl, build: b, loader, loaded: 0, pending: None, shown })
     }
@@ -233,7 +233,7 @@ impl Machine {
         if !self.loader.is_loaded(&name) {
             // nothing of it is in the loader (an import of another type):
             // nor is it in the compiler, so that it can be written again
-            self.repl.undo()?;
+            eprint!("{}", self.repl.undo()?.diags);
         }
         Ok(out)
     }

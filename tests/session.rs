@@ -169,6 +169,35 @@ fn repl() {
     assert_eq!(r.undo().unwrap().status, Status::Error);
 }
 
+/// A replay that fails (here a timeout of 0; Ctrl-C again, above the
+/// memory limit) is told in the answer: the REPL goes on, and the next request
+/// replays again.
+#[test]
+fn replay_fails() {
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
+    assert_eq!(r.cell(C[0].as_bytes()).unwrap().status, Status::Ok);
+    r.limit(Some(std::time::Duration::ZERO), None);
+    let a = r.cell(b"int x2 = 1;").unwrap();
+    assert_eq!(a.status, Status::Lost);
+    assert!(a.diags.contains("the session was not restored"), "{a:?}");
+    assert_eq!(r.undo().unwrap().status, Status::Error);
+    assert_eq!(r.len(), 1);
+    r.limit(None, None);
+    assert_eq!(r.cell(b"int x3 = 1;").unwrap().status, Status::Lost);
+    assert_eq!(r.cell(b"int x4 = 1;").unwrap().status, Status::Ok);
+    assert_eq!(r.len(), 2);
+}
+
+/// The memory is looked at once a reply takes more than a poll (200 ms).
+#[test]
+fn memory() {
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true)).unwrap();
+    r.limit(None, Some(1));
+    let a = r.cell(b"#include <regex>\n#include <format>\n#include <iostream>").unwrap();
+    assert_eq!(a.status, Status::Lost);
+    assert!(a.diags.contains("the compiler took more than 0 MB"), "{a:?}");
+}
+
 /// Enter in the REPL: a cell whose first error is at its end stops short and
 /// leaves nothing; the depth comes from the lexer.
 #[test]

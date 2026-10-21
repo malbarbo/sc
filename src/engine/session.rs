@@ -336,12 +336,23 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
 
 /// The child (`--engine`): [`serve`] on stdin and a copy of stdout. The
 /// engine's own writes to stdout go to stderr, so they cannot break a
-/// message. It ends with its parent: at the end of its input, or killed in
-/// the middle of a cell (the parent's timeout no longer runs; a panic in
-/// `sc` aborts, with no `Drop`).
+/// message. It ends with its parent, and so do its copies: at the end of
+/// its input, or in the middle of a cell (the parent's timeout no longer
+/// runs; a panic in `sc` aborts, with no `Drop`). A copy that goes on in
+/// the original's place is no longer the parent's child, so the end is
+/// told by stdin, the parent's pipe: with `O_ASYNC`, the kernel sends
+/// SIGIO to the child's process group when the parent closes it
+/// ([`on_sigio`]). Unix alone, as `fork` is (ANALISE.md §51).
 pub fn serve_child() -> Result<(), Error> {
     use std::os::fd::AsFd;
-    unsafe { prctl(PR_SET_PDEATHSIG, SIGKILL) };
+    // SAFETY: the handler only polls and exits
+    unsafe {
+        libc::signal(libc::SIGIO, on_sigio as *const () as libc::sighandler_t);
+        libc::fcntl(0, libc::F_SETOWN, -libc::getpgrp());
+        libc::fcntl(0, libc::F_SETFL, libc::fcntl(0, libc::F_GETFL) | libc::O_ASYNC);
+    }
+    // the parent may have ended before
+    on_sigio(0);
     let out = std::fs::File::from(io::stdout().as_fd().try_clone_to_owned()?);
     if unsafe { dup2(2, 1) } < 0 {
         return Err(io::Error::last_os_error().into());
@@ -349,16 +360,22 @@ pub fn serve_child() -> Result<(), Error> {
     serve(&mut io::BufReader::new(io::stdin().lock()), &mut io::BufWriter::new(out))
 }
 
+/// Each write of the parent to stdin sends SIGIO too: the process ends
+/// only if the parent closed it.
+extern "C" fn on_sigio(_: c_int) {
+    let mut p = libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 };
+    if unsafe { libc::poll(&mut p, 1, 0) } > 0 && p.revents & libc::POLLHUP != 0 {
+        unsafe { libc::_exit(0) };
+    }
+}
+
 extern "C" {
     fn fork() -> c_int;
     fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int;
     fn _exit(code: c_int) -> !;
     fn dup2(old: c_int, new: c_int) -> c_int;
-    fn prctl(option: c_int, ...) -> c_int;
 }
 
-const PR_SET_PDEATHSIG: c_int = 1;
-const SIGKILL: c_int = 9;
 
 /// The copy of the child taken before a cell, as its original sees it. The
 /// copy waits on a pipe for one of: `d` (the cell was accepted: the copy

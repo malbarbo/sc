@@ -5,13 +5,13 @@ mod common;
 use std::time::Duration;
 use wasmtime::{Trap, Val};
 
-/// `sc`'s SIGINT handler ([`sc::engine::on_ctrl_c`]), on the loader of the
-/// second session, as after a %restart: the first one's engine is replaced.
+/// `sc`'s SIGINT handler ([`sc::loader::Loader::on_ctrl_c`]), on the loader
+/// of the second session, as after a %restart: the first one's is replaced.
 #[test]
 fn signal_stops_a_loop() {
-    sc::engine::on_ctrl_c(common::loader(true).interrupter());
+    common::loader(true).on_ctrl_c(|| {});
     let mut l = common::loader(true);
-    sc::engine::on_ctrl_c(l.interrupter());
+    l.on_ctrl_c(|| {});
     // armed before the signal can come: one before would be lost
     l.arm();
     // to this thread, in the loop's code, as a Ctrl-C to the REPL

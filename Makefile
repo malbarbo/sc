@@ -253,7 +253,7 @@ $(B)/link-session/engine.args: $(SESSION:%=$(B)/engine-host/%.o) scripts/link.py
 	  scripts/link.py --native --full --emit-link $@ $(B)/link-session/engine
 
 test-proto: $(B)/link-session/engine.args $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
-	SC_LINK_ARGS=$(CURDIR)/$< cargo test $(CARGO) --target-dir $(B)/cargo-full --test session
+	SC_LINK_ARGS=$(CURDIR)/$< cargo test $(CARGO) --target-dir $(B)/cargo-full --lib --bins --test session
 
 # sc with the same engine: the child (sc --engine) and the test of the
 # REPL's side (sc --replay), PLANO-REPL.md phase 2, the base of build/sc's
@@ -335,10 +335,10 @@ loader: $(SCLOAD)
 dist: $(SC_ENGINE_ARGS)
 	cargo build $(CARGO) --profile dist --bins
 
-# what the batteries do not reach: Ctrl-C, many exceptions (tests/), and the
-# tests of sc's modules
-test-loader: $(SC_ENGINE_ARGS)
-	cargo test --release $(CARGO) --lib --bins --test signal --test exceptions
+# what the batteries do not reach: Ctrl-C, many exceptions (tests/), without
+# the engine
+test-loader:
+	cargo test --release $(CARGO) --no-default-features --lib --test signal --test exceptions
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc FILE`
 REPL_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/repl/$l-$s.args $(B)/repl/$l-$s-file.args))

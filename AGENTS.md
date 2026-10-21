@@ -22,7 +22,7 @@ make learn-native # after make learn: what only the native engine calls
 make learn-session # after make learn-native: what only the REPL's session calls
 make learn-session-wasm # after learn-session: what only sc.wasm's session calls
 make spike       # PLANO-REPL.md phase 0: REPL cells through build/sc-spike
-make test-proto  # src/engine, the Rust API over engine/sc.h, after changing either
+make test-proto  # src/engine, the Rust API over engine/sc.h, and sc's modules, after changing them
 make test-split  # the corpus as REPL cells, after changing the session or the loader
 make test-session # the session's slices on build/sc against the uncut engine (build/sc-full)
 make test-session-warn # ses-, seq- and crash- with -Weverything
@@ -33,7 +33,7 @@ cargo build --release # the same sc (build.rs runs make sc-deps)
 make dist        # build/cargo/dist/scload and sc: small, LTO (~3 min)
 make test-aluno  # test/aluno, correct code, at each --safety level (scripts/flags.py)
 make test-checks # test/checks, one bug per program: what sc says of it at each level
-make test-loader # src/loader.rs: Ctrl-C, many exceptions, after changing the loader or wasmtime
+make test-loader # src/loader.rs: Ctrl-C, many exceptions, after changing the loader or wasmtime (no engine)
 make test-dist   # before shipping: test-split, test-session, test-aluno, test-checks on the dist sc
 ```
 

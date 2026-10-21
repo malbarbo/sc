@@ -615,7 +615,7 @@ só entra na fase 4, depois do aprendizado.
 | 5. reactor (feita, §5.2) | `sc.wasm` reactor + `_start`; as exports | antes de trocar, congelar `res/base/summary.json`; depois, o `sc-full.wasm` novo reproduz a base hash por hash (T-B2) |
 | 6a. loader mínimo (feita, §5.3) | o loader com as features mínimas do §1.4, exceções ligadas e tags compartilhadas, `epoch_interruption` | `pic-` e `repl-` com a mesma saída; tamanho do loader registrado |
 | 6b. hosts (nativo feito, ANALISE.md §50) | crate `sc-proto` (bindgen sobre `sc.h`), binário único `build/sc` (engine ligado pelo `--emit-link`), filho `sc --engine`, timeout, válvula, repasse; host JS documentado | `crash-` pelo REPL nativo: o REPL segue vivo e a célula seguinte funciona |
-| 7. docs | ANALISE.md (§20), README, AGENTS (alvos novos), Makefile (`.PHONY`, `clean` de `res/ses*` etc.) | — |
+| 7. docs e distribuição | ANALISE.md (§20), README, AGENTS (alvos novos), Makefile (`.PHONY`, `clean` de `res/ses*` etc.); o `sc` fora do checkout (ANALISE.md §51): os `.args` sem caminhos absolutos, relativos a uma raiz, e a escolha entre uma árvore ao lado do binário e o sysroot embutido | o `sc` copiado para fora do `build/` roda |
 
 ### 5.1 Orçamento de tamanho (T-m1)
 
@@ -923,7 +923,7 @@ fases E+N e o protótipo do `sc`:
   compartilhadas, e a exceção não capturada vira o `std::terminate`
   (`Loader::uncaught`);
 - o `epoch_interruption` existe e é ligado só no REPL interativo
-  (`Loader::arm`, `interrupter`). O `sc FILE` e o `scload` rodam sem ele.
+  (`Loader::arm`, `Loader::on_ctrl_c`). O `sc FILE` e o `scload` rodam sem ele.
 
 Falta o wasmtime mínimo. Hoje o `loader/Cargo.toml` usa as features
 padrão: o `scload` tem 27,5 MB e o `sc` 28,8 MB. A fase troca isso pelo

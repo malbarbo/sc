@@ -3790,10 +3790,11 @@ nenhuma tem timeout, e as duas baterias dão 17.715 arquivos, 0 diferenças.
 
 **O handler de Ctrl-C na biblioteca.** Ele estava no `machine.rs` do
 `sc`, e o `tests/signal.rs` testava uma cópia simplificada (um
-`OnceLock`, SIGUSR1). Agora é `sc::engine::on_ctrl_c(engine)`, ao lado de
-`interrupt`: troca o `Engine` que o Ctrl-C interrompe e, na primeira vez,
-instala o handler de SIGINT. O teste chama a mesma função duas vezes, como
-num `%restart`, e manda SIGINT para a thread do laço.
+`OnceLock`, SIGUSR1). Agora é `Loader::on_ctrl_c(also)`, no `sc::loader`
+(estava no `sc::engine`, ao lado de `interrupt`; ver abaixo): troca o
+`Engine` que o Ctrl-C interrompe e, na primeira vez, instala o handler de
+SIGINT. O teste chama a mesma função duas vezes, como num `%restart`, e
+manda SIGINT para a thread do laço.
 
 **As baterias no `sc` distribuído.** O `build/cargo/dist/sc` (LTO, `"s"`,
 `panic=abort`) é o que o aluno recebe e nunca tinha passado pelas
@@ -3804,3 +3805,82 @@ cada mudança: é a conferência antes de distribuir. Na primeira vez: 1.947
 programas, 0 diferenças; 11.918 resultados, 0 ruins; aluno e checks como o
 `expected.txt`. O `spike.py` também chamava `-cc1` no `sc` (o `std.pcm`
 das sessões): o `std_pcm` recebe agora o modo.
+
+**Um replay que falha não encerra o REPL.** Quando a sessão se perde
+(Ctrl-C, timeout, memória), o `Repl::compile` faz o replay do log num
+filho novo. Se esse replay também falhava (um segundo Ctrl-C, um cell
+replayado acima do limite), o erro chegava ao `shell.rs` como `Err`, e o
+REPL saía e perdia a sessão. Agora a falha vai como diagnóstico na resposta
+("the session was not restored ... the next cell tries again"). O filho que
+acabou continua no lugar, e o próximo pedido dá `BrokenPipe` e faz o replay
+de novo. O `undo` responde `Error` e mantém a sessão. Depois de um cell
+aceito acima da memória, uma falha no replay mantém o filho, porque o cell
+já está no log. O teste `replay_fails` (em `tests/session.rs`) força a falha
+com um timeout de 0.
+
+**O filho e as cópias acabam com o `sc`, também a cópia que assume.** O
+`PR_SET_PDEATHSIG` do `serve_child` valia só para o processo que o `sc`
+cria. O Linux o limpa no `fork`, e a cópia que assume depois de um cell com
+erro é filha do original, que sai no `hand_over`. A cópia passa então a
+filha do init. Por isso o `PDEATHSIG` não tinha como apontar para o `sc`:
+na cópia, ele a mataria justamente no `hand_over`. Se o `sc` morria no meio
+de um cell pesado (`panic=abort`, SIGKILL), essa cópia seguia compilando
+sem timeout nem limite de memória. Agora o fim do `sc` chega pelo stdin,
+que é o pipe vindo dele. Com `O_ASYNC` e `F_SETOWN` no grupo do filho, o
+kernel manda SIGIO a todos os processos do grupo quando o `sc` fecha o
+pipe, mesmo morrendo. O handler sai se o `poll` der `POLLHUP`; as escritas
+de cada pedido também mandam SIGIO, mas sem `POLLHUP`. Num teste no pty, um
+cell com erro fez a cópia assumir, e o `sc` morreu por SIGKILL enquanto ela
+compilava um `std::regex`. Com o `PDEATHSIG`, a cópia órfã seguia rodando;
+com o SIGIO, o grupo inteiro saiu. O mecanismo vale no Unix, como o
+`fork`; o `PDEATHSIG` era só do Linux. O Windows não tem `fork`, e lá a
+sessão irá pelo `sc.wasm` no próprio processo, copiando e restaurando a
+memória linear a cada cell, como no host JS. Sem processo filho, não há
+órfão, e o timeout, o Ctrl-C e a memória ficam com o epoch e os limites do
+wasmtime.
+
+**O `kill` continua matando o grupo inteiro.** A revisão sugeriu, num
+timeout, num Ctrl-C ou acima da memória, matar só o processo que compila.
+A cópia de antes do cell veria então o fim do pipe e seguiria com a sessão
+como estava, sem replay. Para isso, o `sc` precisaria saber quem serve
+depois de um `hand_over`; o caminho limpo seria cada resposta levar o pid
+de quem a escreveu, o que muda o protocolo (`MsgHeader`, `wire.rs`). Ficou
+de fora. O ganho é pequeno: a compilação do Enter roda com o terminal em
+modo raw, e o Ctrl-C chega como tecla, não como SIGINT; o timeout e o
+limite de memória são raros. O replay já funciona e não encerra mais o
+REPL.
+
+**A memória só é olhada depois do primeiro `poll`.** O `rss()` varre todo o
+`/proc`: são 834 processos nesta máquina, uns 27 ms medidos em Python. O
+`wait()` o chamava antes do primeiro `poll` de cada pedido, e cada Enter
+faz de 2 a 4 pedidos (`depth`, `cell_if_whole`). Agora a memória só é
+olhada depois que um `poll` de 200 ms vence sem resposta: os pedidos que
+respondem antes nunca varrem. A conferência depois de cada cell aceito
+continua (uma varredura por cell). O teste `memory` (em
+`tests/session.rs`) põe um limite de 1 byte num cell C++ com `<regex>`,
+`<format>` e `<iostream>`, que leva mais que um `poll`.
+
+**O Ctrl-C no loader, não no engine.** O `on_ctrl_c` ficava no
+`sc::engine`, que só compila com a feature `engine`. Com isso, o
+`tests/signal.rs` precisava dela, e o `make test-loader` compilava e
+linkava o engine cortado só para testar o loader. Agora é
+`Loader::on_ctrl_c(also)`: o loader guarda o `Engine` e instala o handler,
+e o `sc` passa `sc::engine::interrupt` como `also`, que o handler chama
+primeiro. O `libc` passa a ser dependência comum, sem feature. O
+`test-loader` roda com `--no-default-features`, sem o engine.
+
+**Onde o `sc` acha o `build/` fica para a fase 7.** O `build_dir()` sobe a
+partir do binário até o primeiro diretório que tem `repl/`. Se nenhum tem,
+cai no diretório atual, e um `~/repl` sem relação seria tomado por ele.
+Isso existe porque o `sc` lê do `build/` em tempo de execução: os `.args`
+de cada linguagem e nível (`build/repl`, com caminhos absolutos para
+`build/sysroot` e o include de recursos do clang), o sysroot (headers e as
+`.so` que o loader carrega: 41 MB, 7,7 MB em zstd -19) e o próprio caminho
+do `build/`, usado nos backtraces. Corrigir só a busca não resolve o `sc`
+fora do checkout. Essa é uma decisão de distribuição. O primeiro passo
+tirará os caminhos absolutos dos `.args`, deixando-os relativos a uma raiz
+que o `sc` resolve num lugar só. Depois falta escolher entre uma árvore fixa
+ao lado do binário (`<prefixo>/lib/sc`, como o diretório de recursos do
+clang) e o sysroot embutido no binário, extraído na primeira execução para
+`~/.cache/sc/<versão>`: um arquivo só, mais simples para o aluno e para um
+futuro Windows. Até lá, a busca vale no checkout e com `SC_BUILD`.

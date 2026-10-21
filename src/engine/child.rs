@@ -9,7 +9,6 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Set by [`interrupt`]: the request waiting for the child gives up.
@@ -19,31 +18,6 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 /// a [`Repl`] replays the log in another. Safe in a signal handler (Ctrl-C).
 pub fn interrupt() {
     INTERRUPTED.store(true, Ordering::Relaxed);
-}
-
-/// The wasmtime engine Ctrl-C interrupts: the last session's.
-static ENGINE: Mutex<Option<wasmtime::Engine>> = Mutex::new(None);
-
-/// A Ctrl-C stops the compile ([`interrupt`]) or the code that runs,
-/// whichever it is.
-extern "C" fn on_sigint(_: c_int) {
-    interrupt();
-    // the main thread holds the lock only to put a new engine there
-    if let Ok(e) = ENGINE.try_lock() {
-        if let Some(e) = e.as_ref() {
-            e.increment_epoch();
-        }
-    }
-}
-
-/// From now on, Ctrl-C also stops the code `engine` runs, in place of the
-/// engine before (a loader made interruptible, armed: `Loader::arm`). The
-/// first call installs the SIGINT handler.
-pub fn on_ctrl_c(engine: wasmtime::Engine) {
-    if ENGINE.lock().unwrap().replace(engine).is_none() {
-        // SAFETY: the handler only stores to atomics
-        unsafe { libc::signal(libc::SIGINT, on_sigint as *const () as libc::sighandler_t) };
-    }
 }
 
 /// The answer to a request, owned.
@@ -173,13 +147,16 @@ impl Child {
     fn wait(&mut self) -> io::Result<()> {
         let deadline = self.timeout.map(|t| Instant::now() + t);
         let fd = self.from.get_ref().as_raw_fd();
+        // the memory is looked at (all of /proc) only once a poll found no
+        // reply: most come within the first
+        let mut first = true;
         while self.from.buffer().is_empty() {
             if INTERRUPTED.swap(false, Ordering::Relaxed) {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "interrupted"));
             }
             let mut left = deadline.map_or(-1, |d| d.saturating_duration_since(Instant::now()).as_millis() as c_int);
             if let Some(m) = self.memory {
-                if self.rss() > m {
+                if !std::mem::take(&mut first) && self.rss() > m {
                     return Err(io::Error::new(io::ErrorKind::TimedOut, format!("the compiler took more than {} MB", m >> 20)));
                 }
                 // how often the memory is looked at
@@ -379,7 +356,8 @@ impl Repl {
     }
 
     /// Compiles a cell. [`Status::Lost`]: the cell ended the session (its
-    /// diagnostics, or how the child ended), which is back as before it.
+    /// diagnostics, or how the child ended), which is back as before it, or
+    /// will be at the next request if the replay failed.
     pub fn cell(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
         self.compile(src, Mode::So)
     }
@@ -408,7 +386,7 @@ impl Repl {
     }
 
     fn compile(&mut self, src: &[u8], mode: Mode) -> Result<Answer, ReplError> {
-        let a = match self.child.cell(src, mode) {
+        let mut a = match self.child.cell(src, mode) {
             Ok(a) => a,
             Err(e) if e.kind() == io::ErrorKind::BrokenPipe => lost(e),
             Err(e) => return Err(e.into()),
@@ -416,16 +394,25 @@ impl Repl {
         match a.status {
             Status::Ok if mode != Mode::Type => self.log.push(Entry { src: src.to_vec(), syms: a.syms.clone() }),
             Status::Ok | Status::Error | Status::Incomplete => {}
-            Status::Lost => self.restart()?,
+            // a replay that fails (interrupted too, or above the limits)
+            // leaves the child that ended: the next request replays again
+            Status::Lost => {
+                if let Err(e) = self.restart() {
+                    a.diags += &format!("sc: the session was not restored ({e}): the next cell tries again\n");
+                }
+            }
         }
+        // the cell is in the log: on an error, the child stays, and its
+        // next reply above the limit loses it
         if self.memory.is_some_and(|m| self.child.rss() > m) {
-            self.restart()?;
+            let _ = self.restart();
         }
         Ok(a)
     }
 
     /// Undoes the last accepted cell: [`Status::Ok`] once the session is
-    /// back without it, [`Status::Error`] if there is none.
+    /// back without it, [`Status::Error`] if there is none or the replay
+    /// failed (the session stays as it was).
     pub fn undo(&mut self) -> Result<Answer, ReplError> {
         let Some(last) = self.log.pop() else {
             return Ok(Answer::bare(Status::Error, "sc: no cell to undo\n".into()));
@@ -433,7 +420,7 @@ impl Repl {
         // the generated code cannot be undone in the session (§3.3)
         if let Err(e) = self.restart() {
             self.log.push(last);
-            return Err(e);
+            return Ok(Answer::bare(Status::Error, format!("sc: the cell was not undone: {e}\n")));
         }
         Ok(Answer::bare(Status::Ok, String::new()))
     }

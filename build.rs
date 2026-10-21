@@ -6,6 +6,9 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
+    // cargo watches build.rs anyway: this only keeps it from running again
+    // on a change to any file of the package, as it does when nothing is said
+    println!("cargo:rerun-if-changed=build.rs");
     if env::var_os("CARGO_FEATURE_ENGINE").is_none() {
         return;
     }
