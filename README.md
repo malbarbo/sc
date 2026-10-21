@@ -34,9 +34,12 @@ it an object in place of the instance (`e` its exports):
 for the command, `wasi.initialize({exports: {memory: e.memory, _initialize: e._initialize}})`
 for the library (`bench/cc.mjs`).
 
-The same engine is also built natively (`build/sc`, x86-64 Linux), for the
-native REPL, with the same cuts: 24.5 MB (7.6 MB zstd) against 52 MB uncut.
-It still compiles to wasm, so the student's code runs in wasm either way.
+The same engine is also built natively (x86-64 Linux), with the same cuts:
+24.5 MB (7.6 MB zstd) against 52 MB uncut. It still compiles to wasm, so the
+student's code runs in wasm either way. `build/sc` is what ships: the REPL
+(`sc`, `sc FILE`, `sc help`) with that engine and the session linked in.
+Its compiler is a child, `sc --engine`, and `sc -cc1 ...` and `sc ld ...`
+are the one-shot engine.
 
 `import std;` takes a hello from 2.8 s to 0.14 s in V8. The engine builds
 `std.pcm` once (6.8 s) from libc++'s `std.cppm`, without `<csignal>`, which
@@ -67,8 +70,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   before), `sc_api.cpp` the session part of `sc.h` over it (each cell linked
   into a shared object) and `sc_spike.cpp` the driver of phase 0 of
   `PLANO-REPL.md` (`make spike`, `ANALISE.md` §22). `sc_start.cpp` is
-  `sc.wasm`'s `_start`, which has the session too. `build/sc` does not:
-  the REPL links the native engine with the session through `proto/`.
+  `sc.wasm`'s `_start`, which has the session too. `build/sc-host-cut`
+  does not: the REPL links the native engine with the session through
+  `proto/`.
 - `proto/` is the `sc-proto` crate: bindgen over `engine/sc.h`, the
   protocol between the REPL and its child (`wire`), the REPL's side of it
   (`Child`, and `Repl`, which replays a lost session) and, with the
@@ -76,7 +80,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `main`, `serve`; `ANALISE.md` §23 and §24). `make test-proto` runs its
   tests. `src/bin/sc-engine.rs` is `build/sc-engine` (cut, the REPL's) and
   `build/sc-engine-full` (uncut): the one-shot engine, the child
-  (`session`) and a test of the REPL's side (`repl`). With the `wasm`
+  (`--engine`) and a test of the REPL's side (`repl`). With the `wasm`
   feature, the same API calls `sc.wasm`'s exports through wasmtime
   (`src/wasm.rs`): `build/sc-engine-wasm`, the test host of the module
   (`ANALISE.md` §48).
@@ -180,7 +184,7 @@ make checkinv    # the invocation of sc_inv.cpp against clang's parser
 make size        # raw, gzip and zstd sizes
 make loader      # build/loader/release/scload
 make learn       # rebuild what the cuts keep, from the corpus
-make native      # build/sc, the native engine (builds LLVM once more)
+make native      # build/sc, the REPL with the native engine (builds LLVM once more)
 make test-native # the corpus on build/sc against the uncut native engine
 make learn-native # after make learn: what only the native engine calls
 make test-proto  # the Rust API (proto/) over the uncut native engine
@@ -221,7 +225,7 @@ a cut rule or bumping LLVM, then `make test`.
 A C or C++ feature the corpus does not cover can reach a stub. The engine then
 traps with `unreachable`.
 
-The native engine (`build/sc`) takes the same cuts from a host build of LLVM
+The native engine (`build/sc-host-cut`) takes the same cuts from a host build of LLVM
 (`build/host`, from the same patched sources). The function names learned on
 wasm are matched by their demangled names, where `int64_t` is `long long`
 on wasm and `long` on x86-64, and `std::` is libc++'s `std::__2` on wasm and

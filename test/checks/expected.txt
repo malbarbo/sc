@@ -99,6 +99,21 @@ cell_3:1:28: warning: implicit conversion changes signedness: 'int' to 'size_typ
 error: vector[] index out of bounds
     at pega(int) (cell_3:1:26)
     at cell_4:1:1
+== compiler-crash.c.repl off exit=0
+(int) 42
+sc: the engine crashed on this cell; the session is as it was before it
+LLVM ERROR: #pragma clang __debug llvm_fatal_error
+sc: the engine crashed on this cell; the session is as it was before it
+== compiler-crash.c.repl on exit=0
+(int) 42
+sc: the engine crashed on this cell; the session is as it was before it
+LLVM ERROR: #pragma clang __debug llvm_fatal_error
+sc: the engine crashed on this cell; the session is as it was before it
+== compiler-crash.c.repl strict exit=0
+(int) 42
+sc: the engine crashed on this cell; the session is as it was before it
+LLVM ERROR: #pragma clang __debug llvm_fatal_error
+sc: the engine crashed on this cell; the session is as it was before it
 == dangling.cpp off exit=0
 1252444
 == dangling.cpp on exit=134

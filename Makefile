@@ -211,7 +211,9 @@ $(B)/sc-host-cut: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp
     cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/symbols.host.used cuts/symbols.session.used cuts/o0init.txt
 	scripts/link.py --native $@
 
-$(B)/sc: $(B)/sc-host-cut
+# the binary that ships (PLANO-REPL.md §1.1): the REPL with the engine
+# linked in. sc -cc1 and sc ld are the cut engine, as build/sc-host-cut
+$(B)/sc: $(B)/loader/release/sc
 	llvm-strip -o $@ $<
 
 $(B)/sc-host-full: $(ENGINE:%=$(B)/engine-host/%.o) scripts/link.py
@@ -315,28 +317,31 @@ test-split-wasm: $(B)/sc-engine-wasm $(SCLOAD) $(B)/res/native-base/summary.json
 	test/split.py $(B)/sc-engine-wasm $(B)/res/split-wasm
 
 # --- the REPL's loader: runs the shared objects (native, wasmtime). The same
-# crate has sc, the REPL (a prototype of phase 6b: its compiler is the child
-# sc-engine session, with the arguments in build/repl)
+# crate has sc, the REPL, with the engine linked in (phase 6b): its compiler
+# is the child sc --engine, with the arguments in build/repl
 LOADER_CARGO := --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader
 SCLOAD := $(B)/loader/release/scload
 SC_REPL := $(B)/loader/release/sc
 $(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/lib.rs loader/src/main.rs
 	cargo build --release $(LOADER_CARGO) --bin scload
-$(SC_REPL): loader/Cargo.toml loader/Cargo.lock $(shell find loader/src -name '*.rs') \
-            $(wildcard proto/*.toml proto/*.rs proto/src/*.rs) engine/sc.h
-	cargo build --release $(LOADER_CARGO) --features repl --bin sc
+# sc links the cut engine with the session (PLANO-REPL.md §1.1): its child
+# is sc --engine
+SC_ENGINE_ARGS := $(B)/link-session-cut/engine.args
+$(SC_REPL): loader/Cargo.toml loader/Cargo.lock loader/build.rs $(shell find loader/src -name '*.rs') \
+            $(wildcard proto/*.toml proto/*.rs proto/src/*.rs) engine/sc.h $(SC_ENGINE_ARGS)
+	SC_LINK_ARGS=$(CURDIR)/$(SC_ENGINE_ARGS) cargo build --release $(LOADER_CARGO) --features repl --bin sc
 
 loader: $(SCLOAD)
 
 # the binaries that ship, with the profile that makes them small
 # (ANALISE.md §49): build/loader/dist/scload and sc
-dist:
-	cargo build $(LOADER_CARGO) --profile dist --features repl --bins
+dist: $(SC_ENGINE_ARGS)
+	SC_LINK_ARGS=$(CURDIR)/$(SC_ENGINE_ARGS) cargo build $(LOADER_CARGO) --profile dist --features repl --bins
 
 # what the batteries do not reach: Ctrl-C, many exceptions (loader/tests),
 # and the tests of sc's modules
-test-loader:
-	cargo test --release $(LOADER_CARGO) --features repl
+test-loader: $(SC_ENGINE_ARGS)
+	SC_LINK_ARGS=$(CURDIR)/$(SC_ENGINE_ARGS) cargo test --release $(LOADER_CARGO) --features repl
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc FILE`
 REPL_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/repl/$l-$s.args $(B)/repl/$l-$s-file.args))
@@ -344,7 +349,7 @@ $(B)/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/repl
 	scripts/flags.py --session $(firstword $(subst -, ,$*)) $(CURDIR)/$(B) $(wordlist 2,3,$(subst -, ,$*)) > $@
 
-repl: $(SC_REPL) $(B)/sc-engine $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
+repl: $(SC_REPL) $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 
 # a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
 test-aluno: repl

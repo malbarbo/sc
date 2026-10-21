@@ -1,10 +1,11 @@
 //! sc: C and C++ for students, with a REPL. The command line is the one of
 //! sgleam and spython: `sc` is the REPL, `sc FILE` runs a program.
 //!
-//! A prototype ahead of phase 6b of PLANO-REPL.md: the compiler is the
-//! child `sc-engine session` (cut, phase 4) of the build directory
-//! (`SC_BUILD`, by default the one this binary is in), with the session's
-//! arguments that `make repl` writes to `build/repl`.
+//! The engine is linked in (PLANO-REPL.md §1.1, phase 6b): the compiler is
+//! the child `sc --engine`, and `sc -cc1 ...` and `sc ld ...` are the
+//! one-shot engine. The session's arguments are the ones `make repl` writes
+//! to `build/repl` of the build directory (`SC_BUILD`, by default the one
+//! this binary is in).
 
 mod config;
 mod machine;
@@ -121,6 +122,23 @@ fn show_help<T>(parser: bpaf::OptionParser<T>, args: &[&str]) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
+    let engine = match args.get(1).map(String::as_str) {
+        Some("--engine") => sc_proto::serve_child().map(|()| 0),
+        Some("-cc1" | "ld") => sc_proto::main(&args),
+        _ => return sc(),
+    };
+    match engine {
+        Ok(code) => ExitCode::from(code as u8),
+        Err(e) => {
+            eprintln!("{NAME}: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The command line of the student.
+fn sc() -> ExitCode {
     let parsed = match cli().run_inner(bpaf::Args::current_args().set_name(NAME)) {
         Ok(parsed) => parsed,
         Err(err) => {

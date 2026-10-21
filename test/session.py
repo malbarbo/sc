@@ -212,13 +212,13 @@ def mem_cells(cxx, n):
 
 
 class Child:
-    """`<engine> session`, through the protocol (engine/sc.h)"""
+    """`<engine> --engine`, through the protocol (engine/sc.h)"""
     NEW, CELL, REPLY, SO = 1, 2, 4, 0
 
     def __init__(self, timeout):
         """the child, in a session of its own with the copies it forks: all
         of them killed after timeout seconds, when a reply is an EOFError"""
-        self.p = subprocess.Popen([ENG, 'session'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.p = subprocess.Popen([ENG, '--engine'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE if WASM else None, start_new_session=True,
                                   env=dict(os.environ, SC_MEMORY_SIZE='1') if WASM else None)
         self.timer = threading.Timer(timeout, self.kill)

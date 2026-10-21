@@ -20,7 +20,8 @@ addr2line = { version = "0.26", default-features = false, features = ["std"] }
 gimli = { version = "0.33", default-features = false, features = ["read", "std", "endian-reader"] }
 # sc, the REPL: the engine's child protocol (bindgen, so libclang), the
 # command line, the prompt. scload builds without them
-sc-proto = { path = "../proto", optional = true }
+# the engine, linked into sc (PLANO-REPL.md §1.1): build.rs
+sc-proto = { path = "../proto", features = ["engine"], optional = true }
 bpaf = { version = "0.9", features = ["derive", "bright-color"], optional = true }
 rustyline = { version = "18", features = ["derive", "custom-bindings"], optional = true }
 dirs = { version = "6", optional = true }

@@ -3596,3 +3596,99 @@ antes (25,3 MB). Cortar as features ali não reduz nada que se distribua,
 e o LTO acrescentaria minutos a cada build das baterias. O binário que o
 aluno recebe é o `sc` da fase 6b, que usa o loader com o conjunto mínimo
 acima.
+
+## 50. Fase 6b do REPL: um binário só
+
+O `build/sc` passa a ser o binário entregue: o REPL, o loader e o engine
+cortado com a sessão, num executável só (PLANO-REPL.md §1.1). Antes eram
+dois: o `sc` em Rust lançava como filho o `build/sc-engine` (C++ com o
+laço do protocolo) do diretório do build.
+
+**Ligação.** O `proto/build.rs` já exportava os argumentos do
+`link.py --native --emit-link` como `DEP_SC_LINK_ARGS` para quem depende
+dele. O `loader/build.rs` novo os passa ao link do `sc` com
+`rustc-link-arg-bin=sc`, que não alcança o `scload`. O `sc` usa os mesmos
+argumentos do `build/sc-engine` (`build/link-session-cut/engine.args`), e
+portanto o mesmo engine, objeto por objeto. Sem `ld -r`, o `--icf=safe` e
+o `--gc-sections` valem sobre o binário todo.
+
+**Os modos.** O `main` do `sc` olha o primeiro argumento antes do `bpaf`:
+- `--engine`: o filho, o `serve` sobre stdin e uma cópia de stdout. O
+  código saiu do `sc-engine.rs` para o `proto` (`serve_child`), e os dois
+  binários o usam. O subcomando do filho passou de `session` para
+  `--engine` também no `sc-engine` e no `test/session.py`;
+- `-cc1` e `ld`: o engine de uma vez (`sc_main`), como no `build/sc` de
+  antes. Um arquivo do aluno chamado `ld` precisa de `sc ./ld`;
+- o resto é a linha de comando do aluno.
+
+O filho é o próprio executável (`current_exe`). O diretório do build é o
+`SC_BUILD` ou o primeiro acima do binário que tem `repl/`, o que serve
+tanto ao `build/sc` quanto ao `build/loader/release/sc`.
+
+**Tamanho:**
+
+| binário | bruto | zstd -19 |
+| --- | ---: | ---: |
+| `build/loader/dist/sc` (`make dist`) | 34,3 MB | 10,7 MB |
+| `build/sc` (release, `llvm-strip`) | 42,6 MB | 12,4 MB |
+| `build/sc-engine` de antes (só o engine) | 26,1 MB | 8,1 MB |
+| `build/loader/dist/scload` | 8,1 MB | |
+
+O plano estimava 24,5 MB do engine mais 5,7 MB do runtime (§1.4). Com os
+8,1 MB medidos do loader na fase 6a, o `dist` fica 1,7 MB acima da soma
+dos dois binários separados, que o filho e o pai já carregavam juntos. O
+`release` é maior porque compila o wasmtime sem LTO. Um hello pelo
+`sc FILE` leva 0,07 s e 28 MB, igual nos dois perfis; o filho sozinho,
+sem célula, 14 MB.
+
+**Timeout, Ctrl-C e válvula** (`Repl::limit`, em `proto/src/child.rs`).
+O pai esperava a resposta num `read` bloqueante, e um Ctrl-C na compilação
+não fazia nada até ela acabar. Agora o `Child` espera com `poll`:
+- **Ctrl-C:** o handler de SIGINT do `sc` chama também o
+  `sc_proto::interrupt`, que liga um `AtomicBool`. O sinal acorda o `poll`
+  com `EINTR`, mesmo com `SA_RESTART`. O pai mata o grupo do filho, e o
+  `Repl` refaz o log num filho novo (`Status::Lost`, "sc: interrupted").
+  O flag é zerado no começo de cada pedido: um Ctrl-C no código do aluno
+  não derruba a compilação seguinte;
+- **timeout:** 60 s por resposta ("the compiler took more than 60 s");
+- **válvula:** 1 GB, sobre o RSS do maior processo do grupo do filho (as
+  cópias do `fork` dividem as páginas com ele; o pid do filho muda a cada
+  célula que falha). É olhada a cada 200 ms durante a compilação, e depois
+  de cada célula aceita, quando um filho novo refaz o log.
+
+Uma célula com uma macro que se expande em 2²⁷ elementos de um array
+mostra os três:
+
+| caso | antes | agora |
+| --- | --- | --- |
+| Ctrl-C depois de 3 s | nada até o fim da compilação | "sc: interrupted", a célula seguinte roda |
+| sem Ctrl-C | o filho chega a 13,6 GB | morto em 1 GB, em 6 s |
+| só o timeout (sem a válvula) | — | morto em 60 s |
+
+Se o log refeito já passa da válvula, cada célula aceita refaz o log de
+novo. Não acontece com as células de um aluno (o `mem-` mostra 5 KB por
+célula), e o replay roda sem o backend.
+
+**O filho morre com o pai.** Com o pai ocioso, o fim do stdin já encerrava
+o filho. No meio de uma célula, sem o timeout do pai, o filho seguiria até
+o fim dela. O `serve_child` agora pede `PR_SET_PDEATHSIG` com `SIGKILL`.
+Isso fecha o ponto que ficou da fase 6a: com `panic = "abort"`, um panic
+no `sc` não roda o `Drop` do `Child`, e o filho não fica órfão. Testado
+matando o pai com `SIGKILL` no meio da célula grande: nenhum
+`sc --engine` sobra.
+
+**Critério da fase (`crash-` pelo REPL nativo).** O `test/checks` ganhou
+`compiler-crash.c.repl`: `#pragma clang __debug crash` e
+`#pragma clang __debug llvm_fatal_error` entre uma declaração e o seu
+uso. Nos três níveis o REPL diz "the engine crashed on this cell; the
+session is as it was before it" e a célula seguinte mostra `(int) 42`. As
+fatias `crash-` do `test-session` continuam pelo `build/sc-engine`, que
+tem o mesmo engine e o mesmo `serve`; o modo `repl` de teste só existe
+nele.
+
+**Baterias.** `test-native` (o corpus inteiro pelo `build/sc` novo, com
+`sc -cc1` e `sc ld`), `test-split`, `test-session`, `test-session-wasm`,
+`test-proto`, `test-loader`, `test-aluno` e `test-checks` sem diferença.
+
+**Fica para depois:** o host JS documentado (o `sc.wasm` no navegador,
+com a cópia da memória antes da célula no lugar do `fork`).

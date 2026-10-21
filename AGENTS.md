@@ -16,7 +16,7 @@ make checkinv    # after changing engine/sc_inv.cpp
 make test-warn   # the full corpus with -Weverything
 make learn       # after changing cuts/ or the LLVM pin, then make test and test-warn
                  # (and learn-native, learn-session, learn-session-wasm)
-make native      # build/sc, the same engine for x86-64 Linux
+make native      # build/sc, what ships: the REPL with the engine linked in
 make test-native # the corpus on build/sc against the uncut native engine
 make learn-native # after make learn: what only the native engine calls
 make learn-session # after make learn-native: what only the REPL's session calls
@@ -28,7 +28,7 @@ make test-session # the session's slices on build/sc-engine (cut) against the un
 make test-session-warn # ses-, seq- and crash- with -Weverything
 make test-session-wasm # the same slices on sc.wasm's session (build/sc-engine-wasm)
 make test-session-wasm-warn # and test-split-wasm
-make repl        # build/loader/release/sc, the REPL (sc, sc FILE, sc help)
+make repl        # build/loader/release/sc, the REPL (sc, sc FILE, sc help), unstripped
 make dist        # build/loader/dist/scload and sc: small, LTO (~3 min)
 make test-aluno  # test/aluno, correct code, at each --safety level (scripts/flags.py)
 make test-checks # test/checks, one bug per program: what sc says of it at each level

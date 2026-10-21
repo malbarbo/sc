@@ -8,7 +8,17 @@ use std::os::raw::{c_int, c_short};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+
+/// Set by [`interrupt`]: the request waiting for the child gives up.
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+/// Stops the request a [`Child`] waits on, if any: its child is killed, and
+/// a [`Repl`] replays the log in another. Safe in a signal handler (Ctrl-C).
+pub fn interrupt() {
+    INTERRUPTED.store(true, Ordering::Relaxed);
+}
 
 /// The answer to a request, owned.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,7 +49,7 @@ impl Answer {
     }
 }
 
-/// The engine in a child process (`sc-engine session`). Its stderr is the
+/// The engine in a child process (`sc --engine`). Its stderr is the
 /// parent's: what the engine writes there directly (a crash, "LLVM ERROR").
 /// An `Err` is a child that ended or does not follow the protocol.
 ///
@@ -51,6 +61,9 @@ pub struct Child {
     /// None once closed, in [`Drop`].
     to: Option<BufWriter<ChildStdin>>,
     from: BufReader<ChildStdout>,
+    /// How long a reply may take, and the memory it may take ([`Repl::limit`]).
+    timeout: Option<Duration>,
+    memory: Option<u64>,
     /// Set by [`Child::ended`]: the process spawned is reaped, and its
     /// process group may be gone, its id free for another.
     gone: bool,
@@ -65,7 +78,7 @@ impl Child {
             .process_group(0).spawn()?;
         let to = BufWriter::new(proc.stdin.take().unwrap());
         let from = BufReader::new(proc.stdout.take().unwrap());
-        Ok(Child { proc, to: Some(to), from, gone: false })
+        Ok(Child { proc, to: Some(to), from, timeout: None, memory: None, gone: false })
     }
 
     fn call(&mut self, kind: u32, status: u32, part: &[u8]) -> io::Result<Answer> {
@@ -77,11 +90,18 @@ impl Child {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "the engine ended"));
         }
         let to = self.to.as_mut().expect("open until dropped");
-        let res = wire::write(to, kind, status, [part, b"", b""]).and_then(|_| wire::read(&mut self.from));
+        // a Ctrl-C before is for the student's code
+        INTERRUPTED.store(false, Ordering::Relaxed);
+        let res = wire::write(to, kind, status, [part, b"", b""]).and_then(|_| self.wait()).and_then(|_| wire::read(&mut self.from));
         match res {
             Ok(Some(m)) if m.kind == msg::SC_MSG_REPLY => Ok(m),
             Ok(_) => Err(self.ended()),
             Err(e) if matches!(e.kind(), io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof) => Err(self.ended()),
+            // why it was killed, not how it ended
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                self.ended();
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, e.to_string()))
+            }
             Err(e) => Err(e),
         }
     }
@@ -120,6 +140,57 @@ impl Child {
     /// See [`crate::sys::sc_session_depth`].
     pub fn depth(&mut self, src: &[u8]) -> io::Result<u32> {
         Ok(self.request(msg::SC_MSG_DEPTH, 0, src)?.status)
+    }
+
+    /// Waits for the reply: [`io::ErrorKind::TimedOut`] if it is
+    /// interrupted, takes longer than the timeout or more memory.
+    fn wait(&mut self) -> io::Result<()> {
+        let deadline = self.timeout.map(|t| Instant::now() + t);
+        let fd = self.from.get_ref().as_raw_fd();
+        while self.from.buffer().is_empty() {
+            if INTERRUPTED.swap(false, Ordering::Relaxed) {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "interrupted"));
+            }
+            let mut left = deadline.map_or(-1, |d| d.saturating_duration_since(Instant::now()).as_millis() as c_int);
+            if let Some(m) = self.memory {
+                if self.rss() > m {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, format!("the compiler took more than {} MB", m >> 20)));
+                }
+                // how often the memory is looked at
+                left = if left < 0 { 200 } else { left.min(200) };
+            }
+            let mut p = PollFd { fd, events: POLLIN, revents: 0 };
+            // a signal ends the poll with EINTR, even with SA_RESTART
+            match unsafe { poll(&mut p, 1, left) } {
+                0 if deadline.map_or(true, |d| Instant::now() < d) => continue,
+                0 => {
+                    let t = self.timeout.unwrap_or_default().as_secs();
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, format!("the compiler took more than {t} s")));
+                }
+                n if n < 0 => continue,
+                // readable, or closed: the read says which
+                _ => break,
+            }
+        }
+        Ok(())
+    }
+
+    /// The resident memory of the child: of the largest process of its
+    /// group, which is the one that serves (the copies share its pages).
+    fn rss(&self) -> u64 {
+        let pgid = self.proc.id().to_string();
+        let Ok(dir) = std::fs::read_dir("/proc") else { return 0 };
+        let page = unsafe { sysconf(SC_PAGESIZE) } as u64;
+        dir.flatten()
+            .filter_map(|e| std::fs::read_to_string(e.path().join("stat")).ok())
+            .filter_map(|st| {
+                // the fields after the name: state, ppid, pgrp, ..., rss (the 22nd)
+                let f: Vec<&str> = st.rsplit_once(") ")?.1.split(' ').collect();
+                (f.get(2) == Some(&pgid.as_str())).then(|| f.get(21)?.parse::<u64>().ok()).flatten()
+            })
+            .max()
+            .unwrap_or(0)
+            * page
     }
 
     /// Kills the process spawned and its copy, if any.
@@ -171,10 +242,12 @@ struct PollFd {
 
 const POLLIN: c_short = 1;
 const SIGKILL: c_int = 9;
+const SC_PAGESIZE: c_int = 30;
 
 extern "C" {
     fn poll(fds: *mut PollFd, nfds: u64, timeout: c_int) -> c_int;
     fn kill(pid: c_int, sig: c_int) -> c_int;
+    fn sysconf(name: c_int) -> std::os::raw::c_long;
 }
 
 /// Why a [`Repl`] cannot go on.
@@ -222,17 +295,30 @@ pub struct Repl {
     args: Vec<String>,
     child: Child,
     log: Vec<Entry>,
+    timeout: Option<Duration>,
+    memory: Option<u64>,
 }
 
 impl Repl {
-    /// A child `program session` with a session of `args`.
+    /// A child `program --engine` with a session of `args`.
     pub fn new(program: PathBuf, args: Vec<String>) -> Result<Repl, ReplError> {
-        let child = Repl::start(&program, &args)?;
-        Ok(Repl { program, args, child, log: vec![] })
+        let child = Repl::start(&program, &args, None, None)?;
+        Ok(Repl { program, args, child, log: vec![], timeout: None, memory: None })
     }
 
-    fn start(program: &Path, args: &[String]) -> Result<Child, ReplError> {
-        let mut child = Child::spawn(program, &["session"])?;
+    /// Limits each reply of the child to `timeout`, and its memory to
+    /// `memory` bytes (PLANO-REPL.md §4). A reply that takes longer or
+    /// more, or is [`interrupt`]ed, loses the session ([`Status::Lost`]),
+    /// which a new child replays. After an accepted cell that leaves the
+    /// child above `memory`, a new child replays the log too.
+    pub fn limit(&mut self, timeout: Option<Duration>, memory: Option<u64>) {
+        (self.timeout, self.memory) = (timeout, memory);
+        (self.child.timeout, self.child.memory) = (timeout, memory);
+    }
+
+    fn start(program: &Path, args: &[String], timeout: Option<Duration>, memory: Option<u64>) -> Result<Child, ReplError> {
+        let mut child = Child::spawn(program, &["--engine"])?;
+        (child.timeout, child.memory) = (timeout, memory);
         let a = child.new_session(args)?;
         if a.status != Status::Ok {
             return Err(ReplError::Start(a.diags));
@@ -245,7 +331,7 @@ impl Repl {
     /// as they were. The REPL calls it when the child takes too much memory
     /// (PLANO-REPL.md §4).
     pub fn restart(&mut self) -> Result<(), ReplError> {
-        let mut child = Repl::start(&self.program, &self.args)?;
+        let mut child = Repl::start(&self.program, &self.args, self.timeout, self.memory)?;
         for (i, e) in self.log.iter().enumerate() {
             let a = child.cell(&e.src, Mode::Replay)?;
             if a.status != Status::Ok || a.syms != e.syms {
@@ -305,6 +391,9 @@ impl Repl {
             Status::Ok if mode != Mode::Type => self.log.push(Entry { src: src.to_vec(), syms: a.syms.clone() }),
             Status::Ok | Status::Error | Status::Incomplete => {}
             Status::Lost => self.restart()?,
+        }
+        if self.memory.is_some_and(|m| self.child.rss() > m) {
+            self.restart()?;
         }
         Ok(a)
     }

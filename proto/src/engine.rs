@@ -334,11 +334,31 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write) -> Result<(), Error
     Ok(())
 }
 
+/// The child (`--engine`): [`serve`] on stdin and a copy of stdout. The
+/// engine's own writes to stdout go to stderr, so they cannot break a
+/// message. It ends with its parent: at the end of its input, or killed in
+/// the middle of a cell (the parent's timeout no longer runs; a panic in
+/// `sc` aborts, with no `Drop`).
+pub fn serve_child() -> Result<(), Error> {
+    use std::os::fd::AsFd;
+    unsafe { prctl(PR_SET_PDEATHSIG, SIGKILL) };
+    let out = std::fs::File::from(io::stdout().as_fd().try_clone_to_owned()?);
+    if unsafe { dup2(2, 1) } < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    serve(&mut io::BufReader::new(io::stdin().lock()), &mut io::BufWriter::new(out))
+}
+
 extern "C" {
     fn fork() -> c_int;
     fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int;
     fn _exit(code: c_int) -> !;
+    fn dup2(old: c_int, new: c_int) -> c_int;
+    fn prctl(option: c_int, ...) -> c_int;
 }
+
+const PR_SET_PDEATHSIG: c_int = 1;
+const SIGKILL: c_int = 9;
 
 /// The copy of the child taken before a cell, as its original sees it. The
 /// copy waits on a pipe for one of: `d` (the cell was accepted: the copy

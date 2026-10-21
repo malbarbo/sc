@@ -111,7 +111,7 @@ impl Mode {
 
 pub mod wire;
 mod child;
-pub use child::{Answer, Child, Repl, ReplError};
+pub use child::{interrupt, Answer, Child, Repl, ReplError};
 
 #[cfg(feature = "engine")]
 mod engine;

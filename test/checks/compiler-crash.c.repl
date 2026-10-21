@@ -1,0 +1,4 @@
+int x = 41;
+#pragma clang __debug crash
+#pragma clang __debug llvm_fatal_error
+x + 1

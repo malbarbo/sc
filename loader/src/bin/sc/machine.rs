@@ -8,6 +8,7 @@ use scload::{source_name, Loader, STACK};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use wasmtime::{Engine, Error, ThrownException, Trap, Val, ValType};
 use wasmtime_wasi::{I32Exit, WasiCtxBuilder};
 
@@ -91,7 +92,14 @@ pub struct Machine {
 /// The engine Ctrl-C interrupts: the last session's.
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
 
+/// How long a cell may take to compile, and how much memory the compiler
+/// may keep: above it, a new one replays the cells (PLANO-REPL.md §4).
+const TIMEOUT: Duration = Duration::from_secs(60);
+const MEMORY: u64 = 1 << 30;
+
+/// A Ctrl-C stops the compile or the code that runs, whichever it is.
 extern "C" fn interrupt(_: libc::c_int) {
+    sc_proto::interrupt();
     // the main thread holds the lock only to put a new engine there
     if let Ok(e) = ENGINE.try_lock() {
         if let Some(e) = e.as_ref() {
@@ -100,13 +108,14 @@ extern "C" fn interrupt(_: libc::c_int) {
     }
 }
 
-/// The build directory: `SC_BUILD`, else the one of `build/loader/release/sc`.
+/// The build directory: `SC_BUILD`, else the first one above this binary
+/// with the session's arguments (`build/sc`, `build/loader/release/sc`).
 fn build_dir() -> std::io::Result<PathBuf> {
     if let Some(b) = std::env::var_os("SC_BUILD") {
         return Ok(b.into());
     }
     let exe = std::env::current_exe()?.canonicalize()?;
-    Ok(exe.ancestors().nth(3).map(PathBuf::from).unwrap_or_default())
+    Ok(exe.ancestors().skip(1).find(|d| d.join("repl").is_dir()).map(PathBuf::from).unwrap_or_default())
 }
 
 impl Machine {
@@ -116,7 +125,6 @@ impl Machine {
     /// every loop and call.
     pub fn new(lang: Lang, safety: Safety, argv: Vec<String>, interactive: bool) -> crate::Result<Machine> {
         let b = build_dir()?;
-        let engine = b.join("sc-engine");
         let file = if interactive { "" } else { "-file" };
         let args_file = b.join("repl").join(format!("{}-{}{file}.args", lang.name(), safety.name()));
         let mut args: Vec<String> = std::fs::read_to_string(&args_file)
@@ -133,10 +141,8 @@ impl Machine {
             // unused as a one-shot compile does
             args.insert(link, "-sc-one-cell".into());
         }
-        if !engine.exists() {
-            return Err(format!("{}: not found (make repl)", engine.display()).into());
-        }
-        let repl = Repl::new(engine, args)?;
+        let mut repl = Repl::new(std::env::current_exe()?, args)?;
+        repl.limit(Some(TIMEOUT), Some(MEMORY));
 
         let mut wasi = WasiCtxBuilder::new();
         wasi.inherit_stdio().inherit_env().args(&argv);
