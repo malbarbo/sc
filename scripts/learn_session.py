@@ -47,9 +47,12 @@ def say(msg):
 
 
 def write(names):
-    open(FILE, 'w').write('# functions of cuts/symbols.txt that only the REPL\'s session calls, demangled\n'
-                          '# (scripts/learn_session.py), on top of symbols.used and symbols.host.used\n'
-                          + ''.join(f'{s}\n' for s in sorted(names)))
+    txt = ('# functions of cuts/symbols.txt that only the REPL\'s session calls, demangled\n'
+           '# (scripts/learn_session.py), on top of symbols.used and symbols.host.used\n'
+           + ''.join(f'{s}\n' for s in sorted(names)))
+    # the same list, untouched: the engines that depend on it are not relinked
+    if not os.path.exists(FILE) or open(FILE).read() != txt:
+        open(FILE, 'w').write(txt)
 
 
 def link():
