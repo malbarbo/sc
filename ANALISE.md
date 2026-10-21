@@ -3496,7 +3496,10 @@ binário menor. Por isso o `release` ficou só com `debug = false`. Nele, o
 perfil `dist` herda o `release` e acrescenta o `lto`, o
 `codegen-units = 1`, o `strip`, o `opt-level = "s"` e o
 `panic = "abort"`. O `make dist` gera `build/loader/dist/scload` e
-`build/loader/dist/sc`, com os tamanhos da tabela acima. As baterias não
+`build/loader/dist/sc`, com os tamanhos da tabela acima, num só `cargo`
+com a feature `repl`: a biblioteca compila uma vez, e os dois LTO rodam
+juntos (2,4 min). O `scload` não usa o que a feature traz, e o LTO o
+tira (−4 KB). As baterias não
 testam o binário exato do `dist`, mas as duas versões diferem só no
 perfil, não no código, e o `dist` passou pelas baterias quando era o
 `release`.
@@ -3544,7 +3547,9 @@ As duas bases guardaram `run exit=timeout`, e agora os programas rodam
 (`run exit=0`). Os outros timeouts da primeira rodada (load 85)
 passaram ao rodar de novo com `ONLY`.
 
-**`make test-loader`** (`cargo test` no `loader/`, com a feature `repl`)
+**`make test-loader`** (`cargo test --release` no `loader/`, com a
+feature `repl`, que reaproveita o wasmtime do `make repl`; no perfil de
+debug, os 10⁶ throws levavam 17 s, e em release 0,4 s)
 cobre o que as baterias não alcançam. Os módulos de
 `loader/tests/` são escritos em WAT, com o `wat` como
 dev-dependency, que não entra no binário:

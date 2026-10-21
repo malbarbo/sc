@@ -317,26 +317,26 @@ test-split-wasm: $(B)/sc-engine-wasm $(SCLOAD) $(B)/res/native-base/summary.json
 # --- the REPL's loader: runs the shared objects (native, wasmtime). The same
 # crate has sc, the REPL (a prototype of phase 6b: its compiler is the child
 # sc-engine session, with the arguments in build/repl)
+LOADER_CARGO := --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader
 SCLOAD := $(B)/loader/release/scload
 SC_REPL := $(B)/loader/release/sc
 $(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/lib.rs loader/src/main.rs
-	cargo build --release --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --bin scload
+	cargo build --release $(LOADER_CARGO) --bin scload
 $(SC_REPL): loader/Cargo.toml loader/Cargo.lock $(shell find loader/src -name '*.rs') \
             $(wildcard proto/*.toml proto/*.rs proto/src/*.rs) engine/sc.h
-	cargo build --release --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --features repl --bin sc
+	cargo build --release $(LOADER_CARGO) --features repl --bin sc
 
 loader: $(SCLOAD)
 
 # the binaries that ship, with the profile that makes them small
 # (ANALISE.md §49): build/loader/dist/scload and sc
 dist:
-	cargo build --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --profile dist --bin scload
-	cargo build --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --profile dist --features repl --bin sc
+	cargo build $(LOADER_CARGO) --profile dist --features repl --bins
 
 # what the batteries do not reach: Ctrl-C, many exceptions (loader/tests),
 # and the tests of sc's modules
 test-loader:
-	cargo test --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --features repl
+	cargo test --release $(LOADER_CARGO) --features repl
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc FILE`
 REPL_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/repl/$l-$s.args $(B)/repl/$l-$s-file.args))

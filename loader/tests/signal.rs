@@ -2,7 +2,6 @@
 
 mod common;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 use wasmtime::{Engine, Trap, Val};
@@ -30,17 +29,14 @@ fn signal_stops_a_loop() {
         std::thread::sleep(Duration::from_millis(200));
         unsafe { libc::pthread_kill(me, libc::SIGUSR1) };
     });
-    // a loop the signal does not stop would hang the test
-    static STOPPED: AtomicBool = AtomicBool::new(false);
+    // a loop the signal does not stop would hang the test. The process,
+    // with only this test, ends with it
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_secs(30));
-        if !STOPPED.load(Ordering::Relaxed) {
-            eprintln!("signal_stops_a_loop: the signal did not stop the loop");
-            std::process::exit(1);
-        }
+        eprintln!("signal_stops_a_loop: the signal did not stop the loop");
+        std::process::exit(1);
     });
     let e = l.call("spin", &[]).unwrap_err();
-    STOPPED.store(true, Ordering::Relaxed);
     t.join().unwrap();
     assert_eq!(e.downcast_ref::<Trap>(), Some(&Trap::Interrupt), "{e:?}");
     // the REPL goes on: armed again, the next call runs

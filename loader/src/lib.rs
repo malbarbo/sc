@@ -236,35 +236,41 @@ fn align(x: u32, a: u32) -> u32 {
     (x + a - 1) & !(a - 1)
 }
 
-/// Adds `ft` to `types`.
-fn encode_type(types: &mut we::TypeSection, ft: &FuncType) {
-    let ty = |t: ValType| match t {
-        ValType::I32 => we::ValType::I32, ValType::I64 => we::ValType::I64,
-        ValType::F32 => we::ValType::F32, ValType::F64 => we::ValType::F64, _ => we::ValType::EXTERNREF,
-    };
-    types.ty().function(ft.params().map(ty), ft.results().map(ty));
+/// A module of functions that each pass their parameters on.
+#[derive(Default)]
+struct Shim {
+    types: we::TypeSection,
+    imports: we::ImportSection,
+    funcs: we::FunctionSection,
+    exports: we::ExportSection,
+    code: we::CodeSection,
 }
 
-/// A function that passes its `n` parameters on to `call`.
-fn trampoline(n: usize, call: impl FnOnce(&mut we::InstructionSink)) -> we::Function {
-    let mut f = we::Function::new([]);
-    let mut sink = f.instructions();
-    for i in 0..n as u32 {
-        sink.local_get(i);
+impl Shim {
+    /// Adds function `k` of type `ft`, with type `k`: its parameters, then
+    /// `call`.
+    fn func(&mut self, k: u32, ft: &FuncType, call: impl FnOnce(&mut we::InstructionSink)) {
+        let ty = |t: ValType| match t {
+            ValType::I32 => we::ValType::I32, ValType::I64 => we::ValType::I64,
+            ValType::F32 => we::ValType::F32, ValType::F64 => we::ValType::F64, _ => we::ValType::EXTERNREF,
+        };
+        self.types.ty().function(ft.params().map(ty), ft.results().map(ty));
+        self.funcs.function(k);
+        let mut f = we::Function::new([]);
+        let mut sink = f.instructions();
+        for i in 0..ft.params().len() as u32 {
+            sink.local_get(i);
+        }
+        call(&mut sink);
+        sink.end();
+        self.code.function(&f);
     }
-    call(&mut sink);
-    sink.end();
-    f
-}
 
-type Sections = (we::TypeSection, we::ImportSection, we::FunctionSection, we::ExportSection, we::CodeSection);
-
-/// The bytes of a module of these sections.
-fn encode(types: we::TypeSection, imports: we::ImportSection, funcs: we::FunctionSection,
-          exports: we::ExportSection, code: we::CodeSection) -> Vec<u8> {
-    let mut m = we::Module::new();
-    m.section(&types).section(&imports).section(&funcs).section(&exports).section(&code);
-    m.finish()
+    fn finish(&self) -> Vec<u8> {
+        let mut m = we::Module::new();
+        m.section(&self.types).section(&self.imports).section(&self.funcs).section(&self.exports).section(&self.code);
+        m.finish()
+    }
 }
 
 // symbols of the loading protocol, which stay out of the symbol table
@@ -397,19 +403,17 @@ impl Loader {
             return Ok(());
         }
         // function k calls import k
-        let (mut types, mut imports, mut funcs, mut exports, mut code): Sections = Default::default();
+        let mut shim = Shim::default();
         let memory = we::MemoryType { minimum: 0, maximum: None, memory64: false, shared: false, page_size_log2: None };
-        imports.import("env", "memory", memory);
-        exports.export("memory", we::ExportKind::Memory, 0);
+        shim.imports.import("env", "memory", memory);
+        shim.exports.export("memory", we::ExportKind::Memory, 0);
         for (k, (n, ft)) in need.iter().enumerate() {
             let k = k as u32;
-            encode_type(&mut types, ft);
-            imports.import("wasi_snapshot_preview1", n, we::EntityType::Function(k));
-            funcs.function(k);
-            exports.export(n, we::ExportKind::Func, need.len() as u32 + k);
-            code.function(&trampoline(ft.params().len(), |s| { s.call(k); }));
+            shim.imports.import("wasi_snapshot_preview1", n, we::EntityType::Function(k));
+            shim.exports.export(n, we::ExportKind::Func, need.len() as u32 + k);
+            shim.func(k, ft, |s| { s.call(k); });
         }
-        let m = Module::new(&self.engine, encode(types, imports, funcs, exports, code))?;
+        let m = Module::new(&self.engine, shim.finish())?;
         let inst = self.linker.instantiate(&mut self.store, &m)?;
         for (n, _) in need {
             let f = inst.get_func(&mut self.store, &n).unwrap();
@@ -475,17 +479,15 @@ impl Loader {
         if need.is_empty() {
             return Ok(HashMap::new());
         }
-        let (mut types, mut imports, mut funcs, mut exports, mut code): Sections = Default::default();
+        let mut shim = Shim::default();
         let table = we::TableType { element_type: we::RefType::FUNCREF, table64: false, minimum: 0, maximum: None, shared: false };
-        imports.import("env", "__indirect_function_table", table);
+        shim.imports.import("env", "__indirect_function_table", table);
         for (k, (n, ft)) in need.iter().enumerate() {
             let (k, slot) = (k as u32, self.reserve_slot(&self.target(n), Some(ft))?);
-            encode_type(&mut types, ft);
-            funcs.function(k);
-            exports.export(&format!("s{k}"), we::ExportKind::Func, k);
-            code.function(&trampoline(ft.params().len(), |s| { s.i32_const(slot as i32).call_indirect(0, k); }));
+            shim.exports.export(&format!("s{k}"), we::ExportKind::Func, k);
+            shim.func(k, ft, |s| { s.i32_const(slot as i32).call_indirect(0, k); });
         }
-        let m = Module::new(&self.engine, encode(types, imports, funcs, exports, code))?;
+        let m = Module::new(&self.engine, shim.finish())?;
         let inst = Instance::new(&mut self.store, &m, &[self.table.into()])?;
         let mut out = HashMap::new();
         for (k, (n, _)) in need.into_iter().enumerate() {
