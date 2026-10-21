@@ -264,31 +264,31 @@ test-session-warn: $(B)/sc $(SCLOAD) $(B)/res/session-wev-base/summary.json
 # protocol's loop over wasmtime (sc with the feature wasm). <host>.wasm is its
 # engine, compiled to <host>.cwasm; -cut has the names, for the cut function
 # a trap calls. The slices are checked against the one-shot sc.wasm's bases
-SC_ENGINE_WASM := $(B)/cargo-wasm/release/sc
-$(SC_ENGINE_WASM): $(RUST)
+SC_WASM := $(B)/cargo-wasm/release/sc
+$(SC_WASM): $(RUST)
 	cargo build --release $(CARGO) --features wasm --target-dir $(B)/cargo-wasm --bin sc
 
-$(B)/sc-engine-wasm-full: $(SC_ENGINE_WASM) $(B)/sc-full.wasm
-$(B)/sc-engine-wasm-cut: $(SC_ENGINE_WASM) $(B)/sc-cut.wasm
-$(B)/sc-engine-wasm: $(SC_ENGINE_WASM) $(B)/sc.wasm
-$(B)/sc-engine-wasm-full $(B)/sc-engine-wasm-cut $(B)/sc-engine-wasm:
+$(B)/sc-wasm-full: $(SC_WASM) $(B)/sc-full.wasm
+$(B)/sc-wasm-cut: $(SC_WASM) $(B)/sc-cut.wasm
+$(B)/sc-wasm: $(SC_WASM) $(B)/sc.wasm
+$(B)/sc-wasm-full $(B)/sc-wasm-cut $(B)/sc-wasm:
 	cp $< $@ && ln -sf $(notdir $(word 2,$^)) $@.wasm && $@ --precompile
 
-$(B)/res/session-wasm-base/summary.json: $(B)/sc-engine-wasm-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/base/summary.json
-	test/session.py $< $(@D)
+$(B)/res/session-wasm-base/summary.json: $(B)/sc-wasm-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/base/summary.json
+	test/session.py --wasm $< $(@D)
 
-$(B)/res/session-wasm-wev-base/summary.json: $(B)/sc-engine-wasm-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/wev-base/summary.json
-	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $< $(@D)
+$(B)/res/session-wasm-wev-base/summary.json: $(B)/sc-wasm-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/wev-base/summary.json
+	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py --wasm $< $(@D)
 
-test-session-wasm: $(B)/sc-engine-wasm $(SCLOAD) $(B)/res/session-wasm-base/summary.json
-	test/session.py $(B)/sc-engine-wasm $(B)/res/session-wasm $(B)/res/session-wasm-base/summary.json
+test-session-wasm: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-base/summary.json
+	test/session.py --wasm $(B)/sc-wasm $(B)/res/session-wasm $(B)/res/session-wasm-base/summary.json
 
-test-session-wasm-warn: $(B)/sc-engine-wasm $(SCLOAD) $(B)/res/session-wasm-wev-base/summary.json
-	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $(B)/sc-engine-wasm $(B)/res/session-wasm-wev \
+test-session-wasm-warn: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-wev-base/summary.json
+	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py --wasm $(B)/sc-wasm $(B)/res/session-wasm-wev \
 	  $(B)/res/session-wasm-wev-base/summary.json
 
-test-split-wasm: $(B)/sc-engine-wasm $(SCLOAD) $(B)/res/native-base/summary.json
-	test/split.py $(B)/sc-engine-wasm $(B)/res/split-wasm
+test-split-wasm: $(B)/sc-wasm $(SCLOAD) $(B)/res/native-base/summary.json
+	test/split.py $(B)/sc-wasm $(B)/res/split-wasm
 
 # --- the REPL's loader, runs the shared objects (native, wasmtime): scload,
 # for the batteries, without the engine; and sc, with the cut engine
@@ -386,7 +386,7 @@ learn-session: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o 
 
 # after learn-session: what only sc.wasm's session calls, into the same list
 learn-session-wasm: $(WENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj $(B)/res/session-wasm-wev-base/summary.json \
-    $(B)/res/native-base/summary.json $(SCLOAD) $(SC_ENGINE_WASM)
+    $(B)/res/native-base/summary.json $(SCLOAD) $(SC_WASM)
 	scripts/learn_session.py --wasm
 
 # the invocation built by engine/sc_inv.cpp against clang's option parser (native)
@@ -428,4 +428,4 @@ size: $(B)/sc.wasm
 	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
 clean:
-	rm -rf $(B)/engine $(B)/engine-host $(B)/link-session $(B)/cargo* $(B)/sc-full $(B)/sc-engine-wasm* $(B)/res/split* $(B)/res/session* $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/res/sc* $(B)/res/native
+	rm -rf $(B)/engine $(B)/engine-host $(B)/link-session $(B)/cargo* $(B)/sc-full $(B)/sc-wasm* $(B)/res/split* $(B)/res/session* $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/res/sc* $(B)/res/native

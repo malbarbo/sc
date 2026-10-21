@@ -3,8 +3,8 @@
 with the protocol's loop (build/sc), as the REPL drives it,
 `<engine> --replay` (src/bin/sc/main.rs). split- is test/split.py.
 
-usage: session.py [--update] [<engine> [<outdir> [<base summary.json>]]]
-       (build/sc, build/res/session)
+usage: session.py [--update] [--wasm] [<engine> [<outdir> [<base summary.json>]]]
+       (build/sc, build/res/session); --wasm: <engine> is a host of sc.wasm
 SLICES=ses,seq,crash,mem picks the slices (all); ONLY=<name>,... (or a
 file of names) the results; JOBS sets the parallelism (48); WFLAGS adds warning flags to the
 session's (e.g. -Weverything; then seq- is not checked against expected.txt)
@@ -30,7 +30,7 @@ mem-    1000 small cells, C and C++, each in one session: after the first
         100, the child's RSS grows by less than 50 KB a cell, and by less
         than 5 MB over any 100 cells, each a link (§4).
 
-A host of sc.wasm (build/sc-engine-wasm, the engine <engine>.wasm,
+A host of sc.wasm (build/sc-wasm, the engine <engine>.wasm,
 PLANO-REPL.md §5.2) is checked against the one-shot sc.wasm (build/res/base
 and wev-base), where the native engine differs (a crash, the stack), and in
 mem- its memory.size stands for the RSS.
@@ -55,10 +55,10 @@ SEQ = f'{R}/test/seq'
 W_EXTRA = os.environ.get('WFLAGS', '').split()
 # the one-shot engine's results, with the same warnings: -Weverything turns
 # some errors into warnings
-UPDATE = sys.argv[1:2] == ['--update']
-ARGS = sys.argv[1 + UPDATE:]
+UPDATE = '--update' in sys.argv[1:]
+WASM = '--wasm' in sys.argv[1:]  # sc with the feature wasm
+ARGS = [a for a in sys.argv[1:] if a not in ('--update', '--wasm')]
 ENG = os.path.realpath(ARGS[0] if ARGS else f'{B}/sc')
-WASM = os.path.basename(ENG).startswith('sc-engine-wasm')  # sc with the feature wasm
 BASE = f'{B}/res/{"" if WASM else "native-"}{"wev-" if W_EXTRA else ""}base'
 OUT = os.path.realpath(ARGS[1] if len(ARGS) > 1 else f'{B}/res/session')
 # where a session is not the whole compile (ANALISE.md §46)

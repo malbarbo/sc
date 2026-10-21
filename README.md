@@ -82,7 +82,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
     `main`, `serve`; `ANALISE.md` §23 and §24). `make test-proto` runs its
     tests (`tests/session.rs`) on the uncut engine. With the `wasm`
     feature, the same API calls `sc.wasm`'s exports through wasmtime
-    (`src/engine/wasm.rs`): `build/sc-engine-wasm`, the test host of the
+    (`src/engine/wasm.rs`): `build/sc-wasm`, the test host of the
     module (`ANALISE.md` §48).
   - `src/loader.rs` loads wasm shared objects the way the REPL does:
     `libc.so` and `libc++.so` from wasi-sdk, then each input, sharing one
@@ -197,7 +197,7 @@ make learn-session-wasm # then what only sc.wasm's session calls
 make test-split  # the corpus's programs as REPL cells (build/sc)
 make test-session # the session's other slices (test/session.py) against the uncut engine
 make test-session-warn # ses-, seq- and crash- with -Weverything
-make test-session-wasm # the same slices on sc.wasm's session (build/sc-engine-wasm)
+make test-session-wasm # the same slices on sc.wasm's session (build/sc-wasm)
 make test-session-wasm-warn
 make test-split-wasm
 ```

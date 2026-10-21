@@ -1,6 +1,6 @@
 //! The raw functions of `engine/sc.h` over `sc.wasm`'s exports, through
 //! wasmtime (the `wasm` feature, PLANO-REPL.md §5.2): what `sys` is with the
-//! linked engine, for build/sc-engine-wasm, the test host of the module.
+//! linked engine, for build/sc-wasm, the test host of the module.
 //!
 //! The module is `<the program>.wasm`, precompiled to `<the program>.cwasm`
 //! by `<the program> --precompile`. Each session is a new instance in a
@@ -70,7 +70,7 @@ fn shared() -> &'static Shared {
         p1::add_to_linker_sync(&mut linker, |c| c).unwrap();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").canonicalize().unwrap();
-        let tmp = std::env::temp_dir().join(format!("sc-engine-wasm-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("sc-wasm-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         Shared { engine, module, linker, rt, root, tmp }
     })

@@ -603,6 +603,14 @@ compile inteiro, com o motivo, está no `KNOWN` do script (ANALISE.md
 engines **sem cortes** (`sc-host-full`, `sc-full.wasm`). O engine cortado
 só entra na fase 4, depois do aprendizado.
 
+**Nomes.** O plano usa os nomes da época de cada fase. Hoje eles são:
+- `sc-host-full` e `sc-host-cut`: o `build/sc-full` e o `build/sc`, com
+  `sc --cc1` e `sc --ld`;
+- `sc-engine-full` e `sc-engine`: o `build/sc-full` e o `build/sc`, com
+  `sc --engine` e `sc --replay`;
+- `sc-proto` (`proto/`): o crate `sc`, na raiz;
+- `sc-engine-wasm*`: o `build/sc-wasm*`.
+
 | fase | entrega | critério de saída |
 | --- | --- | --- |
 | P. pin | `llvmorg-23.1.3`: rebase de `llvm/*.patch`, rebuild, `make learn`/`test`/`test-warn`/`checkinv`, tamanho no ANALISE | os critérios de sempre. As fases 0 em diante só começam depois dela |

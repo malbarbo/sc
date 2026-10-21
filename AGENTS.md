@@ -25,7 +25,7 @@ make test-proto  # src/engine, the Rust API over engine/sc.h, and sc's modules, 
 make test-split  # the corpus as REPL cells, after changing the session or the loader
 make test-session # the session's slices on build/sc against the uncut engine (build/sc-full)
 make test-session-warn # ses-, seq- and crash- with -Weverything
-make test-session-wasm # the same slices on sc.wasm's session (build/sc-engine-wasm)
+make test-session-wasm # the same slices on sc.wasm's session (build/sc-wasm)
 make test-session-wasm-warn # and test-split-wasm
 make repl        # build/cargo/release/sc, the REPL (sc, sc FILE, sc help), unstripped
 cargo build --release # the same sc (build.rs runs make sc-deps)

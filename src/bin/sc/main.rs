@@ -17,7 +17,7 @@
 //! from 1, in three digits); an undo removes the last one. It exits with 1
 //! if the session cannot go on.
 //!
-//! With the `wasm` feature (build/sc-engine-wasm) the engine is
+//! With the `wasm` feature (build/sc-wasm) the engine is
 //! `<this program>.wasm`, which `<this program> --precompile` compiles
 //! first ([`sc::engine::wasm`]).
 

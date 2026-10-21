@@ -3921,3 +3921,12 @@ Como todo engine nativo tem a sessão, o `link.py` liga sempre o
 `sc_session.o` e o `sc_api.o`. O `SC_EXTRA` dos Makefiles saiu, e o
 `engine.args` do `sc` cortado não mudou. O `corpus.py` reconhecia o `sc`
 pelo nome para usar `--cc1` e `--ld`; agora todo engine nativo é o `sc`.
+
+**O host de teste do `sc.wasm` passa a se chamar `build/sc-wasm`** (antes,
+`sc-engine-wasm`, do tempo do `build/sc-engine`), e as variantes viram
+`sc-wasm-full` e `sc-wasm-cut`. O `session.py` reconhecia o host pelo nome.
+Testar a existência de `<engine>.wasm`, onde o host busca o seu engine, não
+serve: o `build/sc.wasm` fica ao lado do `build/sc` nativo. Por isso o
+`session.py` passou a receber `--wasm`, como o `learn_session.py`, e o host
+do `learn_session.py --wasm` passou a ser um `sc` qualquer. O
+`PLANO-REPL.md` §5 ganhou uma tabela que liga os nomes antigos aos de hoje.

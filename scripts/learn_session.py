@@ -19,7 +19,7 @@ then all of them again. The slices:
 
 --wasm learns what only sc.wasm's session calls (PLANO-REPL.md §5.2),
 into the same list: the cut sc.wasm with its names (link.py, as
-sc-cut.wasm) under the test host build/sc-engine-wasm (sc, feature
+sc-cut.wasm) under the test host build/sc-wasm (sc, feature
 wasm), which says the cut function a trap calls; the base is
 build/res/session-wasm-wev-base.
 """
@@ -32,7 +32,7 @@ from corpuslib import IGNORE, norm_hash
 B = f'{R}/build'
 WASM = sys.argv[1:] == ['--wasm']
 D = f'{B}/link-session-learn{"-wasm" * WASM}'
-ENG = f'{D}/sc-engine-wasm' if WASM else f'{D}/sc'  # test/session.py knows a host by its name
+ENG = f'{D}/sc'  # with --wasm, a host whose engine is ENG.wasm (test/session.py --wasm)
 FILE = f'{R}/cuts/symbols.session.used'
 BASE = json.load(open(f'{B}/res/session-{"wasm-" * WASM}wev-base/summary.json'))
 BASE = {k: v for k, v in BASE.items() if k.split('-', 1)[1] not in IGNORE}
@@ -87,7 +87,7 @@ def slice_run(cmd, out, only, env={}):
 def ses(only):
     """the results of ses-, seq- and crash- that differ from the base"""
     out = f'{D}/ses'
-    slice_run([f'{R}/test/session.py'], out, only, {'WFLAGS': '-Weverything', 'SLICES': 'ses,seq,crash'})
+    slice_run([f'{R}/test/session.py'] + ['--wasm'] * WASM, out, only, {'WFLAGS': '-Weverything', 'SLICES': 'ses,seq,crash'})
     names = BASE if only is None else only
     return [k for k in names if not os.path.exists(f'{out}/{k}.txt') or norm_hash(open(f'{out}/{k}.txt').read()) != BASE[k]]
 

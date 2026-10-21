@@ -43,7 +43,7 @@ default = ["engine"]
 # which it asks make for
 engine = ["dep:bindgen", "dep:bpaf", "dep:rustyline", "dep:dirs"]
 # the same API over sc.wasm's exports through wasmtime (src/engine/wasm.rs),
-# in place of the linked engine: build/sc-engine-wasm (PLANO-REPL.md §5.2)
+# in place of the linked engine: build/sc-wasm (PLANO-REPL.md §5.2)
 wasm = ["engine", "dep:tokio"]
 
 [[bin]]
