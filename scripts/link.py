@@ -10,7 +10,9 @@ usage: link.py [--native] [--full | --learn] [--emit-link <file>] <out>
              cuts/symbols.used is rebuilt from a traced run
   --native   the native engine (x86-64 ELF) from the host LLVM build
              (build/host), with the same cuts; a cut function prints its
-             name and aborts
+             name and aborts. --native --learn runs the corpus on sc, the
+             REPL with this engine linked in, and rewrites
+             cuts/symbols.host.used
   --emit-link  also write to <file>, one per line, the arguments that link
              the same engine into another program (build.rs): the
              objects without sc_entry.o (main), the archives, the stubs and
@@ -37,7 +39,7 @@ For experiments, SC_CUTS, SC_ENGINE (dir of the engine objects), SC_EXTRA
 (more engine objects), SC_LINKDIR
 and SC_BASE (the corpus baseline) override the defaults.
 """
-import json, os, re, shlex, subprocess, sys
+import json, os, re, shlex, shutil, subprocess, sys
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/test')
@@ -81,8 +83,8 @@ def ninja_cmd(target):
 
 # --- the link line: clang's, with the engine objects in place of the driver
 # sc.wasm is a reactor with the session (sc.h) too: its exports below
-ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine{H}')}/{f}.o" for f in ('sc_entry', 'sc_main', 'sc_inv', 'sc_backend', 'sc_cuts')
-          + (() if NATIVE else ('sc_session', 'sc_api', 'sc_start'))]
+ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine{H}')}/{f}.o" for f in ('sc_entry', 'sc_main', 'sc_inv', 'sc_backend', 'sc_cuts',
+                                                                         'sc_session', 'sc_api') + (() if NATIVE else ('sc_start',))]
 ENGINE += os.environ.get('SC_EXTRA', '').split()  # more engine objects, for experiments
 toks = shlex.split(ninja_cmd('bin/clang-23').split(': && ', 1)[1].removesuffix(' && :'))
 flags = [t for t in toks if not t.endswith(('.a', '.obj', '.o')) and t not in ('-o', 'bin/clang-23', '-Os', '-Xlinker')
@@ -211,13 +213,28 @@ def undefined(cmd, prefix=''):
     return sigs
 
 
+def emit(path):
+    """the arguments that link the engine as linked last into another program"""
+    keep = [t for t in shlex.split(last) if not t.endswith('/sc_entry.o') and (
+        t.startswith(('-l', '-fuse-ld=')) or t.startswith('-Wl,') and 'rpath' not in t or t.endswith(('.o', '.a')))]
+    open(path, 'w').write(''.join(t + '\n' for t in keep))
+
+
 def finish():
     """the engine linked to <out>, and the link arguments to the --emit-link file"""
     os.replace(ENG, out)
     if EMIT:
-        keep = [t for t in shlex.split(last) if not t.endswith('/sc_entry.o') and (
-            t.startswith(('-l', '-fuse-ld=')) or t.startswith('-Wl,') and 'rpath' not in t or t.endswith(('.o', '.a')))]
-        open(EMIT, 'w').write(''.join(t + '\n' for t in keep))
+        emit(EMIT)
+
+
+def repl():
+    """sc, the REPL, with the engine as linked last (cargo, as build/sc): the
+    native corpus runs on it, as sc --cc1 and sc --ld"""
+    emit(f'{d}/engine.args')
+    subprocess.check_call(['cargo', 'build', '-q', '--release', '--locked', '--manifest-path', f'{R}/Cargo.toml',
+                           '--target-dir', f'{d}/cargo', '--bin', 'sc'], env=dict(os.environ, SC_LINK_ARGS=f'{d}/engine.args'))
+    shutil.copy(f'{d}/cargo/release/sc', f'{d}/sc')
+    return f'{d}/sc'
 
 
 def link_with_stubs(base, extra, out_, name):
@@ -253,7 +270,7 @@ def traps(res, bad, prefix):
     return set(re.findall(r'^\s+0: +0x[0-9a-f]+ - [^!\s]+!' + prefix + r'(.*)$', txt, re.M))
 
 
-# the engine as linked here: corpus.py runs a .wasm under wasmtime, else natively
+# the engine as linked here: corpus.py runs a .wasm under wasmtime (natively, repl())
 ENG = f'{d}/engine' if NATIVE else f'{d}/engine.wasm'
 
 # --- stage 1: object cuts (learned on the wasm engine only)
@@ -440,7 +457,7 @@ for it in range(100):
     if mode != 'learn':
         say(f'functions: wrapped={len(wrap)} stubs={n}')
         break
-    bad = corpus(ENG, f'{d}/res', only)
+    bad = corpus(repl() if NATIVE else ENG, f'{d}/res', only)
     say(f'functions {it}: wrapped={len(wrap)} stubs={n} corpus{"" if only is None else f" ({len(only)} files)"}='
         + ("OK" if not bad else f"DIFF {len(bad)}"))
     if not bad:

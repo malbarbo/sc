@@ -69,8 +69,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   REPL's session (one clang instance, each cell parsed on top of the ones
   before), `sc_api.cpp` the session part of `sc.h` over it (each cell linked
   into a shared object). `sc_start.cpp` is
-  `sc.wasm`'s `_start`, which has the session too. `build/sc-host-cut`
-  does not: `sc` links the native engine with the session.
+  `sc.wasm`'s `_start`. `sc` links the native engine, with the session too.
 - `Cargo.toml`, `build.rs` and `src/` are the Rust crate `sc`
   (`ANALISE.md` §51). `cargo build --release` makes
   `build/cargo/release/sc` and `scload`: without `SC_LINK_ARGS`, `build.rs`
@@ -230,17 +229,17 @@ a cut rule or bumping LLVM, then `make test`.
 A C or C++ feature the corpus does not cover can reach a stub. The engine then
 traps with `unreachable`.
 
-The native engine (`build/sc-host-cut`) takes the same cuts from a host build of LLVM
+The native engine (the one in `build/sc`) takes the same cuts from a host build of LLVM
 (`build/host`, from the same patched sources). The function names learned on
 wasm are matched by their demangled names, where `int64_t` is `long long`
 on wasm and `long` on x86-64, and `std::` is libc++'s `std::__2` on wasm and
 libstdc++'s `std::__cxx11` natively. What inlines differently on x86-64 adds
-the functions in `cuts/symbols.host.used` (`make learn-native`). A cut
+the functions in `cuts/symbols.host.used` (`make learn-native`, which runs
+the corpus on `sc --cc1` and `sc --ld` as `make test-native` does). A cut
 function prints its name and aborts; cut data is zeros, as at address 0 in
 `sc.wasm`.
 
-The REPL's engine (in `build/sc`) is the native engine with the
-session, cut the same way. What only the session calls is in
+The session in that engine is cut the same way. What only it calls is in
 `cuts/symbols.session.used`, by demangled name, which both engines keep:
 `sc.wasm` has the session too. `make learn-session`
 (`scripts/learn_session.py`) learns it on the native engine, from the

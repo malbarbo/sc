@@ -62,9 +62,8 @@ def link():
             os.symlink('engine.wasm', f'{ENG}.wasm')
         subprocess.check_call([ENG, '--precompile'])
         return
-    e = dict(os.environ, SC_LINKDIR=D, SC_EXTRA=f'{B}/engine-host/sc_session.o {B}/engine-host/sc_api.o')
     subprocess.check_call([f'{R}/scripts/link.py', '--native', '--emit-link', f'{D}/engine.args', f'{D}/engine'],
-                          env=e, stdout=subprocess.DEVNULL)
+                          env=dict(os.environ, SC_LINKDIR=D), stdout=subprocess.DEVNULL)
     subprocess.check_call(['cargo', 'build', '-q', '--release', '--locked', '--manifest-path', f'{R}/Cargo.toml',
                            '--target-dir', f'{D}/cargo', '--bin', 'sc'],
                           env=dict(os.environ, SC_LINK_ARGS=f'{D}/engine.args'))

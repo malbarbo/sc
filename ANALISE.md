@@ -3904,3 +3904,20 @@ passaram. Sozinhos (`JOBS=1`), os três também passam. É a mesma causa das
 duas bases da §49: o limite de 20 s ficava perto do tempo desses programas
 com a máquina cheia. Nenhum programa do corpus fica em laço para sempre, e
 por isso o limite maior não deixa mais lenta nenhuma rodada.
+
+**Os engines nativos de uma passada (`build/sc-host-cut` e `sc-host-full`)
+saíram.** O `sc --cc1` e o `sc --ld` fazem o que eles faziam, com o mesmo
+engine. Eram do tempo em que o REPL ainda não ligava o engine em si mesmo.
+Restavam dois usos:
+- as bases nativas (`native-base` e `native-wev-base`), que agora vêm do
+  `build/sc-full` (o REPL com o engine sem cortes). Elas saíram idênticas às
+  do `sc-host-full`: 17715 hashes cada, nenhum diferente;
+- o `make learn-native`. O `link.py --native --learn` liga o engine, monta
+  o `sc` com ele pelo cargo (como o `learn_session.py`) e roda o corpus
+  nele. Refeito do zero, o `cuts/symbols.host.used` saiu igual, com as
+  mesmas 18 funções, em 15 min (11 rodadas).
+
+Como todo engine nativo tem a sessão, o `link.py` liga sempre o
+`sc_session.o` e o `sc_api.o`. O `SC_EXTRA` dos Makefiles saiu, e o
+`engine.args` do `sc` cortado não mudou. O `corpus.py` reconhecia o `sc`
+pelo nome para usar `--cc1` e `--ld`; agora todo engine nativo é o `sc`.
