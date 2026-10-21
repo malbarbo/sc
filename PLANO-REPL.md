@@ -175,8 +175,10 @@ Medido em 2026-10-01: x86-64, LTO, `opt-level=z`, strip, com um laço C de
 - **WASI:** `wasmtime-wasi` só com `p1`.
 - **Interrupção:** `epoch_interruption`, para interromper um laço infinito
   do aluno sem custo por instrução.
-- O protótipo `scload` de hoje tem 26,7 MB, com as features padrão do wasmtime. O `sc` final ≈ 24,5 MB do engine + 5,7 MB do runtime.
-- O crate novo `sc-proto` é a única dependência a mais.
+- O protótipo `scload` tinha 26,7 MB, com as features padrão do wasmtime
+  (27,5 MB no início da fase 6a). O conjunto final está no §5.3. O `sc` final ≈ 24,5 MB do engine + 5,7 MB do runtime. Medido na fase 6a, o `scload` com o perfil final tem 8,1 MB, e não 5,7 MB (ANALISE.md §49).
+- O `sc` acrescenta o `sc-proto`, o `bpaf`, o `rustyline`, o `dirs` e a
+  `libc` (0,9 MB, ANALISE.md).
 
 ### 1.5 Exceções e `setjmp`/`longjmp`
 
@@ -912,6 +914,108 @@ no LLVM, a libc).
   limpeza da célula com erro lia depois da tabela de lookup, um bug de
   antes da fase 5. Corrigido pelo `llvm/incremental-remove-decl.patch`
   (ANALISE.md §48).
+
+### 5.3 Fase 6a em detalhe: o loader mínimo
+
+**Ponto de partida.** Quase tudo do §1.4 já está no `loader/`, desde as
+fases E+N e o protótipo do `sc`:
+- as tags `__cpp_exception` e `__c_longjmp` são criadas uma vez e
+  compartilhadas, e a exceção não capturada vira o `std::terminate`
+  (`Loader::uncaught`);
+- o `epoch_interruption` existe e é ligado só no REPL interativo
+  (`Loader::arm`, `interrupter`). O `sc FILE` e o `scload` rodam sem ele.
+
+Falta o wasmtime mínimo. Hoje o `loader/Cargo.toml` usa as features
+padrão: o `scload` tem 27,5 MB e o `sc` 28,8 MB. A fase troca isso pelo
+mínimo que o loader usa, mede cada feature e registra o tamanho.
+
+**O que o loader usa do wasmtime** (lido em `loader/src`):
+
+| feature | uso | |
+| --- | --- | --- |
+| `runtime`, `std`, `cranelift` | rodar e compilar as células | fica |
+| `gc`, `gc-drc` | a proposta de exceções só é ligada com `gc` (`config.rs:2551`); `Tag`, `ThrownException`. Sem `gc` o loader compila e só falha ao rodar. O `gc-null` nunca libera: um laço que lança acabaria com o heap | fica |
+| `cache` | `Cache::from_file`, para as bibliotecas do sysroot | a decidir (passo 3) |
+| `parallel-compilation` | implícito: o rayon compila as funções de um módulo em paralelo | a decidir (passo 3) |
+| `wat` | os dois módulos gerados em texto: o calço do WASI (`wasi_shim`) e os stubs de `call_indirect` (`stubs`) | sai (passo 2) |
+| `addr2line`, `demangle` | não: o loader lê o DWARF com o próprio `gimli` e demangla com o `cpp_demangle` (`wasm_backtrace_details` desligado) | sai |
+| `backtrace` | não: é o `std::backtrace` do Rust dentro do `wasmtime::Error`. O `WasmBacktrace` (`keep_stacks`, `blamed`) não depende de feature | sai |
+| `async`, `component-model` | só porque o `wasmtime-wasi` `p1` liga o `p2`, que liga os dois | ficam, à força |
+| `pooling-allocator`, `profiling`, `coredump`, `threads`, `stack-switching`, `debug*`, `gc-copying`, `gc-null`, `wit-parser`, `compile-time-builtins`, `anyhow` | nenhum | saem |
+
+O `wasmtime-wasi` fica com `default-features = false, features = ["p1"]`.
+O `sc-proto` não traz as features padrão de volta: ele só usa o wasmtime
+na feature `wasm`, que o `repl` não liga (conferido com `cargo tree -e
+features`). Um `cargo check` com esse conjunto compila o `scload` e o `sc`.
+
+**O coletor muda.** Com as features padrão, o `Collector::Auto` escolhe o
+`Copying` (`config.rs:3620`), que a documentação do wasmtime diz "not yet
+functional". As bases rodaram com ele. Só com o `gc-drc`, o `Auto` escolhe
+o DRC. É uma mudança de comportamento: um teste novo lança e pega uma
+exceção num laço longo, para ver o heap do GC não acabar.
+
+**Medido antes da fase** (`sc FILE`, load ~54, features padrão):
+
+| programa | cache quente | cache frio |
+| --- | ---: | ---: |
+| C, `puts` | 0,09 s | 0,41 s |
+| C++, `vector::at` com exceção | 2,65 s | 3,72 s |
+
+O cache frio custa a compilação da `libc.so` (1,9 MB) e da `libc++.so`
+(0,9 MB) pelo Cranelift, em paralelo.
+
+**Passos** (todos feitos, ANALISE.md §49):
+
+1. **Features.** `default-features = false` no `wasmtime` com `runtime`,
+   `std`, `cranelift`, `gc`, `gc-drc`, `cache`, `parallel-compilation` e
+   `wat`. O `loader/Cargo.lock` muda (o Makefile usa `--locked`) e vai no
+   commit. Medir o `scload`: tamanho e os tempos da tabela acima. Depois
+   tirar uma por vez as três a decidir e medir de novo. Uma tabela no
+   ANALISE com o custo de cada uma.
+2. **Sem `wat`.** Os dois módulos gerados passam a ser montados pelo
+   `wasm-encoder`, que o compilador do wasmtime já traz. O `wat_sig` some.
+   O ganho foi de 0,86 MB depois do LTO.
+3. **`cache` e `parallel-compilation`.** Decididos pela tabela do passo 1.
+   O padrão é manter os dois: o cache paga a `libc++.so` uma vez por
+   máquina, e sem o rayon o cache frio fica serial.
+4. **Perfil de release.** `lto = true`, `codegen-units = 1`,
+   `strip = true`, e `opt-level` medido: o `z` do §1.4 deixa o binário
+   menor, mas o Cranelift fica mais lento, e isso pesa no cache frio e em
+   cada célula. Medir `3`, `s` e `z` no cache frio do C++ e no
+   `make test-small`. `panic = "abort"` só se nada depender de unwind:
+   não há `catch_unwind` no loader. O wasmtime retoma o panic de uma
+   função do host, sem transformá-lo em erro (conferido, ANALISE.md §49).
+   Feito no perfil `dist` (`make dist`). O `release`, que as baterias
+   usam, ficou sem LTO para compilar rápido.
+5. **`epoch_interruption` e o coletor.** Um alvo novo, `make
+   test-loader` (`cargo test` no loader, com o `wat` como
+   dev-dependency se o passo 2 o tirar): um laço infinito, `arm`, e o
+   `increment_epoch` chamado de um handler de sinal, como o Ctrl-C do
+   `sc` (`machine.rs:94-101`); o laço tem de parar com `Trap::Interrupt`.
+   E o laço que lança do coletor. E medir o custo das checagens no laço de 3·10⁸
+   iterações do §1.4, para confirmar que o `sc FILE` sem elas faz
+   sentido. Medido: abaixo de 1%, então desligá-las não economiza nada
+   que se veja.
+6. **O `proto/`.** O `sc-engine-wasm` é só host de teste e fica com as
+   features padrão. Registrar isso no ANALISE.
+
+**Critério de saída:**
+- `make test`, `test-warn`, `test-native`, `test-split`, `test-split-wasm`,
+  `test-session*`, `test-aluno` e `test-checks` sem diferença. Todos rodam
+  pelo `scload` ou pelo `sc` com as features novas;
+- o `make test-loader` verde;
+- as bases não são refeitas: o `$(SCLOAD)` é só de ordem nas regras das
+  bases, que guardam a saída do loader antigo para comparar;
+- tamanho do `scload` e do `sc` e tempos de cache frio e quente no
+  ANALISE.md (§49), comparados com os 5,7 MB do §1.4.
+
+**Riscos:**
+- uma feature tirada que só falta num caminho raro. A falta aparece como
+  erro do wasmtime na hora, não como saída diferente, mas só no caminho
+  que a usa. As baterias passam pelas exceções, pelo `setjmp`, pelos traps
+  e pelos vazamentos;
+- `opt-level` menor deixar o Cranelift lento demais: o passo 4 mede antes
+  de escolher.
 
 ## 6. Testes
 

@@ -38,7 +38,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size spike test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-aluno test-checks repl clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size spike test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-aluno test-checks repl test-loader dist clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -326,6 +326,17 @@ $(SC_REPL): loader/Cargo.toml loader/Cargo.lock $(shell find loader/src -name '*
 	cargo build --release --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --features repl --bin sc
 
 loader: $(SCLOAD)
+
+# the binaries that ship, with the profile that makes them small
+# (ANALISE.md §49): build/loader/dist/scload and sc
+dist:
+	cargo build --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --profile dist --bin scload
+	cargo build --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --profile dist --features repl --bin sc
+
+# what the batteries do not reach: Ctrl-C, many exceptions (loader/tests),
+# and the tests of sc's modules
+test-loader:
+	cargo test --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader --features repl
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc FILE`
 REPL_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/repl/$l-$s.args $(B)/repl/$l-$s-file.args))

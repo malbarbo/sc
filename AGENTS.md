@@ -29,8 +29,10 @@ make test-session-warn # ses-, seq- and crash- with -Weverything
 make test-session-wasm # the same slices on sc.wasm's session (build/sc-engine-wasm)
 make test-session-wasm-warn # and test-split-wasm
 make repl        # build/loader/release/sc, the REPL (sc, sc FILE, sc help)
+make dist        # build/loader/dist/scload and sc: small, LTO (3 to 6 min)
 make test-aluno  # test/aluno, correct code, at each --safety level (scripts/flags.py)
 make test-checks # test/checks, one bug per program: what sc says of it at each level
+make test-loader # loader/: Ctrl-C, many exceptions, after changing the loader or wasmtime
 ```
 
 The cuts keep the code of every warning: `make learn` runs the corpus with

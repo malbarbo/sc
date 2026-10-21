@@ -45,6 +45,7 @@ use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::path::{Path, PathBuf};
+use wasm_encoder as we;
 use wasmparser::{Dylink0Subsection, KnownCustom, Parser, Payload, SymbolFlags};
 use wasmtime::*;
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
@@ -235,16 +236,35 @@ fn align(x: u32, a: u32) -> u32 {
     (x + a - 1) & !(a - 1)
 }
 
-/// The WAT `(param ..) (result ..)` of `ft`, and the `local.get`s that pass
-/// its parameters on.
-fn wat_sig(ft: &FuncType) -> (String, String) {
+/// Adds `ft` to `types`.
+fn encode_type(types: &mut we::TypeSection, ft: &FuncType) {
     let ty = |t: ValType| match t {
-        ValType::I32 => "i32", ValType::I64 => "i64", ValType::F32 => "f32", ValType::F64 => "f64", _ => "externref",
+        ValType::I32 => we::ValType::I32, ValType::I64 => we::ValType::I64,
+        ValType::F32 => we::ValType::F32, ValType::F64 => we::ValType::F64, _ => we::ValType::EXTERNREF,
     };
-    let sig = format!("(param {}) (result {})", ft.params().map(ty).collect::<Vec<_>>().join(" "),
-                      ft.results().map(ty).collect::<Vec<_>>().join(" "));
-    let args = (0..ft.params().len()).map(|i| format!("local.get {i} ")).collect();
-    (sig, args)
+    types.ty().function(ft.params().map(ty), ft.results().map(ty));
+}
+
+/// A function that passes its `n` parameters on to `call`.
+fn trampoline(n: usize, call: impl FnOnce(&mut we::InstructionSink)) -> we::Function {
+    let mut f = we::Function::new([]);
+    let mut sink = f.instructions();
+    for i in 0..n as u32 {
+        sink.local_get(i);
+    }
+    call(&mut sink);
+    sink.end();
+    f
+}
+
+type Sections = (we::TypeSection, we::ImportSection, we::FunctionSection, we::ExportSection, we::CodeSection);
+
+/// The bytes of a module of these sections.
+fn encode(types: we::TypeSection, imports: we::ImportSection, funcs: we::FunctionSection,
+          exports: we::ExportSection, code: we::CodeSection) -> Vec<u8> {
+    let mut m = we::Module::new();
+    m.section(&types).section(&imports).section(&funcs).section(&exports).section(&code);
+    m.finish()
 }
 
 // symbols of the loading protocol, which stay out of the symbol table
@@ -376,15 +396,20 @@ impl Loader {
         if need.is_empty() {
             return Ok(());
         }
-        let (mut wat, mut funcs) = (String::from("(module (import \"env\" \"memory\" (memory 0)) (export \"memory\" (memory 0))\n"), String::new());
+        // function k calls import k
+        let (mut types, mut imports, mut funcs, mut exports, mut code): Sections = Default::default();
+        let memory = we::MemoryType { minimum: 0, maximum: None, memory64: false, shared: false, page_size_log2: None };
+        imports.import("env", "memory", memory);
+        exports.export("memory", we::ExportKind::Memory, 0);
         for (k, (n, ft)) in need.iter().enumerate() {
-            let (sig, args) = wat_sig(ft);
-            wat += &format!("(import \"wasi_snapshot_preview1\" \"{n}\" (func $i{k} {sig}))\n");
-            funcs += &format!("(func (export \"{n}\") {sig} {args} call $i{k})\n");
+            let k = k as u32;
+            encode_type(&mut types, ft);
+            imports.import("wasi_snapshot_preview1", n, we::EntityType::Function(k));
+            funcs.function(k);
+            exports.export(n, we::ExportKind::Func, need.len() as u32 + k);
+            code.function(&trampoline(ft.params().len(), |s| { s.call(k); }));
         }
-        wat += &funcs;
-        wat += ")";
-        let m = Module::new(&self.engine, &wat)?;
+        let m = Module::new(&self.engine, encode(types, imports, funcs, exports, code))?;
         let inst = self.linker.instantiate(&mut self.store, &m)?;
         for (n, _) in need {
             let f = inst.get_func(&mut self.store, &n).unwrap();
@@ -450,14 +475,17 @@ impl Loader {
         if need.is_empty() {
             return Ok(HashMap::new());
         }
-        let mut wat = String::from("(module (import \"env\" \"__indirect_function_table\" (table 0 funcref))\n");
+        let (mut types, mut imports, mut funcs, mut exports, mut code): Sections = Default::default();
+        let table = we::TableType { element_type: we::RefType::FUNCREF, table64: false, minimum: 0, maximum: None, shared: false };
+        imports.import("env", "__indirect_function_table", table);
         for (k, (n, ft)) in need.iter().enumerate() {
-            let slot = self.reserve_slot(&self.target(n), Some(ft))?;
-            let (sig, args) = wat_sig(ft);
-            wat += &format!("(type $t{k} (func {sig})) (func (export \"s{k}\") (type $t{k}) {args} i32.const {slot} call_indirect (type $t{k}))\n");
+            let (k, slot) = (k as u32, self.reserve_slot(&self.target(n), Some(ft))?);
+            encode_type(&mut types, ft);
+            funcs.function(k);
+            exports.export(&format!("s{k}"), we::ExportKind::Func, k);
+            code.function(&trampoline(ft.params().len(), |s| { s.i32_const(slot as i32).call_indirect(0, k); }));
         }
-        wat += ")";
-        let m = Module::new(&self.engine, &wat)?;
+        let m = Module::new(&self.engine, encode(types, imports, funcs, exports, code))?;
         let inst = Instance::new(&mut self.store, &m, &[self.table.into()])?;
         let mut out = HashMap::new();
         for (k, (n, _)) in need.into_iter().enumerate() {

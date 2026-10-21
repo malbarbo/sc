@@ -350,19 +350,19 @@ error: division by zero
 error: stack overflow (infinite recursion?)
     at impar (mutual.c:3:40)
     at par (mutual.c:5:38)
-    (the 2 frames above, 8187 times)
+    (the 2 frames above, N times)
     at main (mutual.c:7:25)
 == mutual.c on exit=134
 error: stack overflow (infinite recursion?)
     at impar (mutual.c:3:40)
     at par (mutual.c:5:38)
-    (the 2 frames above, 8187 times)
+    (the 2 frames above, N times)
     at main (mutual.c:7:25)
 == mutual.c strict exit=134
 error: stack overflow (infinite recursion?)
     at impar (mutual.c:3:40)
     at par (mutual.c:5:38)
-    (the 2 frames above, 8187 times)
+    (the 2 frames above, N times)
     at main (mutual.c:7:25)
 == null-fn.c off exit=134
 error: call through a null function pointer
@@ -415,21 +415,21 @@ error: signed integer overflow: 479001600 * 13 cannot be represented in type 'in
     at main (overflow.c:13:33)
 == recursion.c off exit=134
 error: stack overflow (infinite recursion?)
-    at fatorial (recursion.c:4:16), 10916 times
+    at fatorial (recursion.c:4:16), N times
     at main (recursion.c:8:20)
 == recursion.c on exit=134
 recursion.c:3:21: warning: all paths through this function will call itself [-Winfinite-recursion]
     3 | int fatorial(int n) {
       |                     ^
 error: stack overflow (infinite recursion?)
-    at fatorial (recursion.c:4:16), 10916 times
+    at fatorial (recursion.c:4:16), N times
     at main (recursion.c:8:20)
 == recursion.c strict exit=134
 recursion.c:3:21: warning: all paths through this function will call itself [-Winfinite-recursion]
     3 | int fatorial(int n) {
       |                     ^
 error: stack overflow (infinite recursion?)
-    at fatorial (recursion.c:4:16), 10916 times
+    at fatorial (recursion.c:4:16), N times
     at main (recursion.c:8:20)
 == regra-dos-tres.cpp off exit=0
 ana

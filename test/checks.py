@@ -8,7 +8,7 @@ NAME.cpp.repl goes, a line at a time, to the REPL.
 
 usage: checks.py [--update]   --update writes expected.txt
 """
-import difflib, glob, os, subprocess, sys
+import difflib, glob, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -31,6 +31,9 @@ def one(job):
     # value reads at off (optional.cpp): none
     r = subprocess.run(cmd, cwd=D, input=stdin, capture_output=True, timeout=120, env={'NO_COLOR': '1'})
     out = (r.stdout + r.stderr).decode(errors='replace')
+    # how deep a recursion overflows moves with the native stack the host
+    # takes (rustc, wasmtime, the profile): ANALISE.md §49
+    out = re.sub(r'^(    (?:at .*|\(the \d+ frames above)), \d+ times', r'\1, N times', out, flags=re.M)
     return f'== {name} {level} exit={r.returncode}\n{out}'
 
 

@@ -3423,3 +3423,171 @@ para 2,25 s. Não há diferença que pese.
 
 O `node:wasi` recusa um módulo com `_initialize` e `_start`. O
 `bench/cc.mjs` usa o contorno do README e roda.
+
+## 49. Fase 6a do REPL: o loader mínimo
+
+O plano está no §5.3 do PLANO-REPL.md, e os seis passos estão feitos:
+- as features;
+- a saída do `wat`;
+- o `cache` e o `parallel-compilation`;
+- o perfil de release;
+- o `make test-loader`;
+- o registro do `proto/`.
+
+**Tamanho.** Cada linha soma uma mudança à anterior:
+
+| loader | `scload` | `sc` |
+| --- | ---: | ---: |
+| features padrão (início da fase) | 27,5 MB | 28,8 MB |
+| o conjunto mínimo do §5.3 | 24,1 MB | 25,5 MB |
+| `lto`, `codegen-units = 1`, `strip`, `opt-level = "s"` | 9,9 MB | 10,6 MB |
+| `panic = "abort"` | 9,0 MB | 9,6 MB |
+| sem `wat`: o `wasm-encoder` monta os dois módulos | 8,1 MB | 8,7 MB |
+
+O loader passou do `wasmparser` 0.239 ao 0.254, o mesmo do wasmtime, e o
+binário ficou com uma cópia só. O ganho foi de 5 KB no `scload` e de 9 KB
+no `sc`, porque o LTO já tinha tirado quase toda a cópia antiga.
+
+O §1.4 do plano previa 5,7 MB, mas com outro cenário. Lá eram
+`opt-level = "z"`, sem `cache` e sem `parallel-compilation`, e só um laço
+C: sem o `wasmparser`, o `gimli` e o `cpp_demangle` do loader. Aqui, o
+`s` custa 1,4 MB a mais que o `z`, e o `cache`, 0,7 MB. O resto é o
+código do loader.
+
+Quase todo o ganho vem do `lto` com o `strip`. As features tiram só
+3,4 MB, porque o `wasmtime-wasi` `p1` liga o `p2`, que traz o
+`component-model` e o `async` de volta.
+
+**Cada feature, com o perfil final.** Tirar o `wat` economiza 0,86 MB, e
+tirar o `cache`, 0,69 MB. Sem o perfil, o `parallel-compilation` custa
+0,3 MB.
+- O `wat` saiu sem bytes à mão. O `wasm-encoder` 0.254 já está no binário
+  pela feature `compile` do `wasmtime-environ`, que o `cranelift` sempre
+  liga. O `Loader::wasi_shim` e o `Loader::stubs` montam os módulos com
+  ele, e o `wat_sig` sumiu.
+- O `cache` e o `parallel-compilation` ficam. Sem o cache, cada `sc FILE`
+  recompila a `libc.so` e a `libc++.so`. A tabela do §5.3 mostra o custo:
+  0,3 s em C e 1 s em C++.
+
+**`opt-level`.** Os tempos são de `sc FILE`, três ou quatro rodadas por
+binário intercaladas, com load de 16 a 18. "Frio" é um
+`XDG_CACHE_HOME` vazio a cada rodada. Todos os binários têm o conjunto
+mínimo de features.
+
+| programa | sem lto | 3 | s | z |
+| --- | --- | --- | --- | --- |
+| C, `puts`, frio | 0,18–0,45 s | 0,16–0,19 s | 0,20–0,25 s | 0,23–0,27 s |
+| C++, `map` e `iostream`, frio | 2,30–2,46 s | 2,25–2,50 s | 2,31–2,40 s | 2,43–2,53 s |
+| C++, `map` e `iostream`, quente | 1,90–2,00 s | 1,92–2,01 s | 1,96–2,09 s | 1,95–2,03 s |
+| C++, 200 mil exceções, quente | 1,54–1,73 s | 1,47–1,58 s | 1,49–1,61 s | 1,71–1,89 s |
+
+- O cache quente é dominado pelo clang dentro do `sc.wasm`, cujo código
+  é o mesmo em todos os binários.
+- O `z` perde de 5% a 8% no frio e uns 15% nas exceções, que passam pelo
+  host. O `s` empata com o `3`. Por isso o `s`.
+- Com o `lto`, o build do `sc` leva de 3 a 6 minutos, contra 1 a 2
+  minutos sem ele.
+
+**Dois perfis.** As baterias usam o `scload` e o `sc` pelo `$(SCLOAD)`
+e pelo `make repl`. Com o LTO no perfil `release`, cada mudança no loader
+custava esses minutos antes de qualquer bateria, que não ganha nada com o
+binário menor. Por isso o `release` ficou só com `debug = false`. Nele, o
+`scload` tem 22,1 MB e o `sc` 23,5 MB, e os dois compilam em 2,5 min. O
+perfil `dist` herda o `release` e acrescenta o `lto`, o
+`codegen-units = 1`, o `strip`, o `opt-level = "s"` e o
+`panic = "abort"`. O `make dist` gera `build/loader/dist/scload` e
+`build/loader/dist/sc`, com os tamanhos da tabela acima. As baterias não
+testam o binário exato do `dist`, mas as duas versões diferem só no
+perfil, não no código, e o `dist` passou pelas baterias quando era o
+`release`.
+
+**`panic = "abort"`.** Nem o loader nem o `proto/` têm `catch_unwind`. O
+wasmtime retoma o panic de uma função do host depois de desfazer os
+quadros do wasm, mas não o transforma em erro. Então o panic só existe
+num bug do loader. Com `abort`, a mensagem continua impressa, e o
+processo termina com SIGABRT em vez do código 101.
+
+**O coletor.** Só com o `gc-drc`, o `Collector::Auto` escolhe o DRC no
+lugar do `Copying`. Um programa que lança e pega 200 mil
+`std::out_of_range` conta todas e termina igual. O `make test-loader`
+confere a memória (abaixo).
+
+**A profundidade do estouro de pilha.** O limite do wasmtime
+(`max_wasm_stack`) mede a pilha nativa a partir da entrada no wasm, e os
+quadros do host contam. Com o perfil `dist`, o host usa menos pilha, e a
+recursão do `test/checks` estoura 3 quadros mais tarde: `fatorial` vai
+de 10.916 para 10.919 vezes, e `par`/`impar` de 8.187 para 8.190. Com os
+dois perfis, a contagem também difere entre o binário das baterias e o
+distribuído. Por isso o `checks.py` troca a contagem por `N` antes de
+comparar (`at fatorial (...), N times`). O teste continua conferindo a
+mensagem e os quadros, só não o número. O `expected.txt` foi refeito, e
+só essas 6 linhas mudaram.
+
+**As baterias** usam o loader novo contra as bases do antigo:
+
+| bateria | resultado |
+| --- | --- |
+| `make test` | 17.715 arquivos, 1 diferença (base com timeout) |
+| `test-warn` | 17.715 arquivos, 1 diferença (base com timeout) |
+| `test-native` | 17.715 arquivos, 0 diferenças |
+| `test-split`, `test-split-wasm` | 1.947 programas, 0 diferenças |
+| `test-session`, `test-session-warn` | 0 ruins |
+| `test-session-wasm`, `test-session-wasm-warn` | 0 ruins |
+| `test-aluno` | passou |
+| `test-checks` | passou, depois do `--update` acima |
+
+As duas diferenças são de bases feitas sob carga alta:
+- `20040811-1-strict` em `base`;
+- `vla-dealloc-1-on` em `wev-base`.
+
+As duas bases guardaram `run exit=timeout`, e agora os programas rodam
+(`run exit=0`). Os outros timeouts da primeira rodada (load 85)
+passaram ao rodar de novo com `ONLY`.
+
+**`make test-loader`** (`cargo test` no `loader/`, com a feature `repl`)
+cobre o que as baterias não alcançam. Os módulos de
+`loader/tests/` são escritos em WAT, com o `wat` como
+dev-dependency, que não entra no binário:
+- **Ctrl-C:** um laço infinito, armado com `arm`, para com
+  `Trap::Interrupt` quando um handler de `SIGUSR1` chama o
+  `increment_epoch`, como o de SIGINT do `sc`. O sinal vai para a thread
+  que roda o laço. Rearmado, o loader roda a chamada seguinte. Se o laço
+  não parar, um vigia encerra o teste com erro em 30 s, em vez de travar.
+  Com o loader feito sem as checagens, o teste falha assim;
+- **o coletor:** depois de 10⁵ exceções, mais 10⁶ não aumentam a memória
+  residente, porque o DRC libera cada exceção.
+
+Cada teste fica num arquivo próprio, e o cargo roda cada arquivo num
+processo separado. Assim o handler de sinal de um teste não alcança o
+outro, e a memória residente só mede as exceções.
+
+O alvo leva cerca de 1 min com o build de debug do wasmtime já feito.
+
+**O custo das checagens de epoch** foi medido com o mesmo programa pelo
+`sc FILE`, sem as checagens, e pelo REPL (`sc repl FILE`), com elas.
+Cada célula da tabela traz o menor de 5 tempos, medidos dentro do
+programa com `clock_gettime`, então a compilação não conta:
+
+| programa | `--safety` | `sc FILE` | REPL |
+| --- | --- | ---: | ---: |
+| laço de 3·10⁸ iterações | `off` | 0,931 s | 0,937 s |
+| laço de 3·10⁸ iterações | `on` | 0,937 s | 0,940 s |
+| laço de 3·10⁸ iterações | `strict` | 0,946 s | 0,964 s |
+| `fib(36)` recursivo | `off` | 0,228 s | 0,229 s |
+
+A diferença fica abaixo de 1% no laço e no programa feito de chamadas, e
+some no ruído da máquina carregada. O Cranelift checa o epoch com uma
+leitura e uma comparação no começo de cada função e de cada laço, e o
+código em `-O0` faz muito mais que isso a cada iteração. Desligar as
+checagens no `sc FILE` não economiza nada que se veja. A única diferença
+é o Ctrl-C, que no `sc FILE` mata o processo. Se o `sc FILE` passar a
+ter o que fazer com um Ctrl-C, ligar as checagens nele não custa nada.
+
+**O `proto/` fica como está.** O `build/sc-engine-wasm` roda o `sc.wasm`
+no wasmtime pela feature `wasm` do `proto/`. É só host de teste, do
+`test-session-wasm` e do `test-split-wasm`, e não vai para o aluno. Por
+isso continua com as features padrão do wasmtime e o perfil de release de
+antes (25,3 MB). Cortar as features ali não reduz nada que se distribua,
+e o LTO acrescentaria minutos a cada build das baterias. O binário que o
+aluno recebe é o `sc` da fase 6b, que usa o loader com o conjunto mínimo
+acima.
