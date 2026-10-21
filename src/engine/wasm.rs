@@ -9,14 +9,14 @@
 //! `_start`. The guest sees the repository at the same path and a directory
 //! of this process as `/tmp`, where the session keeps its cells.
 //!
-//! [`crate::serve`] forks before each cell, which is safe only with one
+//! [`super::serve`] forks before each cell, which is safe only with one
 //! thread: the module is compiled in another process, and WASI runs on a
 //! tokio runtime of this thread that blocks in place.
 //!
 //! A trap or an exit of the guest ends the process, as a crash of the
 //! linked engine does: the trap, and the cut function (frame 0 `__wrap_`,
 //! `sc-cut.wasm`) as scripts/link.py's native stubs say it, go to stderr.
-use crate::sys::sc_session;
+use super::sys::sc_session;
 use std::cell::RefCell;
 use std::ffi::{c_char, c_int, c_uint, CStr};
 use std::path::{Path, PathBuf};

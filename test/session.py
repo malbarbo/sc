@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Phase 3 of PLANO-REPL.md (§6): the REPL's session through a native engine
-with the protocol's loop (build/sc-engine), as the REPL drives it,
-`<engine> repl` (proto/src/bin/sc-engine.rs). split- is test/split.py.
+with the protocol's loop (build/sc), as the REPL drives it,
+`<engine> --replay` (src/bin/sc/main.rs). split- is test/split.py.
 
 usage: session.py [--update] [<engine> [<outdir> [<base summary.json>]]]
-       (build/sc-engine, build/res/session)
+       (build/sc, build/res/session)
 SLICES=ses,seq,crash,mem picks the slices (all); ONLY=<name>,... (or a
 file of names) the results; JOBS sets the parallelism (48); WFLAGS adds warning flags to the
 session's (e.g. -Weverything; then seq- is not checked against expected.txt)
@@ -57,8 +57,8 @@ W_EXTRA = os.environ.get('WFLAGS', '').split()
 # some errors into warnings
 UPDATE = sys.argv[1:2] == ['--update']
 ARGS = sys.argv[1 + UPDATE:]
-ENG = os.path.realpath(ARGS[0] if ARGS else f'{B}/sc-engine')
-WASM = os.path.exists(ENG + '.wasm')
+ENG = os.path.realpath(ARGS[0] if ARGS else f'{B}/sc')
+WASM = os.path.basename(ENG).startswith('sc-engine-wasm')  # sc with the feature wasm
 BASE = f'{B}/res/{"" if WASM else "native-"}{"wev-" if W_EXTRA else ""}base'
 OUT = os.path.realpath(ARGS[1] if len(ARGS) > 1 else f'{B}/res/session')
 # where a session is not the whole compile (ANALISE.md §46)
@@ -128,7 +128,7 @@ def repl(name, p, cells, runs):
         files.append(f'{d}/c{i + 1:03}{os.path.splitext(p)[1]}')
         open(files[-1], 'wb').write(c)
     try:
-        r = run_all([ENG, 'repl', d] + files + ['--'] + flags(p), 120, cwd=os.path.dirname(p))
+        r = run_all([ENG, '--replay', d] + files + ['--'] + flags(p), 120, cwd=os.path.dirname(p))
         # what the engine writes on a crash (a backtrace) is not the
         # session's, but for the cut function it called
         cut = ''.join(re.findall(r'^sc: cut function called: \S+\n', r.stderr.decode(errors='replace'), re.M))

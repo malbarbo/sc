@@ -1,7 +1,7 @@
 //! The module of the tests: one per file, so each runs in its own process
 //! (the signal handler, the resident memory).
 
-use scload::{Loader, STACK};
+use sc::loader::{Loader, STACK};
 use wasmtime_wasi::WasiCtxBuilder;
 
 /// A shared object as the cells are: the C++ exceptions' tag comes from

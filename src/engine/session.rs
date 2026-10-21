@@ -1,10 +1,10 @@
 //! The safe API over the linked engine.
-use crate::{msg, sys, wire, Mode, Status};
+use super::{msg, sys, wire, Mode, Status};
 // the raw functions: the linked engine's, or sc.wasm's exports
 #[cfg(not(feature = "wasm"))]
-use crate::sys as raw;
+use super::sys as raw;
 #[cfg(feature = "wasm")]
-use crate::wasm as raw;
+use super::wasm as raw;
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, CString};
 use std::fmt;
@@ -232,7 +232,7 @@ impl fmt::Debug for Reply<'_> {
     }
 }
 
-/// The child's side of the protocol (`engine/sc.h`, [`crate::Child`]): one
+/// The child's side of the protocol (`engine/sc.h`, [`super::Child`]): one
 /// session at a time, until the end of `input`. The parent waits for each
 /// reply before it sends the next message.
 ///
@@ -383,7 +383,7 @@ impl Copy {
             return Ok(Fork::Original(None));
         };
         #[cfg(feature = "wasm")]
-        crate::wasm::assert_one_thread();
+        super::wasm::assert_one_thread();
         match unsafe { fork() } {
             pid if pid < 0 => Ok(Fork::Original(None)),
             0 => {

@@ -1,16 +1,16 @@
 //! The safe API over the uncut engine: sessions in C and C++, a cell with an
 //! error, the replay, undo, the one-shot engine and the thread rule. The
-//! shared objects run in the loader (build/loader/release/scload).
+//! shared objects run in the loader (build/cargo/release/scload).
 //!
 //! One test of the engine in this process: it stays on the first thread that
-//! uses it. The REPL's side (Repl) goes through children (sc-engine session).
-use sc_proto::{main, Error, Mode, Repl, Session, Status};
+//! uses it. The REPL's side (Repl) goes through children (sc --engine).
+use sc::engine::{main, Error, Mode, Repl, Session, Status};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::{fs, io::Write};
 
 fn build() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build").canonicalize().unwrap()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("build").canonicalize().unwrap()
 }
 
 /// The session's arguments: cc1 for -fPIC, then the link (scripts/flags.py).
@@ -30,7 +30,7 @@ fn run(name: &str, sos: &[Vec<u8>]) -> String {
     let b = build();
     let dir = std::env::temp_dir().join(format!("sc-proto-{}-{name}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
-    let mut cmd = Command::new(b.join("loader/release/scload"));
+    let mut cmd = Command::new(b.join("cargo/release/scload"));
     cmd.arg("-L").arg(b.join("sysroot/lib/wasm32-wasip1"));
     for (i, so) in sos.iter().enumerate() {
         let p = dir.join(format!("{}.so", i + 1));
@@ -130,9 +130,9 @@ fn session() {
 
 #[test]
 fn repl() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
     let mut sos = vec![];
-    fn cell(r: &mut Repl, sos: &mut Vec<Vec<u8>>, src: &str) -> sc_proto::Answer {
+    fn cell(r: &mut Repl, sos: &mut Vec<Vec<u8>>, src: &str) -> sc::engine::Answer {
         let a = r.cell(src.as_bytes()).unwrap();
         if a.status == Status::Ok {
             sos.push(a.so.clone());
@@ -165,7 +165,7 @@ fn repl() {
     drop(r);
 
     // nothing to undo
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
     assert_eq!(r.undo().unwrap().status, Status::Error);
 }
 
@@ -173,7 +173,7 @@ fn repl() {
 /// leaves nothing; the depth comes from the lexer.
 #[test]
 fn whole() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
     let mut st = |src: &str| r.cell_if_whole(src.as_bytes()).unwrap().status;
     for src in [
         "int main(void)",
@@ -221,7 +221,7 @@ fn whole() {
 
 #[test]
 fn show() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
     let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
     let has = |so: &[u8], s: &str| so.windows(s.len()).any(|w| w == s.as_bytes());
     assert_eq!(cell("int x = 3; struct p { int a; } q;").status, Status::Ok);
@@ -247,7 +247,7 @@ fn show() {
     assert!(a.diags.contains("must be directly called"), "{}", a.diags);
 
     // C++: the temporaries die after the call
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(true)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true)).unwrap();
     let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
     assert_eq!(cell("struct T { ~T() {} int n() { return 1; } }; T t;").status, Status::Ok);
     let a = cell("T().n()");
@@ -262,7 +262,7 @@ fn show() {
 /// of the expression stays in the session.
 #[test]
 fn type_of() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(false)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false)).unwrap();
     assert_eq!(r.cell(b"int x = 3; struct p { int a; } q;").unwrap().status, Status::Ok);
     let mut ty = |src: &str| {
         let a = r.type_of(src.as_bytes()).unwrap();
@@ -285,7 +285,7 @@ fn type_of() {
 
     // C++: the names of a class or a template's inside are left out; the
     // copy constructor Sema defines goes with the expression
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc-engine").into(), args(true)).unwrap();
+    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true)).unwrap();
     let src = "#include <string>\n#include <vector>\nstd::string s; std::vector<int> v; struct T { std::string a; } t;";
     assert_eq!(r.cell(src.as_bytes()).unwrap().status, Status::Ok);
     for (src, want) in [("s", "std::string"), ("s + \"c\"", "std::string"), ("s.size()", "size_t"),

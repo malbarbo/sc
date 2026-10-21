@@ -1,5 +1,5 @@
 //! The messages on the pipes between the REPL and its child (`engine/sc.h`).
-use crate::MsgHeader;
+use super::MsgHeader;
 use std::io::{self, Read, Write};
 
 /// A message: its kind, its status and its three parts.

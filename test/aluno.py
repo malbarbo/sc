@@ -10,7 +10,7 @@ import collections, glob, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-SC = f'{R}/build/loader/release/sc'
+SC = f'{R}/build/cargo/release/sc'
 EXPECTED = f'{R}/test/aluno/expected.txt'
 LEVELS = ('off', 'on', 'strict')
 STDIN = b'1\n2\n2\n9\n'  # the menu's options, lines for those that read them

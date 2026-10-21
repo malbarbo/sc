@@ -27,6 +27,14 @@ WASM_OPTS := -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/$(B)/Toolchain-WASI-LLVM.cmake -DL
   -DCLANG_INCLUDE_TESTS=OFF -DCLANG_BUILD_TOOLS=OFF -DCLANG_BUILD_EXAMPLES=OFF -DCLANG_INCLUDE_DOCS=OFF \
   -DLLD_BUILD_TOOLS=OFF -DDEFAULT_SYSROOT=/usr -DCLANG_RESOURCE_DIR=/usr
 
+# the Rust crate (Cargo.toml): sc and scload in build/cargo, where cargo
+# build puts them too (.cargo/config.toml). Each variant of the engine sc
+# links (SC_LINK_ARGS, build.rs) builds in a directory of its own
+CARGO := --locked
+RUST := Cargo.toml Cargo.lock build.rs $(shell find src -name '*.rs') engine/sc.h
+SCLOAD := $(B)/cargo/release/scload
+SC_REPL := $(B)/cargo/release/sc
+
 ENGINE := sc_entry sc_main sc_inv sc_backend sc_cuts
 # sc.wasm: a reactor with the session too (PLANO-REPL.md §5.2); scripts/link.py
 # has the same lists
@@ -38,7 +46,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size spike test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-aluno test-checks repl test-loader dist clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size spike test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-aluno test-checks repl sc-deps test-loader dist clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -213,7 +221,7 @@ $(B)/sc-host-cut: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp
 
 # the binary that ships (PLANO-REPL.md §1.1): the REPL with the engine
 # linked in. sc -cc1 and sc ld are the cut engine, as build/sc-host-cut
-$(B)/sc: $(B)/loader/release/sc
+$(B)/sc: $(SC_REPL)
 	llvm-strip -o $@ $<
 
 $(B)/sc-host-full: $(ENGINE:%=$(B)/engine-host/%.o) scripts/link.py
@@ -236,8 +244,8 @@ $(B)/sc-spike: $(SPIKE:%=$(B)/engine-spike/%.o) scripts/link.py
 spike: $(B)/sc-spike $(SCLOAD)
 	test/spike.py
 
-# --- the engine's API for Rust (proto/, the sc-proto crate): the uncut native
-# engine with the session (sc.h), as the link arguments for proto/build.rs
+# --- the engine's API for Rust (src/engine): the uncut native engine with
+# the session (sc.h), as the link arguments for build.rs
 SESSION := $(ENGINE) sc_session sc_api
 $(B)/link-session/engine.args: $(SESSION:%=$(B)/engine-host/%.o) scripts/link.py
 	SC_LINKDIR=$(CURDIR)/$(B)/link-session \
@@ -245,15 +253,13 @@ $(B)/link-session/engine.args: $(SESSION:%=$(B)/engine-host/%.o) scripts/link.py
 	  scripts/link.py --native --full --emit-link $@ $(B)/link-session/engine
 
 test-proto: $(B)/link-session/engine.args $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
-	SC_LINK_ARGS=$(CURDIR)/$< cargo test --locked --manifest-path proto/Cargo.toml --features engine \
-	  --target-dir $(B)/proto
+	SC_LINK_ARGS=$(CURDIR)/$< cargo test $(CARGO) --target-dir $(B)/cargo-full --test session
 
-# the same engine with the REPL's protocol (proto/src/bin/sc-engine.rs): the
-# child (session) and the test of the REPL's side (repl), PLANO-REPL.md phase 2
-$(B)/sc-engine-full: $(B)/link-session/engine.args $(wildcard proto/*.toml proto/*.lock proto/*.rs proto/src/*.rs proto/src/bin/*.rs)
-	SC_LINK_ARGS=$(CURDIR)/$< cargo build --release --locked --manifest-path proto/Cargo.toml --features engine \
-	  --target-dir $(B)/proto --bin sc-engine
-	cp $(B)/proto/release/sc-engine $@
+# sc with the same engine: the child (sc --engine) and the test of the
+# REPL's side (sc --replay), PLANO-REPL.md phase 2, the base of build/sc's
+$(B)/sc-full: $(B)/link-session/engine.args $(RUST)
+	SC_LINK_ARGS=$(CURDIR)/$< cargo build --release $(CARGO) --target-dir $(B)/cargo-full --bin sc
+	cp $(B)/cargo-full/release/sc $@
 
 # the same, cut (PLANO-REPL.md phase 4): the REPL's engine. What only the
 # session calls is in cuts/symbols.session.used (make learn-session)
@@ -263,36 +269,31 @@ $(B)/link-session-cut/engine.args: $(SESSION:%=$(B)/engine-host/%.o) $(B)/trim-h
 	  SC_EXTRA="$(CURDIR)/$(B)/engine-host/sc_session.o $(CURDIR)/$(B)/engine-host/sc_api.o" \
 	  scripts/link.py --native --emit-link $@ $(B)/link-session-cut/engine
 
-$(B)/sc-engine: $(B)/link-session-cut/engine.args $(wildcard proto/*.toml proto/*.lock proto/*.rs proto/src/*.rs proto/src/bin/*.rs)
-	SC_LINK_ARGS=$(CURDIR)/$< cargo build --release --locked --manifest-path proto/Cargo.toml --features engine \
-	  --target-dir $(B)/proto-cut --bin sc-engine
-	llvm-strip -o $@ $(B)/proto-cut/release/sc-engine
-
 # the corpus's programs as REPL cells against the programs whole (pic-)
-test-split: $(B)/sc-engine $(SCLOAD) $(B)/res/native-base/summary.json
-	test/split.py $(B)/sc-engine
+test-split: $(B)/sc $(SCLOAD) $(B)/res/native-base/summary.json
+	test/split.py $(B)/sc
 
 # the slices of the session (PLANO-REPL.md phase 3, §6): ses-, seq-, crash-,
 # mem-; on the uncut engine they are the base of the cut one's
-$(B)/res/session-base/summary.json: $(B)/sc-engine-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/native-base/summary.json
+$(B)/res/session-base/summary.json: $(B)/sc-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/native-base/summary.json
 	test/session.py $< $(@D)
 
-$(B)/res/session-wev-base/summary.json: $(B)/sc-engine-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/native-wev-base/summary.json
+$(B)/res/session-wev-base/summary.json: $(B)/sc-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/native-wev-base/summary.json
 	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $< $(@D)
 
-test-session: $(B)/sc-engine $(SCLOAD) $(B)/res/session-base/summary.json
-	test/session.py $(B)/sc-engine $(B)/res/session $(B)/res/session-base/summary.json
+test-session: $(B)/sc $(SCLOAD) $(B)/res/session-base/summary.json
+	test/session.py $(B)/sc $(B)/res/session $(B)/res/session-base/summary.json
 
-test-session-warn: $(B)/sc-engine $(SCLOAD) $(B)/res/session-wev-base/summary.json
-	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $(B)/sc-engine $(B)/res/session-wev $(B)/res/session-wev-base/summary.json
+test-session-warn: $(B)/sc $(SCLOAD) $(B)/res/session-wev-base/summary.json
+	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $(B)/sc $(B)/res/session-wev $(B)/res/session-wev-base/summary.json
 
 # --- sc.wasm's session through its exports (PLANO-REPL.md §5.2): the same
-# protocol's loop over wasmtime (proto/, feature wasm). <host>.wasm is its
+# protocol's loop over wasmtime (sc with the feature wasm). <host>.wasm is its
 # engine, compiled to <host>.cwasm; -cut has the names, for the cut function
 # a trap calls. The slices are checked against the one-shot sc.wasm's bases
-SC_ENGINE_WASM := $(B)/proto-wasm/release/sc-engine
-$(SC_ENGINE_WASM): $(wildcard proto/*.toml proto/*.lock proto/*.rs proto/src/*.rs proto/src/bin/*.rs) engine/sc.h
-	cargo build --release --locked --manifest-path proto/Cargo.toml --features wasm --target-dir $(B)/proto-wasm --bin sc-engine
+SC_ENGINE_WASM := $(B)/cargo-wasm/release/sc
+$(SC_ENGINE_WASM): $(RUST)
+	cargo build --release $(CARGO) --features wasm --target-dir $(B)/cargo-wasm --bin sc
 
 $(B)/sc-engine-wasm-full: $(SC_ENGINE_WASM) $(B)/sc-full.wasm
 $(B)/sc-engine-wasm-cut: $(SC_ENGINE_WASM) $(B)/sc-cut.wasm
@@ -316,32 +317,28 @@ test-session-wasm-warn: $(B)/sc-engine-wasm $(SCLOAD) $(B)/res/session-wasm-wev-
 test-split-wasm: $(B)/sc-engine-wasm $(SCLOAD) $(B)/res/native-base/summary.json
 	test/split.py $(B)/sc-engine-wasm $(B)/res/split-wasm
 
-# --- the REPL's loader: runs the shared objects (native, wasmtime). The same
-# crate has sc, the REPL, with the engine linked in (phase 6b): its compiler
-# is the child sc --engine, with the arguments in build/repl
-LOADER_CARGO := --locked --manifest-path loader/Cargo.toml --target-dir $(B)/loader
-SCLOAD := $(B)/loader/release/scload
-SC_REPL := $(B)/loader/release/sc
-$(SCLOAD): loader/Cargo.toml loader/Cargo.lock loader/src/lib.rs loader/src/main.rs
-	cargo build --release $(LOADER_CARGO) --bin scload
-# sc links the cut engine with the session (PLANO-REPL.md §1.1): its child
-# is sc --engine
+# --- the REPL's loader, runs the shared objects (native, wasmtime): scload,
+# for the batteries, without the engine; and sc, with the cut engine
+# (PLANO-REPL.md §1.1, phase 6b), whose compiler is the child sc --engine,
+# with the arguments in build/repl. Without SC_LINK_ARGS, build.rs links
+# $(SC_ENGINE_ARGS), as in a cargo build of its own
+$(SCLOAD): $(RUST)
+	cargo build --release $(CARGO) --no-default-features --bin scload
 SC_ENGINE_ARGS := $(B)/link-session-cut/engine.args
-$(SC_REPL): loader/Cargo.toml loader/Cargo.lock loader/build.rs $(shell find loader/src -name '*.rs') \
-            $(wildcard proto/*.toml proto/*.rs proto/src/*.rs) engine/sc.h $(SC_ENGINE_ARGS)
-	SC_LINK_ARGS=$(CURDIR)/$(SC_ENGINE_ARGS) cargo build --release $(LOADER_CARGO) --features repl --bin sc
+$(SC_REPL): $(RUST) $(SC_ENGINE_ARGS)
+	cargo build --release $(CARGO) --bin sc
 
 loader: $(SCLOAD)
 
 # the binaries that ship, with the profile that makes them small
-# (ANALISE.md §49): build/loader/dist/scload and sc
+# (ANALISE.md §49): build/cargo/dist/scload and sc
 dist: $(SC_ENGINE_ARGS)
-	SC_LINK_ARGS=$(CURDIR)/$(SC_ENGINE_ARGS) cargo build $(LOADER_CARGO) --profile dist --features repl --bins
+	cargo build $(CARGO) --profile dist --bins
 
-# what the batteries do not reach: Ctrl-C, many exceptions (loader/tests),
-# and the tests of sc's modules
+# what the batteries do not reach: Ctrl-C, many exceptions (tests/), and the
+# tests of sc's modules
 test-loader: $(SC_ENGINE_ARGS)
-	SC_LINK_ARGS=$(CURDIR)/$(SC_ENGINE_ARGS) cargo test --release $(LOADER_CARGO) --features repl
+	cargo test --release $(CARGO) --lib --bins --test signal --test exceptions
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc FILE`
 REPL_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/repl/$l-$s.args $(B)/repl/$l-$s-file.args))
@@ -349,7 +346,11 @@ $(B)/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/repl
 	scripts/flags.py --session $(firstword $(subst -, ,$*)) $(CURDIR)/$(B) $(wordlist 2,3,$(subst -, ,$*)) > $@
 
-repl: $(SC_REPL) $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
+repl: $(SC_REPL) sc-deps
+
+# what cargo build asks for (build.rs): the engine sc links, and what sc
+# reads at run time
+sc-deps: $(SC_ENGINE_ARGS) $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 
 # a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
 test-aluno: repl
@@ -446,4 +447,4 @@ size: $(B)/sc.wasm
 	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
 clean:
-	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/proto $(B)/proto-cut $(B)/proto-wasm $(B)/sc-engine-full $(B)/sc-engine $(B)/sc-engine-wasm* $(B)/res/split $(B)/res/session* $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native
+	rm -rf $(B)/engine $(B)/engine-host $(B)/engine-spike $(B)/link-spike $(B)/sc-spike $(B)/link-session $(B)/cargo* $(B)/sc-full $(B)/sc-engine-wasm* $(B)/res/split $(B)/res/session* $(B)/res/spike $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/sc-host-* $(B)/res/sc* $(B)/res/native

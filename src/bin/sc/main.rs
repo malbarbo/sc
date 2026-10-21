@@ -6,6 +6,19 @@
 //! one-shot engine. The session's arguments are the ones `make repl` writes
 //! to `build/repl` of the build directory (`SC_BUILD`, by default the one
 //! this binary is in).
+//!
+//! `sc --replay <dir> <cell>... -- <session args>` is the test of the REPL's
+//! side (test/split.py, test/session.py): each cell (a file, %undo, or
+//! %restart, a new child that replays the log) goes to a child session
+//! through a Repl, which replays the log when the session is lost. It prints
+//! "== <cell> <status>" and the diagnostics of each, and writes the shared
+//! object of each accepted cell as <dir>/<k>.so (k: the cell's position,
+//! from 1, in three digits); an undo removes the last one. It exits with 1
+//! if the session cannot go on.
+//!
+//! With the `wasm` feature (build/sc-engine-wasm) the engine is
+//! `<this program>.wasm`, which `<this program> --precompile` compiles
+//! first ([`sc::engine::wasm`]).
 
 mod config;
 mod machine;
@@ -15,6 +28,9 @@ mod show;
 
 use bpaf::{Bpaf, Parser};
 use machine::{Lang, Machine, Outcome, Safety};
+use sc::engine::{Repl, Status};
+use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -122,10 +138,21 @@ fn show_help<T>(parser: bpaf::OptionParser<T>, args: &[&str]) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    let code = modes();
+    #[cfg(feature = "wasm")]
+    sc::engine::wasm::cleanup();
+    code
+}
+
+/// The modes of the engine and of the tests, else the student's.
+fn modes() -> ExitCode {
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     let engine = match args.get(1).map(String::as_str) {
-        Some("--engine") => sc_proto::serve_child().map(|()| 0),
-        Some("-cc1" | "ld") => sc_proto::main(&args),
+        Some("--engine") => sc::engine::serve_child().map(|()| 0).map_err(Into::into),
+        Some("-cc1" | "ld") => sc::engine::main(&args).map_err(Into::into),
+        Some("--replay") => replay(&args[2..]).map(|()| 0),
+        #[cfg(feature = "wasm")]
+        Some("--precompile") => sc::engine::wasm::precompile().map(|()| 0).map_err(Into::into),
         _ => return sc(),
     };
     match engine {
@@ -135,6 +162,48 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `sc --replay`: the cells through a [`Repl`], as the REPL sends them.
+fn replay(args: &[String]) -> Result<()> {
+    let usage = "--replay <dir> <cell>... -- <session args>";
+    let sep = args.iter().position(|a| a == "--").ok_or(usage)?;
+    let (dir, cells) = args[..sep].split_first().ok_or(usage)?;
+    let mut r = Repl::new(std::env::current_exe()?, args[sep + 1..].to_vec())?;
+    let mut sos: Vec<PathBuf> = vec![];
+    let mut out = io::stdout().lock();
+    for (k, cell) in cells.iter().enumerate() {
+        // None: a restart, which has no answer of its own
+        let a = match cell.as_str() {
+            "%undo" => r.undo().map(Some),
+            "%restart" => r.restart().map(|()| None),
+            _ => r.cell(&fs::read(cell)?).map(Some),
+        };
+        let a = a.map_err(|e| {
+            let _ = writeln!(out, "== {cell} restart: {e}");
+            e
+        })?;
+        let Some(a) = a else {
+            writeln!(out, "== {cell} ok")?;
+            continue;
+        };
+        let st = match a.status {
+            Status::Ok => "ok",
+            Status::Error => "error",
+            Status::Lost => "lost",
+            Status::Incomplete => "incomplete",
+        };
+        writeln!(out, "== {cell} {st}")?;
+        out.write_all(a.diags.as_bytes())?;
+        if cell == "%undo" && a.status == Status::Ok {
+            fs::remove_file(sos.pop().ok_or("undo without a shared object")?)?;
+        } else if a.status == Status::Ok {
+            let so = PathBuf::from(dir).join(format!("{:03}.so", k + 1));
+            fs::write(&so, &a.so)?;
+            sos.push(so);
+        }
+    }
+    Ok(())
 }
 
 /// The command line of the student.

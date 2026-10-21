@@ -12,7 +12,7 @@ usage: link.py [--native] [--full | --learn] [--emit-link <file>] <out>
              (build/host), with the same cuts; a cut function prints its
              name and aborts
   --emit-link  also write to <file>, one per line, the arguments that link
-             the same engine into another program (proto/build.rs): the
+             the same engine into another program (build.rs): the
              objects without sc_entry.o (main), the archives, the stubs and
              the linker flags (native)
 

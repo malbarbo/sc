@@ -1,5 +1,5 @@
 [package]
-name = "scload"
+name = "sc"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -15,30 +15,45 @@ cpp_demangle = "0.5"
 # component-model come back with it
 wasmtime = { version = "48.0.3", default-features = false, features = ["runtime", "std", "cranelift", "gc", "gc-drc", "cache", "parallel-compilation"] }
 wasmtime-wasi = { version = "48.0.3", default-features = false, features = ["p1"] }
-# a frame's file and line ([Loader::symbols]), the versions wasmtime uses
+# a frame's file and line ([loader::Loader::symbols]), the versions wasmtime
+# uses
 addr2line = { version = "0.26", default-features = false, features = ["std"] }
 gimli = { version = "0.33", default-features = false, features = ["read", "std", "endian-reader"] }
-# sc, the REPL: the engine's child protocol (bindgen, so libclang), the
-# command line, the prompt. scload builds without them
-# the engine, linked into sc (PLANO-REPL.md §1.1): build.rs
-sc-proto = { path = "../proto", features = ["engine"], optional = true }
+# sc, the REPL: the command line, the prompt. scload builds without them
 bpaf = { version = "0.9", features = ["derive", "bright-color"], optional = true }
 rustyline = { version = "18", features = ["derive", "custom-bindings"], optional = true }
 dirs = { version = "6", optional = true }
 libc = { version = "0.2", optional = true }
+# the wasm feature: WASI of sc.wasm's sessions
+tokio = { version = "1", features = ["rt"], optional = true }
 
-# make test-loader (tests/)
+# the bindings of engine/sc.h
+[build-dependencies]
+bindgen = { version = "0.72", default-features = false, features = ["runtime"], optional = true }
+
+# make test-loader and test-proto (tests/)
 [dev-dependencies]
 wat = "=1.254.0"
 libc = "0.2"
 
 [features]
-repl = ["dep:sc-proto", "dep:bpaf", "dep:rustyline", "dep:dirs", "dep:libc"]
+default = ["engine"]
+# sc, with the engine linked in (PLANO-REPL.md §1.1): build.rs links the
+# arguments of SC_LINK_ARGS, by default build/link-session-cut/engine.args,
+# which it asks make for
+engine = ["dep:bindgen", "dep:bpaf", "dep:rustyline", "dep:dirs", "dep:libc"]
+# the same API over sc.wasm's exports through wasmtime (src/engine/wasm.rs),
+# in place of the linked engine: build/sc-engine-wasm (PLANO-REPL.md §5.2)
+wasm = ["engine", "dep:tokio"]
 
 [[bin]]
 name = "sc"
 path = "src/bin/sc/main.rs"
-required-features = ["repl"]
+required-features = ["engine"]
+
+[[test]]
+name = "session"
+required-features = ["engine"]
 
 # make loader and repl, for the batteries: quick to build
 [profile.release]

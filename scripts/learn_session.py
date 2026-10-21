@@ -8,7 +8,7 @@ usage: learn_session.py [--wasm]   (make learn-session, after make learn and lea
 The session runs only in the native engine (sc.wasm has none before phase
 5), so it learns there, as link.py --native --learn does: from the list
 as it is (empty it to learn it again from nothing), the cut engine with the session (link.py --native, with
-engine/sc_session.cpp and sc_api.cpp, as proto/'s sc-engine) runs the
+engine/sc_session.cpp and sc_api.cpp, linked into sc) runs the
 session's slices; each function it calls that the cuts removed prints its
 name (sc_cuts.cpp), goes in the list (or its object goes back, in
 cuts/objects.txt), and the slices that differ run again until they pass,
@@ -19,7 +19,7 @@ then all of them again. The slices:
 
 --wasm learns what only sc.wasm's session calls (PLANO-REPL.md §5.2),
 into the same list: the cut sc.wasm with its names (link.py, as
-sc-cut.wasm) under the test host build/sc-engine-wasm (proto/, feature
+sc-cut.wasm) under the test host build/sc-engine-wasm (sc, feature
 wasm), which says the cut function a trap calls; the base is
 build/res/session-wasm-wev-base.
 """
@@ -32,7 +32,7 @@ from corpuslib import IGNORE, norm_hash
 B = f'{R}/build'
 WASM = sys.argv[1:] == ['--wasm']
 D = f'{B}/link-session-learn{"-wasm" * WASM}'
-ENG = f'{D}/sc-engine'
+ENG = f'{D}/sc-engine-wasm' if WASM else f'{D}/sc'  # test/session.py knows a host by its name
 FILE = f'{R}/cuts/symbols.session.used'
 BASE = json.load(open(f'{B}/res/session-{"wasm-" * WASM}wev-base/summary.json'))
 BASE = {k: v for k, v in BASE.items() if k.split('-', 1)[1] not in IGNORE}
@@ -57,7 +57,7 @@ def link():
     if WASM:  # ENG.wasm is the engine of the host
         subprocess.check_call([f'{R}/scripts/link.py', f'{D}/engine.wasm'], env=dict(os.environ, SC_LINKDIR=D),
                               stdout=subprocess.DEVNULL)
-        shutil.copy(f'{B}/proto-wasm/release/sc-engine', ENG)
+        shutil.copy(f'{B}/cargo-wasm/release/sc', ENG)
         if not os.path.exists(f'{ENG}.wasm'):
             os.symlink('engine.wasm', f'{ENG}.wasm')
         subprocess.check_call([ENG, '--precompile'])
@@ -65,10 +65,10 @@ def link():
     e = dict(os.environ, SC_LINKDIR=D, SC_EXTRA=f'{B}/engine-host/sc_session.o {B}/engine-host/sc_api.o')
     subprocess.check_call([f'{R}/scripts/link.py', '--native', '--emit-link', f'{D}/engine.args', f'{D}/engine'],
                           env=e, stdout=subprocess.DEVNULL)
-    subprocess.check_call(['cargo', 'build', '-q', '--release', '--locked', '--manifest-path', f'{R}/proto/Cargo.toml',
-                           '--features', 'engine', '--target-dir', f'{B}/proto-cut', '--bin', 'sc-engine'],
+    subprocess.check_call(['cargo', 'build', '-q', '--release', '--locked', '--manifest-path', f'{R}/Cargo.toml',
+                           '--target-dir', f'{D}/cargo', '--bin', 'sc'],
                           env=dict(os.environ, SC_LINK_ARGS=f'{D}/engine.args'))
-    shutil.copy(f'{B}/proto-cut/release/sc-engine', ENG)
+    shutil.copy(f'{D}/cargo/release/sc', ENG)
 
 
 def slice_run(cmd, out, only, env={}):

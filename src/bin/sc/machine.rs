@@ -1,10 +1,10 @@
-//! A cell from source to run: the compiler in its child ([`sc_proto::Repl`])
+//! A cell from source to run: the compiler in its child ([`sc::engine::Repl`])
 //! makes the cell a shared object, and the loader, which lives as long as the
 //! REPL, loads it on top of the cells before. Loading runs the cell's
 //! statements at the top level, which the session's incremental mode accepts.
-use sc_proto::{Answer, Repl, Status};
+use sc::engine::{Answer, Repl, Status};
 use crate::show;
-use scload::{source_name, Loader, STACK};
+use sc::loader::{source_name, Loader, STACK};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -99,7 +99,7 @@ const MEMORY: u64 = 1 << 30;
 
 /// A Ctrl-C stops the compile or the code that runs, whichever it is.
 extern "C" fn interrupt(_: libc::c_int) {
-    sc_proto::interrupt();
+    sc::engine::interrupt();
     // the main thread holds the lock only to put a new engine there
     if let Ok(e) = ENGINE.try_lock() {
         if let Some(e) = e.as_ref() {
@@ -109,7 +109,7 @@ extern "C" fn interrupt(_: libc::c_int) {
 }
 
 /// The build directory: `SC_BUILD`, else the first one above this binary
-/// with the session's arguments (`build/sc`, `build/loader/release/sc`).
+/// with the session's arguments (`build/sc`, `build/cargo/release/sc`).
 fn build_dir() -> std::io::Result<PathBuf> {
     if let Some(b) = std::env::var_os("SC_BUILD") {
         return Ok(b.into());
@@ -197,7 +197,7 @@ impl Machine {
     /// What Enter does with `input`, the caret at `cursor`, as the compiler
     /// sees it. With the caret at the end (or in an input of one line), it
     /// runs the input unless the input stops short: a bracket or a comment
-    /// left open, or an error where it ends ([`sc_proto::Mode::Whole`]: a
+    /// left open, or an error where it ends ([`sc::engine::Mode::Whole`]: a
     /// declaration without its `;`, a function's header without its body).
     /// A blank line runs any input with no bracket open, for the compiler to
     /// say what is wrong with it. With the caret back in an input of several

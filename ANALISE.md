@@ -3692,3 +3692,76 @@ nele.
 
 **Fica para depois:** o host JS documentado (o `sc.wasm` no navegador,
 com a cópia da memória antes da célula no lugar do `fork`).
+
+## 51. Um crate só, e o `cargo build` constrói o `sc`
+
+Até a fase 6b havia dois projetos Cargo: o `loader/` (crate `scload`, com
+os binários `scload` e `sc`) e o `proto/` (crate `sc-proto`, a API sobre o
+`engine/sc.h`, com o binário `sc-engine`). Cada um tinha seu
+`Cargo.lock`, quase iguais. O `sc` só se construía pelo make: a feature
+`repl` e o `SC_LINK_ARGS` eram obrigatórios, e o `proto/build.rs` falhava
+sem ele.
+
+**Um crate na raiz.** O `Cargo.toml`, o `build.rs` e o `src/` da raiz são
+o crate `sc`:
+- `src/loader.rs` é o antigo `loader/src/lib.rs`, e `src/engine/` o antigo
+  `proto/src` (o `engine.rs` de lá virou `session.rs`);
+- os binários são `src/bin/sc/` e `src/bin/scload.rs`, e os testes
+  `tests/` (os do loader e o `session.rs` do proto);
+- a feature `engine` (padrão) traz o engine, o bindgen e a linha de
+  comando; a `wasm` troca o engine ligado pelo `sc.wasm`. O `scload` das
+  baterias sai com `--no-default-features`;
+- o `links = "sc"` e o repasse por `DEP_SC_LINK_ARGS` saíram: o
+  `build.rs` passa os argumentos direto ao `sc`
+  (`rustc-link-arg-bin=sc`) e aos testes (`rustc-link-arg-tests`). Um
+  `scload` com as features padrão liga sem eles: nada dele chama o
+  engine;
+- um `Cargo.lock` só. O bindgen ficou na 0.72.1 e o tokio subiu de 1.53.1
+  para 1.53.3, a versão que o proto já usava.
+
+**O `sc-engine` saiu.** Desde a 6b o `build/sc-engine` tinha a mesma
+ligação do `sc`; só o modo de teste `repl` era dele. Esse modo virou
+`sc --replay` (`repl` já é um comando do aluno). Com isso:
+- `test-split` e `test-session` rodam no próprio `build/sc`, e as fatias
+  `crash-` passam pelo binário entregue (o ponto que a §50 deixou);
+- o `build/sc-engine-full` virou `build/sc-full`: o mesmo `sc` ligado
+  com o engine inteiro (`link-session`), em `build/cargo-full`. É a
+  base do `test-session`;
+- o host de teste do `sc.wasm` é o `sc` com `--features wasm`
+  (`build/cargo-wasm`), copiado para `build/sc-engine-wasm*`. O
+  `test/session.py` reconhecia o host por existir `<engine>.wasm`, o que
+  agora casaria `build/sc` com `build/sc.wasm`; passou a reconhecê-lo
+  pelo nome.
+
+**O `cargo build` constrói o engine.** Sem `SC_LINK_ARGS`, o `build.rs`
+liga o `build/link-session-cut/engine.args` e, fora do make, roda antes
+`make sc-deps`: esses argumentos e o que o `sc` lê ao rodar
+(`build/repl/*.args` e o sysroot). Na primeira vez isso é o build do LLVM,
+cuja saída o cargo só mostra com `-vv`. Detalhes:
+- **sem recursão:** o make exporta `MAKELEVEL`; sob ele, o `build.rs` não
+  chama o make, porque a regra que roda o cargo já construiu o que ele
+  precisa;
+- **jobs:** o make recebe o jobserver do cargo (`CARGO_MAKEFLAGS`);
+- **quando refazer:** o `build.rs` vigia `engine/`, `cuts/`, `llvm/`,
+  `rt/`, o `Makefile` e os `scripts/*.py`; com tudo em dia, o
+  `make sc-deps` não faz nada;
+- **um diretório só:** o `.cargo/config.toml` põe o build em
+  `build/cargo`, onde o make também constrói o `sc` padrão, sem
+  `SC_LINK_ARGS`. O `cargo build` e o `make native` não se refazem um ao
+  outro, e o `sc` acha o `build/repl` subindo do binário. Um `target/` na
+  raiz não acharia.
+
+As outras ligações (o engine inteiro do `test-proto` e do `build/sc-full`,
+a do `make learn-session`) passam o `SC_LINK_ARGS` e cada uma tem seu
+`--target-dir`.
+
+**Um erro antigo do Makefile.** O `SCLOAD` era definido depois das regras
+do `spike`, do `test-split` e do `test-session`, que o listavam como
+pré-requisito: o make expande os pré-requisitos ao ler a regra, e ali ele
+era vazio. As variáveis do crate subiram para o começo.
+
+**Baterias.** `test-native`, `test-split`, `test-session` (com a base
+refeita pelo `build/sc-full`, igual à de antes, resultado por resultado),
+`test-session-wasm` (idem), `test-split-wasm`, `test-proto`,
+`test-loader`, `test-aluno` e `test-checks` sem diferença. O
+`build/cargo/dist/sc` tem 34,3 MB, como o `build/loader/dist/sc` da §50.

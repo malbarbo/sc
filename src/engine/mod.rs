@@ -5,7 +5,7 @@
 //! and [`Child`] and [`Repl`] are the REPL's side of it: the engine in a
 //! child process and the log that replays a lost session.
 //!
-//! With the `engine` feature the engine is linked, and [`Session`] and
+//! The engine is linked (the `engine` feature), and [`Session`] and
 //! [`main`] are a safe API over the raw functions, and [`serve`] the child's
 //! side of the protocol:
 //!
@@ -113,9 +113,7 @@ pub mod wire;
 mod child;
 pub use child::{interrupt, Answer, Child, Repl, ReplError};
 
-#[cfg(feature = "engine")]
-mod engine;
+mod session;
 #[cfg(feature = "wasm")]
 pub mod wasm;
-#[cfg(feature = "engine")]
-pub use engine::*;
+pub use session::*;

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Phase 2 of PLANO-REPL.md: the programs of the corpus as REPL cells, through
-a native engine with the protocol's loop (proto/src/bin/sc-engine.rs).
+a native engine with the protocol's loop (sc --replay, src/bin/sc/main.rs).
 
-usage: split.py [<engine> [<outdir>]]   (build/sc-engine, build/res/split)
+usage: split.py [<engine> [<outdir>]]   (build/sc, build/res/split)
 ONLY=<name>,... (or a file of names) runs only those programs; JOBS sets the parallelism (48)
 
 Each program the corpus runs (test/samples, c-testsuite, gcc torture
 execute/, test/cxx, test/mod) is cut into one cell per top-level declaration
-(test/spike.py), the cells go through `<engine> repl`, which compiles
+(test/spike.py), the cells go through `<engine> --replay`, which compiles
 them in one child session and links each as a shared object, and the loader
 runs the shared objects. The output must be the one of the program compiled
 whole as a shared object (pic-, in the native base, build/res/native-base);
@@ -27,9 +27,9 @@ R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
 from flags import session  # the engine's flags
 B = f'{R}/build'
-ENG = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else f'{B}/sc-engine')
+ENG = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else f'{B}/sc')
 LIB = f'{B}/sysroot/lib/wasm32-wasip1'
-SCLOAD = f'{B}/loader/release/scload'
+SCLOAD = f'{B}/cargo/release/scload'
 OUT = os.path.realpath(sys.argv[2] if len(sys.argv) > 2 else f'{B}/res/split')
 G = 'gcc-ts_gcc_testsuite_gcc.c-torture_execute_'
 # where cells cannot be the program (ANALISE.md §24)
@@ -75,7 +75,7 @@ def one(prog):
         files.append(f)
     try:
         # -I: the program's own includes, which the cells' directory does not have
-        r = run_all([ENG, 'repl', d] + files + ['--', '-I', os.path.dirname(p)] + flags(cxx, gnu17, mod), 300)
+        r = run_all([ENG, '--replay', d] + files + ['--', '-I', os.path.dirname(p)] + flags(cxx, gnu17, mod), 300)
         txt = r.stdout.decode(errors='replace') + r.stderr.decode(errors='replace') + f'repl exit={r.returncode}\n'
         ok = r.returncode == 0 and not re.search(r'^== \S+ (error|lost)$', txt, re.M)
     except subprocess.TimeoutExpired:

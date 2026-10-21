@@ -3,7 +3,7 @@
 
 mod common;
 
-use scload::Loader;
+use sc::loader::Loader;
 use wasmtime::Val;
 
 /// The resident memory of this process, in bytes.

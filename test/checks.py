@@ -12,7 +12,7 @@ import difflib, glob, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-SC = f'{R}/build/loader/release/sc'
+SC = f'{R}/build/cargo/release/sc'
 D = f'{R}/test/checks'
 EXPECTED = f'{D}/expected.txt'
 LEVELS = ('off', 'on', 'strict')

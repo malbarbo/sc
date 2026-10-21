@@ -16,7 +16,7 @@ have exceptions and setjmp/longjmp. C++ goes the same way: the programs in test/
 linked with libc++, and clang's C++ tests. The engine first builds libc++'s
 std module (std-pcm), which the programs in test/mod import.
 The programs are also compiled with -fPIC, linked as shared objects and run
-by the REPL's loader, build/loader/release/scload (pic-), and test/repl has
+by the REPL's loader, build/cargo/release/scload (pic-), and test/repl has
 sequences of REPL inputs, each loaded on top of the ones before (repl-).
 The programs run again at each level of --safety but off (<name>-on,
 <name>-strict; PLANO-VERIFICACOES.md §9): those that have undefined
@@ -37,7 +37,7 @@ B = os.environ.get('SC_BUILD', f'{R}/build')
 RES = res(B)
 SR = f'{B}/sysroot'  # wasi-sdk's libc with libc++, libc++abi and libunwind built from the pin with exceptions
 CXXEXT = ('.cpp', '.cc', '.cxx')
-SCLOAD = f'{B}/loader/release/scload'  # the REPL's loader (loader/)
+SCLOAD = f'{B}/cargo/release/scload'  # the REPL's loader (src/loader.rs)
 LIB = f'{SR}/lib/wasm32-wasip1'  # libc.so, libc++.so...
 W_EXTRA = os.environ.get('WFLAGS', '').split()  # e.g. WFLAGS=-Weverything
 STD_CPPM = f'{SR}/share/libc++/v1/std.cppm'  # libc++'s std module

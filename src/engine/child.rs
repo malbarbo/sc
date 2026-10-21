@@ -1,6 +1,6 @@
 //! The REPL's side: the engine in a child process ([`Child`]), and the log
 //! that recreates the session after it is lost ([`Repl`], PLANO-REPL.md §3.6).
-use crate::{msg, sys, wire, Mode, Status};
+use super::{msg, sys, wire, Mode, Status};
 use std::fmt;
 use std::io::{self, BufReader, BufWriter, Read};
 use std::os::fd::AsRawFd;
@@ -54,7 +54,7 @@ impl Answer {
 /// An `Err` is a child that ended or does not follow the protocol.
 ///
 /// After a failed cell the process spawned hands the session over to its
-/// copy ([`crate::serve`]) and ends with 0: the copy, which is not ours to
+/// copy ([`super::serve`]) and ends with 0: the copy, which is not ours to
 /// wait for, is reached through the process group, which they share.
 pub struct Child {
     proc: process::Child,
@@ -119,7 +119,7 @@ impl Child {
         io::Error::new(io::ErrorKind::BrokenPipe, format!("the engine ended{how}"))
     }
 
-    /// A session (it replaces the one before): see [`crate::sys::sc_session_new`].
+    /// A session (it replaces the one before): see [`super::sys::sc_session_new`].
     pub fn new_session<S: AsRef<str>>(&mut self, args: &[S]) -> io::Result<Answer> {
         let mut part = vec![];
         for a in args {
@@ -137,7 +137,7 @@ impl Child {
         self.call(msg::SC_MSG_UNDO, 0, b"")
     }
 
-    /// See [`crate::sys::sc_session_depth`].
+    /// See [`super::sys::sc_session_depth`].
     pub fn depth(&mut self, src: &[u8]) -> io::Result<u32> {
         Ok(self.request(msg::SC_MSG_DEPTH, 0, src)?.status)
     }
@@ -286,7 +286,7 @@ struct Entry {
 }
 
 /// A session in a child, with the log of its accepted cells. A failed cell
-/// leaves nothing in the child ([`crate::serve`]), so the log does not keep
+/// leaves nothing in the child ([`super::serve`]), so the log does not keep
 /// it. When the session is lost (the child ended, an undo), a new child
 /// replays the log without the backend, and each cell must export the same
 /// names (§3.6).
@@ -370,7 +370,7 @@ impl Repl {
         self.compile(src, Mode::Type)
     }
 
-    /// See [`crate::sys::sc_session_depth`].
+    /// See [`super::sys::sc_session_depth`].
     pub fn depth(&mut self, src: &[u8]) -> Result<u32, ReplError> {
         match self.child.depth(src) {
             Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {

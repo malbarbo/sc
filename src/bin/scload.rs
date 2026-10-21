@@ -1,8 +1,8 @@
-//! scload: runs wasm shared objects from files (see the library).
+//! scload: runs wasm shared objects from files (see sc::loader).
 //!
 //! usage: scload [-L dir]... [--dir host::guest]... [--stack bytes] first.so [entry.so]... [-- args...]
 
-use scload::{Loader, STACK};
+use sc::loader::{Loader, STACK};
 use std::path::PathBuf;
 use wasmtime::{Result, ThrownException};
 use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder};

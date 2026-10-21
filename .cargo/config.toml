@@ -1,0 +1,3 @@
+# the builds go in build/, with what the REPL reads at run time (build/repl)
+[build]
+target-dir = "build/cargo"
