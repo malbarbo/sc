@@ -45,7 +45,7 @@ import difflib, glob, json, os, re, shutil, statistics, struct, subprocess, sys,
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from corpuslib import IGNORE, diff, kill_session, norm_hash, only_names, run_all, sources, source_name
-from spike import expected, run, same, std_pcm
+from cells import expected, run, same, std_pcm
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
@@ -315,7 +315,7 @@ def main():
                  for p in sorted(glob.glob(f'{SEQ}/*.c') + glob.glob(f'{SEQ}/*.cpp'))]
     if only:
         jobs = [j for j in jobs if j[0] in only]
-    std_pcm(ENG, OUT, '--cc1')
+    std_pcm(ENG, OUT)
     with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
         rs = list(ex.map(lambda j: (j[0], *j[1](j[0], j[2])), jobs))
     bad = [n for n, _, good in rs if good is False and n not in KNOWN]

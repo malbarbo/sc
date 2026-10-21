@@ -3884,3 +3884,23 @@ ao lado do binário (`<prefixo>/lib/sc`, como o diretório de recursos do
 clang) e o sysroot embutido no binário, extraído na primeira execução para
 `~/.cache/sc/<versão>`: um arquivo só, mais simples para o aluno e para um
 futuro Windows. Até lá, a busca vale no checkout e com `SC_BUILD`.
+
+**O spike da fase 0 saiu.** A escolha da §22 (uma sessão, não PCHs
+encadeados) é de 2026-10-13. O `engine/sc_spike.cpp`, os `#ifdef SC_SPIKE`
+do `sc_main.cpp` e do `sc_backend.cpp`, o `build/sc-spike` e o
+`make spike` só serviam para medir as duas candidatas. O `test/spike.py`
+continuava importado pelo `split.py` e pelo `session.py`: o corte em
+células, o `run` no `scload`, o `expected` do `pic-` e o `std_pcm`. Esses
+auxiliares agora estão no `test/cells.py`, e o resto saiu. Como o código
+atrás de `SC_SPIKE` não entrava em nenhum outro engine, os objetos não
+mudam.
+
+**O limite de execução do corpus vai de 20 s para 60 s.** Ao tirar o
+spike, o `sc_main.cpp` mudou, e com ele o `sc-full.wasm`, e o Makefile
+regenerou a base. Três programas do gcc torture com VLAs sob ASan
+(`pr43220-strict`, `vla-dealloc-1-on` e `-strict`) gravaram
+`run exit=timeout` na base gerada com 48 jobs, e no `make test` seguinte
+passaram. Sozinhos (`JOBS=1`), os três também passam. É a mesma causa das
+duas bases da §49: o limite de 20 s ficava perto do tempo desses programas
+com a máquina cheia. Nenhum programa do corpus fica em laço para sempre, e
+por isso o limite maior não deixa mais lenta nenhuma rodada.

@@ -68,8 +68,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   replaces a few LLVM functions sc does not need. `sc_session.cpp` is the
   REPL's session (one clang instance, each cell parsed on top of the ones
   before), `sc_api.cpp` the session part of `sc.h` over it (each cell linked
-  into a shared object) and `sc_spike.cpp` the driver of phase 0 of
-  `PLANO-REPL.md` (`make spike`, `ANALISE.md` §22). `sc_start.cpp` is
+  into a shared object). `sc_start.cpp` is
   `sc.wasm`'s `_start`, which has the session too. `build/sc-host-cut`
   does not: `sc` links the native engine with the session.
 - `Cargo.toml`, `build.rs` and `src/` are the Rust crate `sc`
@@ -150,10 +149,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   adds warnings).
   `test/checkinv.cpp` checks `sc_inv.cpp` against clang's option parser.
   `test/samples/` (C), `test/cxx/` (C++) and `test/mod/` (C++ with
-  `import std;`) have small student-style programs. `test/spike.py` cuts
-  them into REPL cells and runs them through `build/sc-spike`; `test/split.py`
-  does the same with every program of the corpus through
-  `build/sc --replay`. `test/session.py` has the other slices of
+  `import std;`) have small student-style programs. `test/split.py` cuts
+  every program of the corpus into REPL cells (`test/cells.py`) and runs
+  them through `build/sc --replay`. `test/session.py` has the other slices of
   the session: every source of the corpus as one cell (`ses-`), the
   sequences of cells, undos and restarts in `test/seq/` (`seq-`), the
   sources that crash the engine between good cells (`crash-`) and the

@@ -21,7 +21,6 @@ make test-native # the corpus on build/sc against the uncut native engine
 make learn-native # after make learn: what only the native engine calls
 make learn-session # after make learn-native: what only the REPL's session calls
 make learn-session-wasm # after learn-session: what only sc.wasm's session calls
-make spike       # PLANO-REPL.md phase 0: REPL cells through build/sc-spike
 make test-proto  # src/engine, the Rust API over engine/sc.h, and sc's modules, after changing them
 make test-split  # the corpus as REPL cells, after changing the session or the loader
 make test-session # the session's slices on build/sc against the uncut engine (build/sc-full)

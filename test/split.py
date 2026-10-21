@@ -7,7 +7,7 @@ ONLY=<name>,... (or a file of names) runs only those programs; JOBS sets the par
 
 Each program the corpus runs (test/samples, c-testsuite, gcc torture
 execute/, test/cxx, test/mod) is cut into one cell per top-level declaration
-(test/spike.py), the cells go through `<engine> --replay`, which compiles
+(test/cells.py), the cells go through `<engine> --replay`, which compiles
 them in one child session and links each as a shared object, and the loader
 runs the shared objects. The output must be the one of the program compiled
 whole as a shared object (pic-, in the native base, build/res/native-base);
@@ -20,7 +20,7 @@ run) and <outdir>/report.txt, and lists the programs that differ.
 import glob, os, re, shutil, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from spike import expected, same, split, std_pcm
+from cells import expected, same, split, std_pcm
 from corpuslib import only_names, run_all, source_name, sources
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -96,7 +96,7 @@ def main():
     if only := only_names():
         progs = [x for x in progs if x[1] in only]
     if any('/test/mod/' in p for p, _ in progs):
-        std_pcm(ENG, OUT, '--cc1')
+        std_pcm(ENG, OUT)
     with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
         rs = list(ex.map(one, progs))
     bad = [r for r in rs if not r[2] and r[0] not in KNOWN]
