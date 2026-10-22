@@ -1378,18 +1378,16 @@ e ANALISE.md §25 e §48).
 Os dois conversam por `postMessage`. O `.so` da célula vai do compilador
 ao programa como `ArrayBuffer` transferido, sem cópia.
 
-**Os arquivos.** Decidido e feito em 2026-10-22 (ANALISE.md §58): os do
+**Os arquivos.** Decidido e feito em 2026-10-22 (ANALISE.md §58 e §59): os do
 nativo, sem um FS no shim WASI.
-- O host dá o pacote do §5.4 (headers, bibliotecas, ignorelist, builtins
-  e os `.args`) por dois imports, `sc_files.status` e `sc_files.read`, e
-  chama o `sc_host_files("/sc")` exportado
-  (`engine/sc_host_files.cpp`). A sessão lê pelo VFS do clang e pelo
-  gancho do lld, como no nativo, e os `.args` do `sc` nativo servem sem
-  mudança.
+- O pacote do §5.4 (headers, bibliotecas, ignorelist, builtins e os
+  `.args`) está no próprio `sc.wasm`, um squashfs sem compressão que a
+  biblioteca do squashfuse lê (`engine/sc_pack.cpp`, ANALISE.md §59). O
+  host só chama o `sc_pack("/sc")` exportado. A sessão lê pelo VFS do
+  clang e pelo gancho do lld, como no nativo, e os `.args` do `sc` nativo
+  servem sem mudança. A página baixa só o módulo, que o servidor comprime.
 - A sessão liga as células em memória: não há `/tmp`. O WASI do worker
   só precisa de stdout, stderr, relógio e argumentos.
-- Falta escolher o formato que a página baixa. O squashfs do `sc` pede um
-  leitor em JS. Um tar com zstd pede só um descompressor.
 - Os `.cwasm` não servem no navegador. O V8 compila os `.so` e guarda o
   código do `WebAssembly.compileStreaming` no cache HTTP dele.
 

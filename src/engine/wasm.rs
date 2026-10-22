@@ -6,9 +6,9 @@
 //! by `<the program> --precompile`. Each session is a new instance in a
 //! store of its own: `_initialize`, `chdir` to the process's directory,
 //! `sc_session_new`; the one-shot engine is a new instance that runs
-//! `_start`. The guest sees the repository at the same path, and a session
-//! the files of [`sc_set_files`] through the imports of
-//! `engine/sc_host_files.cpp`.
+//! `_start`. The guest sees the repository at the same path; after
+//! [`sc_set_files`], a session reads the pack the module has in it
+//! (`engine/sc_pack.cpp`) at the same root, in place of those files.
 //!
 //! [`super::serve`] forks before each cell, which is safe only with one
 //! thread: the module is compiled in another process, and WASI runs on a
@@ -19,11 +19,11 @@
 //! `sc-cut.wasm`) as scripts/link.py's native stubs say it, go to stderr.
 use super::sys::sc_session;
 use std::cell::RefCell;
-use std::ffi::{c_char, c_int, c_uint, c_ulonglong, CStr};
+use std::ffi::{c_char, c_int, c_uint, CStr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
-use wasmtime::{Caller, Config, Engine, Instance, Linker, Memory, Module, Store, TypedFunc, WasmBacktrace};
+use wasmtime::{Config, Engine, Instance, Linker, Memory, Module, Store, TypedFunc, WasmBacktrace};
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder};
 
@@ -66,43 +66,6 @@ fn files() -> Option<&'static super::sys::sc_files> {
     unsafe { FILES.load(Ordering::Relaxed).as_ref() }
 }
 
-/// The guest's path at `p`, `n` bytes, with a NUL, and its memory.
-fn guest_path(c: &mut Caller<'_, WasiP1Ctx>, p: u32, n: u32) -> (Memory, Vec<u8>) {
-    let mem = c.get_export("memory").and_then(|e| e.into_memory()).unwrap_or_else(|| fail("no memory"));
-    let mut path = vec![0; n as usize + 1];
-    mem.read(&c, p as usize, &mut path[..n as usize]).unwrap();
-    (mem, path)
-}
-
-/// `sc_files.status` and `sc_files.read` (engine/sc_host_files.cpp).
-fn add_files(linker: &mut Linker<WasiP1Ctx>) {
-    linker
-        .func_wrap("sc_files", "status", |mut c: Caller<'_, WasiP1Ctx>, p: u32, n: u32, size: u32| -> i32 {
-            let Some(f) = files() else { return 0 };
-            let (mem, path) = guest_path(&mut c, p, n);
-            let mut sz: c_ulonglong = 0;
-            let kind = unsafe { (f.status.unwrap())(path.as_ptr().cast(), &mut sz) };
-            mem.write(&mut c, size as usize, &sz.to_le_bytes()).unwrap();
-            kind
-        })
-        .unwrap();
-    linker
-        .func_wrap("sc_files", "read", |mut c: Caller<'_, WasiP1Ctx>, p: u32, n: u32, out: u32| {
-            let Some(f) = files() else { return };
-            let (mem, path) = guest_path(&mut c, p, n);
-            let mut sz: c_ulonglong = 0;
-            let mut b = unsafe { (f.read.unwrap())(path.as_ptr().cast(), &mut sz) };
-            if b.is_null() {
-                b = unsafe { (f.list.unwrap())(path.as_ptr().cast(), &mut sz) };
-            }
-            if !b.is_null() {
-                let bytes = unsafe { std::slice::from_raw_parts(b.cast::<u8>(), sz as usize) };
-                mem.write(&mut c, out as usize, bytes).unwrap();
-            }
-        })
-        .unwrap();
-}
-
 static SHARED: OnceLock<Shared> = OnceLock::new();
 
 fn shared() -> &'static Shared {
@@ -114,7 +77,6 @@ fn shared() -> &'static Shared {
             .unwrap_or_else(|e| fail(&format!("{}: {e} (run {} --precompile)", cwasm.display(), exe().display())));
         let mut linker = Linker::new(&engine);
         p1::add_to_linker_sync(&mut linker, |c| c).unwrap();
-        add_files(&mut linker);
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").canonicalize().unwrap();
         Shared { engine, module, linker, rt, root }
@@ -254,9 +216,9 @@ pub unsafe fn sc_session_new(argc: c_int, argv: *const *const c_char, out: *mut 
     let new: TypedFunc<(i32, u32, u32), i32> = func(&mut g.store, &inst, "sc_session_new");
     let chdir: TypedFunc<u32, i32> = func(&mut g.store, &inst, "chdir");
     if let Some(f) = files() {
-        let host_files: TypedFunc<u32, ()> = func(&mut g.store, &inst, "sc_host_files");
+        let pack: TypedFunc<u32, ()> = func(&mut g.store, &inst, "sc_pack");
         let p = g.put(CStr::from_ptr(f.root).to_bytes_with_nul());
-        check(host_files.call(&mut g.store, p));
+        check(pack.call(&mut g.store, p));
         check(g.free.call(&mut g.store, p));
     }
     // the session finds a cell's "..." includes from the directory
@@ -326,8 +288,9 @@ pub unsafe fn sc_result_len(s: *mut sc_session, part: c_int) -> c_uint {
     with(|g| check(g.len.call(&mut g.store, (s as usize as u32, part))))
 }
 
-/// `sc_set_files`: for the sessions after it, each of which passes it to its
-/// guest (`sc_host_files`).
+/// `sc_set_files`: for the sessions after it, each of which reads the
+/// module's pack at its root (`sc_pack`); the module's pack and sc's have
+/// the same files (scripts/pack.py).
 pub unsafe fn sc_set_files(files: *const super::sys::sc_files) {
     FILES.store(files.cast_mut(), Ordering::Relaxed);
 }

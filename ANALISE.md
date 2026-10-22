@@ -4449,3 +4449,82 @@ O `wasmtime run` do corpus (`test/corpus.py`) passa
   11.926, 0 ruins (42), em 4,7 min. Numa das rodadas,
   `limits-externdecl` passou dos 120 s com a máquina cheia; sozinho leva
   63 s no Node (Liftoff) e 41 s no wasmtime, e passou nas outras duas.
+
+## 59. O pacote dentro do `sc.wasm`: um squashfs sem compressão
+
+O `sc.wasm` passa a levar o pacote do §58 dentro de si, e a página baixa
+só o módulo (decidido em 2026-10-22). O shim WASI do simplecode não dá
+nada além do que já dá, e os imports `sc_files.status` e `sc_files.read`
+saem.
+
+**O formato.** As mesmas 2.030 entradas do pacote do `sc` (§52), sem os
+`.cwasm`, que o navegador não usa (18,7 MB crus), em duas imagens do
+`mksquashfs`, comprimidas depois como o servidor do simplecode faz
+(`server/src/static_files.rs`: zstd 19 e gzip 9) e com brotli 11:
+
+| | bytes | zstd 19 | gzip 9 | brotli 11 |
+| --- | ---: | ---: | ---: | ---: |
+| o `sc.wasm` de antes | 20.054.224 | 5.656.340 | 7.459.299 | 5.314.157 |
+| + o squashfs sem compressão | 38.925.223 | 7.549.291 | 10.324.980 | 7.096.188 |
+| + o squashfs com zstd -19 (o do `sc`) | 22.667.547 | 8.269.744 | 10.073.117 | 7.922.753 |
+
+A imagem sem compressão chega menor ao navegador, porque o servidor
+comprime o módulo inteiro de uma vez, e o squashfs comprime blocos de 128
+KiB independentes. Sozinha, ela dá 1,9 MB em zstd 19 e 1,8 MB em brotli,
+contra 2,6 MB da imagem com zstd. Ela também dispensa um descompressor no
+guest: o `zstddeclib` dá de 90 a 99 KB de wasm, e descomprime a `libc.so`
+em 2,7 ms no Node. O `sc` nativo continua com a imagem zstd: nele não há
+compressão no caminho, e a outra o faria crescer 16 MB.
+
+**O leitor.** A biblioteca do squashfuse 0.6.5 (BSD-2), buscada pelo
+`Makefile` num commit fixo (`build/squashfuse`) e compilada para
+wasm32 em `build/squashfuse-wasm/libsquashfuse.a`. Sem patch: o
+`engine/sc_pack.cpp` dá as duas funções que ela pede ao sistema, o
+`sqfs_pread`, que copia da imagem, e o `sqfs_decompressor_get`, que dá um
+descompressor que sempre falha (nada na imagem é comprimido). O
+`decompress.c` e o `nonstd-pread.c` não entram.
+
+A imagem é um `#embed` do `build/pack/sc.sqfs`, que o `scripts/pack.py`
+monta com o `mksquashfs` (`-noI -noId -noD -noF -noX`, dono e datas
+zerados) a partir de uma cópia da árvore com os mesmos arquivos do
+`build.rs`: os mesmos diretórios, sem os intrínsecos de outros alvos, e a
+`libc.so` sem DWARF. Extraída, ela é igual, arquivo por arquivo, ao
+pacote do `sc` sem os `.cwasm`. O `mksquashfs` (squashfs-tools) passa a
+ser preciso para o build.
+
+O host chama o `sc_pack("/sc")` exportado depois do `_initialize`, no
+lugar do `sc_host_files`. Cada arquivo lido é copiado uma vez para o heap
+e guardado, como o `sc_files` pede (com um NUL depois). O
+`sc_pack_image` dá onde a imagem está na memória, e o `engine.mjs` a
+deixa fora do snapshot e da restauração: a sessão só a lê. O
+`wasmtime run` do corpus não precisa mais de `-W unknown-imports-trap`.
+
+**O tamanho.** O `sc.wasm` tem 38.913.173 bytes: o código cresceu 9,3 KB
+(o squashfuse e o leitor, menos o `sc_host_files`), e os dados, 18,8 MB.
+Pelo servidor, são 7.548.235 bytes em zstd 19 (+1,9 MB) e 7.100.519 em
+brotli.
+
+**O tempo, no Node.** Uma sessão sem o `--liftoff-only`, com 100 células
+pequenas e então 21 medidas, comparada com a do §58, em que o host lia os
+arquivos do disco pelos imports. A máquina estava carregada, e outras
+rodadas variaram até 3 vezes, então os números valem como ordem de
+grandeza:
+
+| | antes, C | agora, C | antes, C++ | agora, C++ |
+| --- | ---: | ---: | ---: | ---: |
+| instanciar | 9,1 ms | 18,7 ms | 9,7 ms | 21,5 ms |
+| `sc_host_files` / `sc_pack` | 0,12 ms | 0,49 ms | 0,14 ms | 0,48 ms |
+| a célula dos `#include` | 140 ms | 141 ms | 3,2 s | 3,4 s |
+| uma célula, mediana | 6,2 ms | 7,4 ms | 8,9 ms | 9,0 ms |
+| a memória | 16,1 MB | 33,4 MB | 65,8 MB | 82,7 MB |
+| a cópia do snapshot | 2,4 ms | 1,3 ms (3,9 com a imagem) | 10,4 ms | 10,3 ms (13,5) |
+
+Instanciar copia os 19 MB da imagem para a memória, cerca de 10 ms, uma
+vez por worker. Ler os arquivos da imagem pelo squashfuse não muda o
+tempo dos `#include`. A memória cresce o tamanho da imagem, e o snapshot
+que a deixa de fora custa o que custava.
+
+**As baterias.** `make test`: 17.715 arquivos, 0 diferenças. `make
+test-session-wasm`: 11.926 resultados, 0 ruins (40 conhecidos). `make
+test-session-node`: 11.926, 0 ruins (42). `make test-split-node`: 0
+diferenças (8). O motor nativo não mudou.

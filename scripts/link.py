@@ -84,7 +84,9 @@ def ninja_cmd(target):
 # --- the link line: clang's, with the engine objects in place of the driver
 # sc.wasm is a reactor with the session (sc.h) too: its exports below
 ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine{H}')}/{f}.o" for f in ('sc_entry', 'sc_main', 'sc_inv', 'sc_backend', 'sc_cuts',
-                                                                         'sc_session', 'sc_api', 'sc_files') + (() if NATIVE else ('sc_start', 'sc_host_files'))]
+                                                                         'sc_session', 'sc_api', 'sc_files') + (() if NATIVE else ('sc_start', 'sc_pack'))]
+# sc_pack's reader of the pack (Makefile, SQFS_LIB)
+ENGINE += [] if NATIVE else [f'{B}/squashfuse-wasm/libsquashfuse.a']
 ENGINE += os.environ.get('SC_EXTRA', '').split()  # more engine objects, for experiments
 toks = shlex.split(ninja_cmd('bin/clang-23').split(': && ', 1)[1].removesuffix(' && :'))
 flags = [t for t in toks if not t.endswith(('.a', '.obj', '.o')) and t not in ('-o', 'bin/clang-23', '-Os', '-Xlinker')

@@ -13,6 +13,9 @@ CTS_REPO := https://github.com/c-testsuite/c-testsuite
 CTS_COMMIT := 5c7275656d751de0e68b2d340a95b5681858ed07
 GCC_REPO := https://github.com/gcc-mirror/gcc
 GCC_COMMIT := ca5cffec066fb8a7edd13dd12792505739381b42
+# the squashfs reader of sc.wasm's pack (engine/sc_pack.cpp): 0.6.5
+SQFS_REPO := https://github.com/vasi/squashfuse
+SQFS_COMMIT := b3a880aacc63641c570f114ff8d45f221fc97d02
 
 LLVM_OPTS := -DCMAKE_BUILD_TYPE=MinSizeRel -DLLVM_ENABLE_ASSERTIONS=OFF \
   -DLLVM_TARGETS_TO_BUILD=WebAssembly -DLLVM_ENABLE_PROJECTS="clang;lld" \
@@ -42,7 +45,7 @@ PACK = $(PACK_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(I
 # the engine with the session (sc.h); sc.wasm is a reactor, with its _start
 # (PLANO-REPL.md §5.2). scripts/link.py has the same lists
 ENGINE := sc_entry sc_main sc_inv sc_backend sc_cuts sc_session sc_api sc_files
-WENGINE := $(ENGINE) sc_start sc_host_files
+WENGINE := $(ENGINE) sc_start sc_pack
 ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI_EMULATED_MMAN \
   -DLLVM_BUILD_STATIC -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS \
   -I$(B)/src/clang/include -I$(B)/wasm/tools/clang/include -I$(B)/wasm/include -I$(B)/src/llvm/include \
@@ -76,6 +79,12 @@ $(B)/gcc-ts/.git:
 	git init -q $(B)/gcc-ts && cd $(B)/gcc-ts \
 	  && git sparse-checkout set gcc/testsuite/gcc.c-torture gcc/testsuite/gcc.dg/torture \
 	  && git fetch -q --depth 1 --filter=blob:none $(GCC_REPO) $(GCC_COMMIT) && git checkout -q FETCH_HEAD
+
+# swap.h.inc and swap.c.inc are generated, and config.h is empty
+$(B)/squashfuse/fs.c:
+	git init -q $(B)/squashfuse && cd $(B)/squashfuse \
+	  && git fetch -q --depth 1 $(SQFS_REPO) $(SQFS_COMMIT) && git checkout -q FETCH_HEAD \
+	  && sh gen_swap.sh squashfs_fs.h && : > config.h
 
 CORPUS := $(B)/c-testsuite/.git $(B)/gcc-ts/.git $(B)/src/llvm/CMakeLists.txt
 fetch: $(W)/bin/clang $(CORPUS)
@@ -181,17 +190,35 @@ $(B)/engine/%.o: engine/%.cpp engine/sc.h engine/sc_inv.h engine/sc_session.h | 
 	@mkdir -p $(@D)
 	$(W)/bin/clang++ $(ENGINE_FLAGS) -c $< -o $@
 
-engine: $(WENGINE:%=$(B)/engine/%.o)
+# sc.wasm's pack, in the module (engine/sc_pack.cpp), and the library that
+# reads it: squashfuse's, without its decompressors and pread (sc_pack.cpp)
+SQFS_SRCS := swap cache table dir file fs xattr hash stack traverse util nonstd-stat
+SQFS_LIB := $(B)/squashfuse-wasm/libsquashfuse.a
+$(B)/pack/sc.sqfs: scripts/pack.py $(PACK)
+	scripts/pack.py $@
+
+$(B)/squashfuse-wasm/%.o: $(B)/squashfuse/fs.c
+	@mkdir -p $(@D)
+	$(W)/bin/clang --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -Os -ffunction-sections -fdata-sections \
+	  -c $(B)/squashfuse/$*.c -o $@
+
+$(SQFS_LIB): $(SQFS_SRCS:%=$(B)/squashfuse-wasm/%.o)
+	rm -f $@ && $(W)/bin/llvm-ar qc $@ $^
+
+$(B)/engine/sc_pack.o: $(B)/pack/sc.sqfs $(B)/squashfuse/fs.c
+$(B)/engine/sc_pack.o: ENGINE_FLAGS += -I$(B)/squashfuse --embed-dir=$(B)/pack -Wno-c23-extensions
+
+engine: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB)
 
 $(B)/trim/Intrinsics.cpp.obj: scripts/trim.py scripts/trim_intrinsics.py | $(B)/wasm/lib/libclangSema.a
 	scripts/trim.py
 
 trim: $(B)/trim/Intrinsics.cpp.obj
 
-$(B)/sc-full.wasm: $(WENGINE:%=$(B)/engine/%.o) scripts/link.py
+$(B)/sc-full.wasm: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) scripts/link.py
 	scripts/link.py --full $@
 
-$(B)/sc-cut.wasm: $(WENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj scripts/link.py \
+$(B)/sc-cut.wasm: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) $(B)/trim/Intrinsics.cpp.obj scripts/link.py \
     cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/symbols.session.used cuts/o0init.txt
 	scripts/link.py $@
 
@@ -394,7 +421,7 @@ test-warn: $(B)/sc.wasm $(B)/res/wev-base/summary.json $(SCLOAD)
 
 # rebuild what the cuts keep from the corpus with -Weverything (after an LLVM
 # bump or new cuts)
-learn: $(WENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj $(B)/res/wev-base/summary.json
+learn: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) $(B)/trim/Intrinsics.cpp.obj $(B)/res/wev-base/summary.json
 	WFLAGS=-Weverything SC_BASE=$(CURDIR)/$(B)/res/wev-base/summary.json scripts/link.py --learn $(B)/sc-cut.wasm
 
 # what only the native engine calls (cuts/symbols.host.used), after learn
@@ -407,7 +434,7 @@ learn-session: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o 
 	scripts/learn_session.py
 
 # after learn-session: what only sc.wasm's session calls, into the same list
-learn-session-wasm: $(WENGINE:%=$(B)/engine/%.o) $(B)/trim/Intrinsics.cpp.obj $(B)/res/session-wasm-wev-base/summary.json \
+learn-session-wasm: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) $(B)/trim/Intrinsics.cpp.obj $(B)/res/session-wasm-wev-base/summary.json \
     $(B)/res/native-base/summary.json $(SCLOAD) $(SC_WASM)
 	scripts/learn_session.py --wasm
 

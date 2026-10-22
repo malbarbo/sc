@@ -102,7 +102,7 @@ where
 
 /// The files the sessions read in place of the disk (`sc_set_files`): the
 /// paths under `files.root`, for their clang and wasm-ld; with `sc.wasm`,
-/// through its imports (`engine/sc_host_files.cpp`).
+/// its own pack at the same root (`engine/sc_pack.cpp`).
 pub fn set_files(files: &'static sys::sc_files) {
     // SAFETY: what files points to lives until the process ends
     unsafe { raw::sc_set_files(files) }

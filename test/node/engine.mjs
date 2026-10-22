@@ -6,7 +6,8 @@
 //
 // usage: node engine.mjs --engine (SC_WASM: the module, build/sc.wasm)
 // The guest sees the repository's parent at its path, and the session the
-// pack at /sc, from the build (packFile); its stdout goes to stderr.
+// pack in the module at /sc (engine/sc_pack.cpp), which the snapshot leaves
+// out: the session only reads it. The guest's stdout goes to stderr.
 // SC_MEMORY_SIZE writes
 // the memory's size after each cell, as wasm.rs does; SC_SNAPSHOT_LOG
 // appends to that file, for each snapshot, the memory's size and the ms to
@@ -73,38 +74,6 @@ function reply(status, parts) {
   writeAll(Buffer.concat([h, ...ps]));
 }
 
-// --- the pack: what sc embeds (build.rs) at the paths of the build
-
-const B = `${R}/build`;
-const PACK = { sysroot: `${B}/sysroot`, res: `${B}/wasi-sdk-29.0-x86_64-linux/lib/clang/21`, repl: `${B}/pack/repl` };
-
-/// the path of the build for a path of the pack, '' for its root, null out
-/// of it
-function packFile(p) {
-  const m = /^\/sc(?:\/([^/]+)(.*))?$/.exec(p);
-  if (!m) return null;
-  return m[1] === undefined ? '' : PACK[m[1]] ? PACK[m[1]] + m[2] : null;
-}
-
-/// what build.rs leaves out of clang's headers: the intrinsics of the other
-/// targets
-function left(p) {
-  const n = /^\/sc\/res\/include\/([^/]+)$/.exec(p)?.[1];
-  return n !== undefined && (n.includes('intrin') || n.startsWith('arm_'));
-}
-
-/// sc_files (engine/sc_host_files.cpp): the kind (0 none, 1 a file, 2 a
-/// directory) and the bytes, of the file or of the names in the directory
-function packEntry(p) {
-  const f = left(p) ? null : packFile(p);
-  const names = (ns) => () => enc.encode(ns.filter((n) => !left(`${p}/${n}`)).map((n) => n + '\0').join(''));
-  if (f === '') return { kind: 2, bytes: names(Object.keys(PACK)) };
-  const st = f === null ? undefined : fs.statSync(f, { throwIfNoEntry: false });
-  if (st?.isFile()) return { kind: 1, size: st.size, bytes: () => fs.readFileSync(f) };
-  if (st?.isDirectory()) return { kind: 2, bytes: names(fs.readdirSync(f)) };
-  return { kind: 0 };
-}
-
 // --- the guest
 
 class Exit extends Error {
@@ -119,31 +88,22 @@ class Guest {
       version: 'preview1', args: ['sc'], env: {}, stdout: 2,
       preopens: { [ROOT]: ROOT },
     });
-    const str = (p, n) => Buffer.from(this.bytes().subarray(p, p + n)).toString();
-    const sc_files = {
-      status: (p, n, size) => {
-        const e = packEntry(str(p, n));
-        const sz = e.kind === 2 ? e.bytes().length : (e.size ?? 0);
-        new DataView(this.x.memory.buffer).setBigUint64(size, BigInt(sz), true);
-        return e.kind;
-      },
-      read: (p, n, out) => {
-        const e = packEntry(str(p, n));
-        if (e.kind) this.bytes().set(e.bytes(), out);
-      },
-    };
     // an exit of the guest (a fatal error) unwinds to the cell, as a trap
     const proc_exit = (code) => {
       throw new Exit(code);
     };
-    const imports = { wasi_snapshot_preview1: { ...wasi.wasiImport, proc_exit }, sc_files };
+    const imports = { wasi_snapshot_preview1: { ...wasi.wasiImport, proc_exit } };
     this.inst = new WebAssembly.Instance(module, imports);
     this.x = this.inst.exports;
     // sc.wasm exports _start too (the one-shot engine), which initialize refuses
     wasi.initialize({ exports: { memory: this.x.memory, _initialize: this.x._initialize } });
     const root = this.put(enc.encode('/sc\0'));
-    this.x.sc_host_files(root);
+    this.x.sc_pack(root);
     this.x.free(root);
+    const size = this.put(new Uint8Array(4));
+    const image = this.x.sc_pack_image(size);
+    this.image = [image, image + new DataView(this.x.memory.buffer).getUint32(size, true)];
+    this.x.free(size);
     // the session finds a cell's "..." includes from the directory
     const p = this.put(enc.encode(process.cwd() + '\0'));
     this.x.chdir(p);
@@ -192,13 +152,15 @@ class Guest {
     }
   }
 
-  /// the memory and the stack pointer, in a buffer kept from one cell to
-  /// the next: a new one each time costs its allocation too
+  /// the memory but the pack, and the stack pointer, in a buffer kept from
+  /// one cell to the next: a new one each time costs its allocation too
   snapshot() {
     const t = performance.now();
     const m = this.bytes();
+    const [a, b] = this.image;
     if (!this.buf || this.buf.length < m.length) this.buf = new Uint8Array(m.length);
-    this.buf.set(m);
+    this.buf.set(m.subarray(0, a));
+    this.buf.set(m.subarray(b), b);
     const snap = { mem: this.buf.subarray(0, m.length), sp: this.x.__stack_pointer.value };
     snap.ms = performance.now() - t;
     return snap;
@@ -208,7 +170,9 @@ class Guest {
   restore(snap) {
     const t = performance.now();
     const m = this.bytes();
-    m.set(snap.mem);
+    const [a, b] = this.image;
+    m.set(snap.mem.subarray(0, a));
+    m.set(snap.mem.subarray(b), b);
     m.fill(0, snap.mem.length);
     this.x.__stack_pointer.value = snap.sp;
     return performance.now() - t;
