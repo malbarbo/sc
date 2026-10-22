@@ -1260,6 +1260,8 @@ três leitores: o VFS do clang, um gancho no wasm-ld e o loader.
 **Passos.**
 1. `flags.py` com `/sc/sysroot` e `/sc/res`; o squashfs (`build.rs` e
    embutido), sem leitores ainda. Conferir o tamanho com a tabela acima.
+   **Feito em 2026-10-21** (ANALISE.md §52): os `.args` do pacote ficam em
+   `build/pack/repl`, e o pacote sem os `.cwasm` tem 2,61 MB.
 2. O VFS do clang e o `sc_set_files`. Rodar `test-aluno` e `test-checks`,
    que são os que passam pelos `.args` do `sc`, com o `sc` copiado para
    fora do checkout. O `test-session` e o `test-split` passam aos `.args`

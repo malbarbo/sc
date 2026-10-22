@@ -3,7 +3,8 @@
 wasm32-wasip1 (C gnu23, C++ gnu++26, with exceptions and setjmp/longjmp) and
 the libraries a shared object is linked with. The paths are the engine's
 view: the sysroot at /sysroot, clang's resource directory at /res and libc++'s
-std module at /m/std.pcm; real() puts the build's in their place.
+std module at /m/std.pcm; real() puts the build's in their place, or the
+pack's (/sc, what sc embeds: PLANO-REPL.md §5.4).
 
 The level of --safety (PLANO-VERIFICACOES.md §3, §4) adds to these flags the
 warnings, and the warnings that are errors, of what the student sees.
@@ -12,7 +13,8 @@ usage: flags.py [c++|gnu17] [pic] [pcm|mod] [off|on|strict] [g]
                                     the -cc1 flags (make checkinv)
        flags.py --session c|c++ <build> [off|on|strict] [file]
                                     a REPL session's arguments, one per line
-                                    (build/repl, sc.h); file: of `sc FILE`
+                                    (build/repl, sc.h); file: of `sc FILE`;
+                                    build /sc: the pack's (build/pack)
 """
 import sys
 
@@ -181,9 +183,13 @@ def rt_static(level):
         f'--wrap={x}' for x in WRAP]
 
 
+# the root of the pack sc embeds, with sysroot/ and res/ (build.rs)
+PACK = '/sc'
+
+
 def res(build):
-    """clang's resource directory in the build"""
-    return f'{build}/wasi-sdk-29.0-x86_64-linux/lib/clang/21'
+    """clang's resource directory in the build, or in the pack"""
+    return f'{PACK}/res' if build == PACK else f'{build}/wasi-sdk-29.0-x86_64-linux/lib/clang/21'
 
 
 def real(fl, build, pcm=None):

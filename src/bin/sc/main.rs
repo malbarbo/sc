@@ -37,6 +37,13 @@ use std::process::ExitCode;
 
 const NAME: &str = "sc";
 
+/// What a session reads, embedded (build.rs, PLANO-REPL.md §5.4): a
+/// squashfs with the sysroot at sysroot/, clang's headers at res/ and the
+/// arguments at repl/, in the view of `/sc`. Nothing reads it yet (phase 7,
+/// step 1).
+#[cfg(not(feature = "wasm"))]
+static PACK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sc.sqfs"));
+
 fn lang_arg() -> impl Parser<Option<Lang>> {
     bpaf::short('x')
         .help("The language, c or c++ (by default, the file's extension, else c)")
@@ -139,6 +146,9 @@ fn show_help<T>(parser: bpaf::OptionParser<T>, args: &[&str]) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // kept in the binary until its readers come
+    #[cfg(not(feature = "wasm"))]
+    std::hint::black_box(PACK);
     let code = modes();
     #[cfg(feature = "wasm")]
     sc::engine::wasm::cleanup();

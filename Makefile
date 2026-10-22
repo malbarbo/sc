@@ -34,6 +34,12 @@ CARGO := --locked
 RUST := Cargo.toml Cargo.lock build.rs $(shell find src -name '*.rs') engine/sc.h
 SCLOAD := $(B)/cargo/release/scload
 SC_REPL := $(B)/cargo/release/sc
+# the arguments of a session (build/repl), and what the sc binaries embed
+# (build.rs, PLANO-REPL.md §5.4): the same arguments in the pack's view, the
+# sysroot, its headers and libraries
+REPL_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/repl/$l-$s.args $(B)/repl/$l-$s-file.args))
+PACK_ARGS := $(REPL_ARGS:$(B)/repl/%=$(B)/pack/repl/%)
+PACK = $(PACK_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 
 # the engine with the session (sc.h); sc.wasm is a reactor, with its _start
 # (PLANO-REPL.md §5.2). scripts/link.py has the same lists
@@ -234,7 +240,7 @@ test-proto: $(B)/link-session/engine.args $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc
 
 # sc with the same engine: the child (sc --engine) and the test of the
 # REPL's side (sc --replay), PLANO-REPL.md phase 2, the base of build/sc's
-$(B)/sc-full: $(B)/link-session/engine.args $(RUST)
+$(B)/sc-full: $(B)/link-session/engine.args $(RUST) $(PACK)
 	SC_LINK_ARGS=$(CURDIR)/$< cargo build --release $(CARGO) --target-dir $(B)/cargo-full --bin sc
 	cp $(B)/cargo-full/release/sc $@
 
@@ -300,14 +306,14 @@ test-split-wasm: $(B)/sc-wasm $(SCLOAD) $(B)/res/native-base/summary.json
 $(SCLOAD): $(RUST)
 	cargo build --release $(CARGO) --no-default-features --bin scload
 SC_ENGINE_ARGS := $(B)/link-session-cut/engine.args
-$(SC_REPL): $(RUST) $(SC_ENGINE_ARGS)
+$(SC_REPL): $(RUST) $(SC_ENGINE_ARGS) $(PACK)
 	cargo build --release $(CARGO) --bin sc
 
 loader: $(SCLOAD)
 
 # the binaries that ship, with the profile that makes them small
 # (ANALISE.md §49): build/cargo/dist/scload and sc
-dist: $(SC_ENGINE_ARGS)
+dist: $(SC_ENGINE_ARGS) $(PACK)
 	cargo build $(CARGO) --profile dist --bins
 
 # what the batteries do not reach: Ctrl-C, many exceptions (tests/), without
@@ -316,16 +322,21 @@ test-loader:
 	cargo test --release $(CARGO) --no-default-features --lib --test signal --test exceptions
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc FILE`
-REPL_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/repl/$l-$s.args $(B)/repl/$l-$s-file.args))
 $(B)/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/repl
 	scripts/flags.py --session $(firstword $(subst -, ,$*)) $(CURDIR)/$(B) $(wordlist 2,3,$(subst -, ,$*)) > $@
 
+# the same in the pack's view, for the pack sc embeds (PLANO-REPL.md §5.4):
+# build.rs puts them with the sysroot, the headers and the libraries
+$(B)/pack/repl/%.args: scripts/flags.py
+	mkdir -p $(B)/pack/repl
+	scripts/flags.py --session $(firstword $(subst -, ,$*)) /sc $(wordlist 2,3,$(subst -, ,$*)) > $@
+
 repl: $(SC_REPL) sc-deps
 
-# what cargo build asks for (build.rs): the engine sc links, and what sc
-# reads at run time
-sc-deps: $(SC_ENGINE_ARGS) $(REPL_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
+# what cargo build asks for (build.rs): the engine sc links, what it embeds
+# and what it reads at run time
+sc-deps: $(SC_ENGINE_ARGS) $(REPL_ARGS) $(PACK)
 
 # a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
 test-aluno: repl

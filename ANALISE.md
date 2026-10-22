@@ -3968,3 +3968,63 @@ mesmo clone, o `make build/sc.wasm checkinv` passou: o `checkinv` deu SAME.
 O `sc.wasm` só difere do checkout pelos caminhos de `build/src` que ficam
 gravados nele. O código é o mesmo, e o `wasm-opt` juntou os dados num
 segmento a menos.
+
+## 52. Fase 7 do REPL, passo 1: o pacote embutido no `sc`
+
+O `PLANO-REPL.md` §5.4 tem a proposta e as decisões. Neste passo, o `sc`
+passa a levar o pacote dentro de si, mas nada o lê ainda. O `sc` continua
+lendo os `.args` de `build/repl` e os arquivos do disco.
+
+**Os `.args` na visão do pacote.** O `scripts/flags.py --session` aceita
+`/sc` no lugar do diretório de build e escreve `/sc/sysroot/...` e
+`/sc/res/...`. O make grava esses `.args` em `build/pack/repl`, e os de
+`build/repl` continuam com os caminhos reais até o passo 2.
+
+**O pacote.** O `build.rs` monta um squashfs em `$OUT_DIR/sc.sqfs`, com o
+`backhand` 0.25.5 como dependência de build (`default-features = false`, só
+`zstd`). Os parâmetros são zstd -19, blocos de 128 KiB, sem preenchimento
+e com dono e datas zerados. O `sc` o embute com `include_bytes!`, e um
+`black_box` o mantém no binário até chegarem os leitores. O `sc` da feature
+`wasm` não leva pacote.
+
+O conteúdo:
+- `sysroot/include`;
+- `res/include`, sem os `*intrin*.h` e os `arm_*.h` da raiz;
+- as cinco `.so` (libc sem as seções `.debug*`, cortadas no `build.rs`);
+- a ignorelist;
+- o `libclang_rt.builtins.a`;
+- os 12 `.args` em `repl/`.
+
+São 2.030 arquivos e 18,7 MB crus: os 2.035 da medição do §5.4 menos os
+cinco `.cwasm`, que chegam no passo 4. Extraído com o `unsquashfs`, o
+pacote é igual, arquivo por arquivo, ao diretório da medição. A libc sem
+DWARF saiu byte a byte igual à do `wasm-tools strip -d '.debug.*'`.
+
+| | bytes |
+|---|---|
+| o pacote (`backhand`) | 2.612.568 |
+| o mesmo conteúdo no `mksquashfs` (com o preenchimento de 4 KiB) | 2.617.344 |
+| o `sc` de dist, antes | 34.336.352 |
+| o `sc` de dist, com o pacote | 36.950.432 (+2.614.080) |
+
+A tabela do §5.4 dá 4,01 MB com os `.cwasm`. O `mksquashfs` desse
+conteúdo com os `.cwasm` dava 4.014.080 bytes, e sem eles dá os 2.617.344
+acima. Os 302 KB do leitor entram no passo 2.
+
+**O tempo no build.** Comprimir o pacote leva 63 s com o `opt-level` 0, que
+é o padrão para o que compila os scripts de build. O `build-override` com
+`opt-level = 2` nos perfis `dev` e `release` (o `dist` herda o do
+`release`) baixa isso para 12 s. Ele é o mesmo que o passo 4 pede para o
+wasmtime do `build.rs`. Ligá-lo recompilou tudo uma vez (4,5 min), porque
+os proc-macros são compartilhados.
+
+O `build.rs` também roda de novo a cada mudança em `engine/`, `cuts/` e nos
+outros diretórios que o `make sc-deps` lê. Para esses casos, ele grava um
+carimbo com o caminho, o tamanho e a data de cada entrada
+(`sc.stamp`), e não refaz o pacote se o carimbo não mudou.
+
+O `Cargo.lock` ganhou o `backhand` e as dependências dele (19 crates). O
+`toml_parser` subiu de 1.1.3 para 1.1.5, por causa do `toml_edit` que o
+`deku` traz.
+
+O `test-aluno` e o `test-checks` passaram sem diferença.
