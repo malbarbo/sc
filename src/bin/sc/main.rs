@@ -4,9 +4,9 @@
 //! The engine is linked in (PLANO-REPL.md §1.1, phase 6b): the compiler is
 //! the child `sc --engine`, and `sc --cc1 ...` and `sc --ld ...` are the
 //! one-shot engine, `sc_main`'s `-cc1` and `ld` (a student's program may be
-//! called `ld`). The session's arguments are the ones `make repl` writes
-//! to `build/repl` of the build directory (`SC_BUILD`, by default the one
-//! this binary is in).
+//! called `ld`). What a session reads, its arguments, the headers and the
+//! libraries, is in the pack this binary embeds ([`pack`]): `sc` copied
+//! anywhere runs. The one-shot engine reads the disk.
 //!
 //! `sc --replay <dir> <cell>... -- <session args>` is the test of the REPL's
 //! side (test/split.py, test/session.py): each cell (a file, %undo, or
@@ -19,10 +19,12 @@
 //!
 //! With the `wasm` feature (build/sc-wasm) the engine is
 //! `<this program>.wasm`, which `<this program> --precompile` compiles
-//! first ([`sc::engine::wasm`]).
+//! first ([`sc::engine::wasm`]). Its sessions read the disk, not the pack:
+//! it is the test host of `sc.wasm` (`--replay` with the build's paths).
 
 mod config;
 mod machine;
+mod pack;
 mod reader;
 mod shell;
 mod show;
@@ -36,13 +38,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const NAME: &str = "sc";
-
-/// What a session reads, embedded (build.rs, PLANO-REPL.md §5.4): a
-/// squashfs with the sysroot at sysroot/, clang's headers at res/ and the
-/// arguments at repl/, in the view of `/sc`. Nothing reads it yet (phase 7,
-/// step 1).
-#[cfg(not(feature = "wasm"))]
-static PACK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sc.sqfs"));
 
 fn lang_arg() -> impl Parser<Option<Lang>> {
     bpaf::short('x')
@@ -146,9 +141,6 @@ fn show_help<T>(parser: bpaf::OptionParser<T>, args: &[&str]) -> ExitCode {
 }
 
 fn main() -> ExitCode {
-    // kept in the binary until its readers come
-    #[cfg(not(feature = "wasm"))]
-    std::hint::black_box(PACK);
     let code = modes();
     #[cfg(feature = "wasm")]
     sc::engine::wasm::cleanup();
@@ -159,7 +151,10 @@ fn main() -> ExitCode {
 fn modes() -> ExitCode {
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     let engine = match args.get(1).map(String::as_str) {
-        Some("--engine") => sc::engine::serve_child().map(|()| 0).map_err(Into::into),
+        Some("--engine") => {
+            pack::install();
+            sc::engine::serve_child().map(|()| 0).map_err(Into::into)
+        }
         Some(mode @ ("--cc1" | "--ld")) => {
             let mode = if mode == "--cc1" { "-cc1" } else { "ld" };
             let args = [args[0].as_str(), mode].into_iter().chain(args[2..].iter().map(String::as_str));

@@ -68,13 +68,19 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   replaces a few LLVM functions sc does not need. `sc_session.cpp` is the
   REPL's session (one clang instance, each cell parsed on top of the ones
   before), `sc_api.cpp` the session part of `sc.h` over it (each cell linked
-  into a shared object). `sc_start.cpp` is
+  into a shared object), `sc_files.cpp` the files a session reads in place
+  of the disk (`sc_set_files`: `sc`'s pack, for clang and, through
+  `llvm/lld-files.patch`, wasm-ld). `sc_start.cpp` is
   `sc.wasm`'s `_start`. `sc` links the native engine, with the session too.
 - `Cargo.toml`, `build.rs` and `src/` are the Rust crate `sc`
   (`ANALISE.md` §51). `cargo build --release` makes
   `build/cargo/release/sc` and `scload`: without `SC_LINK_ARGS`, `build.rs`
   runs `make sc-deps` (the cut engine's link arguments, and what `sc`
-  reads at run time) and links `build/link-session-cut/engine.args`.
+  embeds) and links `build/link-session-cut/engine.args`. `sc` embeds
+  what a session reads (`PLANO-REPL.md` §5.4): a squashfs `build.rs`
+  writes, with the sysroot's headers and libraries, clang's headers and
+  the session's arguments, which the engine sees under `/sc`
+  (`src/bin/sc/pack.rs`). Copied anywhere, `sc` runs.
   From a clean checkout that is the LLVM pin built twice (native tools,
   host libraries) and the sysroot, without `make learn`: the cuts are in
   `cuts/`. It took 14 min on 56 cores (7.3 h of CPU) and 6.6 GB.

@@ -3,10 +3,9 @@
 //! REPL, loads it on top of the cells before. Loading runs the cell's
 //! statements at the top level, which the session's incremental mode accepts.
 use sc::engine::{Answer, Repl, Status};
-use crate::show;
+use crate::{pack, show};
 use sc::loader::{source_name, Loader, STACK};
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use wasmtime::{Error, ThrownException, Trap, Val, ValType};
@@ -76,8 +75,6 @@ pub struct Machine {
     safety: Safety,
     argv: Vec<String>,
     repl: Repl,
-    /// The build directory, whose headers are not the student's code.
-    build: PathBuf,
     loader: Loader,
     /// Cells loaded, which names each module for the loader.
     loaded: usize,
@@ -94,27 +91,15 @@ pub struct Machine {
 const TIMEOUT: Duration = Duration::from_secs(60);
 const MEMORY: u64 = 1 << 30;
 
-/// The build directory: `SC_BUILD`, else the first one above this binary
-/// with the session's arguments (`build/sc`, `build/cargo/release/sc`).
-fn build_dir() -> std::io::Result<PathBuf> {
-    if let Some(b) = std::env::var_os("SC_BUILD") {
-        return Ok(b.into());
-    }
-    let exe = std::env::current_exe()?.canonicalize()?;
-    Ok(exe.ancestors().skip(1).find(|d| d.join("repl").is_dir()).map(PathBuf::from).unwrap_or_default())
-}
-
 impl Machine {
     /// A session in `lang` at `safety`, whose programs see `argv`. One that
     /// is not `interactive` takes one cell, the whole program. Only an
     /// `interactive` one is stopped by Ctrl-C: the epoch checks cost in
     /// every loop and call.
     pub fn new(lang: Lang, safety: Safety, argv: Vec<String>, interactive: bool) -> crate::Result<Machine> {
-        let b = build_dir()?;
         let file = if interactive { "" } else { "-file" };
-        let args_file = b.join("repl").join(format!("{}-{}{file}.args", lang.name(), safety.name()));
-        let mut args: Vec<String> = std::fs::read_to_string(&args_file)
-            .map_err(|e| format!("{}: {e} (make repl)", args_file.display()))?
+        let args_file = format!("repl/{}-{}{file}.args", lang.name(), safety.name());
+        let mut args: Vec<String> = String::from_utf8_lossy(pack::read(&args_file).ok_or(format!("{args_file}: not in the pack"))?)
             .lines()
             .map(String::from)
             .collect();
@@ -131,8 +116,8 @@ impl Machine {
 
         let mut wasi = WasiCtxBuilder::new();
         wasi.inherit_stdio().inherit_env().args(&argv);
-        let libdir = b.join("sysroot/lib/wasm32-wasip1");
-        let mut loader = Loader::new(wasi.build_p1(), vec![libdir], STACK, interactive)?;
+        let libs = Box::new(|lib: &str| pack::read(&format!("sysroot/lib/wasm32-wasip1/{lib}")).map(<[u8]>::to_vec));
+        let mut loader = Loader::new(wasi.build_p1(), libs, STACK, interactive)?;
         loader.keep_stacks();
         let shown = Arc::new(Mutex::new(None));
         let (s, null) = (Arc::clone(&shown), if lang == Lang::C { "NULL" } else { "nullptr" });
@@ -146,7 +131,7 @@ impl Machine {
         if interactive {
             loader.on_ctrl_c(sc::engine::interrupt);
         }
-        Ok(Machine { lang, safety, argv, repl, build: b, loader, loaded: 0, pending: None, shown })
+        Ok(Machine { lang, safety, argv, repl, loader, loaded: 0, pending: None, shown })
     }
 
     pub fn safety(&self) -> Safety {
@@ -265,14 +250,14 @@ impl Machine {
         let leaks = match self.loader.leaks() {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("{}", runtime_error(&e, &mut self.loader, &self.build));
+                eprintln!("{}", runtime_error(&e, &mut self.loader));
                 return 0;
             }
         };
         let plural = |n: u32, what: &str| if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") };
         for l in leaks.iter().take(MOST) {
             eprintln!("error: memory leak: {} in {}, never freed", plural(l.bytes, "byte"), plural(l.blocks, "block"));
-            let fs = l.allocated.as_ref().map(|bt| frames(bt, &self.loader, &self.build, false)).unwrap_or_default();
+            let fs = l.allocated.as_ref().map(|bt| frames(bt, &self.loader, false)).unwrap_or_default();
             if l.allocated.is_none() {
                 eprintln!("sc keeps where only the first blocks of a program were allocated");
             } else if !fs.is_empty() {
@@ -319,7 +304,7 @@ impl Machine {
                 Outcome::Ok
             }
             Err(e) => {
-                eprintln!("{}", runtime_error(&e, &mut self.loader, &self.build));
+                eprintln!("{}", runtime_error(&e, &mut self.loader));
                 let _ = self.loader.set_stack_pointer(sp);
                 // the frames the trap left below sp keep their shadow (ASan)
                 if let (true, Some(top)) = (self.loader.defines("__asan_unpoison_memory_region"), sp.i32()) {
@@ -333,17 +318,17 @@ impl Machine {
 }
 
 /// What stopped the code, and where: the frames of the student's code.
-fn runtime_error(e: &Error, loader: &mut Loader, build: &Path) -> String {
+fn runtime_error(e: &Error, loader: &mut Loader) -> String {
     let msg = message(e, loader);
     let library = !msg.is_empty() && msg != "aborted";
     let mut out: Vec<String> = Some(msg).filter(|m| !m.is_empty()).into_iter().collect();
     let bt = e.downcast_ref::<wasmtime::WasmBacktrace>();
-    out.extend(bt.map(|bt| frames(bt, loader, build, library)).unwrap_or_default().iter().map(|f| format!("    {f}")));
+    out.extend(bt.map(|bt| frames(bt, loader, library)).unwrap_or_default().iter().map(|f| format!("    {f}")));
     // the block of a report of ASan's: where it was freed and allocated
     let (allocated, freed) = loader.blamed();
     let and = if freed.is_some() { "and allocated" } else { "the block was allocated" };
     for (what, bt) in [("the block was freed", freed), (and, allocated)] {
-        let fs = bt.map(|bt| frames(&bt, loader, build, false)).unwrap_or_default();
+        let fs = bt.map(|bt| frames(&bt, loader, false)).unwrap_or_default();
         if !fs.is_empty() {
             out.push(what.into());
             out.extend(fs.iter().map(|f| format!("    {f}")));
@@ -391,15 +376,16 @@ fn message(e: &Error, loader: &mut Loader) -> String {
 /// stopped it, which says it was called). A frame repeated in a row, as in
 /// a recursion, comes once, with how many times; a cycle of 2 to 4 frames
 /// too. A long list keeps its start and its end.
-fn frames(bt: &wasmtime::WasmBacktrace, loader: &Loader, build: &Path, library: bool) -> Vec<String> {
-    let build = build.to_string_lossy();
+fn frames(bt: &wasmtime::WasmBacktrace, loader: &Loader, library: bool) -> Vec<String> {
+    // the headers' code, compiled in the cell, is from the pack
+    let pack = format!("{}/", pack::ROOT);
     // (function, where in the student's code), inlined functions first
     let entries = bt.frames().iter().flat_map(|f| {
         let name = f.func_name().map(source_name).unwrap_or_default();
         let syms: Vec<_> = loader.symbols(f).into_iter().map(|s| {
             // the libraries' own sources are wasi-sdk's (wasisdk://...)
             let file = s.file.unwrap_or_default();
-            let user = !file.is_empty() && !file.starts_with(&*build) && !file.contains("://");
+            let user = !file.is_empty() && !file.starts_with(&pack) && !file.contains("://");
             let at = s.line.filter(|_| user).map(|l| format!("{file}:{l}:{}", s.column.unwrap_or(0)));
             (s.name.as_deref().map(source_name).unwrap_or_else(|| name.clone()), at)
         }).collect();

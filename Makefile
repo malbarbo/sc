@@ -34,16 +34,14 @@ CARGO := --locked
 RUST := Cargo.toml Cargo.lock build.rs $(shell find src -name '*.rs') engine/sc.h
 SCLOAD := $(B)/cargo/release/scload
 SC_REPL := $(B)/cargo/release/sc
-# the arguments of a session (build/repl), and what the sc binaries embed
-# (build.rs, PLANO-REPL.md §5.4): the same arguments in the pack's view, the
-# sysroot, its headers and libraries
-REPL_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/repl/$l-$s.args $(B)/repl/$l-$s-file.args))
-PACK_ARGS := $(REPL_ARGS:$(B)/repl/%=$(B)/pack/repl/%)
+# what the sc binaries embed (build.rs, PLANO-REPL.md §5.4): the arguments
+# of a session in the pack's view, the sysroot, its headers and libraries
+PACK_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/pack/repl/$l-$s.args $(B)/pack/repl/$l-$s-file.args))
 PACK = $(PACK_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 
 # the engine with the session (sc.h); sc.wasm is a reactor, with its _start
 # (PLANO-REPL.md §5.2). scripts/link.py has the same lists
-ENGINE := sc_entry sc_main sc_inv sc_backend sc_cuts sc_session sc_api
+ENGINE := sc_entry sc_main sc_inv sc_backend sc_cuts sc_session sc_api sc_files
 WENGINE := $(ENGINE) sc_start
 ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI_EMULATED_MMAN \
   -DLLVM_BUILD_STATIC -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS \
@@ -67,7 +65,7 @@ $(B)/src/llvm/CMakeLists.txt:
 	  $(CURDIR)/llvm/incremental-stmts.patch $(CURDIR)/llvm/incremental-main-file.patch \
 	  $(CURDIR)/llvm/asan-cleanupret.patch $(CURDIR)/llvm/pattern-init.patch $(CURDIR)/llvm/repl-outside-function.patch \
 	  $(CURDIR)/llvm/incremental-anon-namespace.patch $(CURDIR)/llvm/incremental-input-end.patch \
-	  $(CURDIR)/llvm/incremental-access.patch $(CURDIR)/llvm/incremental-remove-decl.patch
+	  $(CURDIR)/llvm/incremental-access.patch $(CURDIR)/llvm/incremental-remove-decl.patch $(CURDIR)/llvm/lld-files.patch
 
 $(B)/c-testsuite/.git:
 	git init -q $(B)/c-testsuite && cd $(B)/c-testsuite \
@@ -273,7 +271,7 @@ test-session-warn: $(B)/sc $(SCLOAD) $(B)/res/session-wev-base/summary.json
 # engine, compiled to <host>.cwasm; -cut has the names, for the cut function
 # a trap calls. The slices are checked against the one-shot sc.wasm's bases
 SC_WASM := $(B)/cargo-wasm/release/sc
-$(SC_WASM): $(RUST)
+$(SC_WASM): $(RUST) $(PACK)
 	cargo build --release $(CARGO) --features wasm --target-dir $(B)/cargo-wasm --bin sc
 
 $(B)/sc-wasm-full: $(SC_WASM) $(B)/sc-full.wasm
@@ -301,7 +299,7 @@ test-split-wasm: $(B)/sc-wasm $(SCLOAD) $(B)/res/native-base/summary.json
 # --- the REPL's loader, runs the shared objects (native, wasmtime): scload,
 # for the batteries, without the engine; and sc, with the cut engine
 # (PLANO-REPL.md §1.1, phase 6b), whose compiler is the child sc --engine,
-# with the arguments in build/repl. Without SC_LINK_ARGS, build.rs links
+# and what a session reads in the pack it embeds. Without SC_LINK_ARGS, build.rs links
 # $(SC_ENGINE_ARGS), as in a cargo build of its own
 $(SCLOAD): $(RUST)
 	cargo build --release $(CARGO) --no-default-features --bin scload
@@ -321,22 +319,18 @@ dist: $(SC_ENGINE_ARGS) $(PACK)
 test-loader:
 	cargo test --release $(CARGO) --no-default-features --lib --test signal --test exceptions
 
-# a session's arguments: <lang>-<safety level>[-file].args, -file for `sc FILE`
-$(B)/repl/%.args: scripts/flags.py
-	mkdir -p $(B)/repl
-	scripts/flags.py --session $(firstword $(subst -, ,$*)) $(CURDIR)/$(B) $(wordlist 2,3,$(subst -, ,$*)) > $@
-
-# the same in the pack's view, for the pack sc embeds (PLANO-REPL.md §5.4):
-# build.rs puts them with the sysroot, the headers and the libraries
+# a session's arguments: <lang>-<safety level>[-file].args, -file for `sc
+# FILE`, in the pack's view. build.rs puts them in the pack sc embeds
+# (PLANO-REPL.md §5.4), with the sysroot, the headers and the libraries
 $(B)/pack/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/pack/repl
 	scripts/flags.py --session $(firstword $(subst -, ,$*)) /sc $(wordlist 2,3,$(subst -, ,$*)) > $@
 
 repl: $(SC_REPL) sc-deps
 
-# what cargo build asks for (build.rs): the engine sc links, what it embeds
-# and what it reads at run time
-sc-deps: $(SC_ENGINE_ARGS) $(REPL_ARGS) $(PACK)
+# what cargo build asks for (build.rs): the engine sc links and what it
+# embeds
+sc-deps: $(SC_ENGINE_ARGS) $(PACK)
 
 # a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
 test-aluno: repl
@@ -428,7 +422,7 @@ checkinv: $(B)/checkinv
 	$< $$(scripts/flags.py c++ pic mod on g) -o - /c/x.cpp
 	# a session's flags (PLANO-REPL.md §3.5): scIncremental in place of
 	# -disable-free and -clear-ast-before-backend
-	for a in $(REPL_ARGS:$(B)/repl/%.args=%); do \
+	for a in $(PACK_ARGS:$(B)/pack/repl/%.args=%); do \
 	  set -- $$(echo $$a | tr - ' '); l=$$1; shift; \
 	  $< $$(scripts/flags.py --session $$l $(CURDIR)/$(B) "$$@" | \
 	    sed '/^--$$/,$$d; /^-disable-free$$/d; /^-clear-ast-before-backend$$/d') \

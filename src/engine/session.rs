@@ -100,6 +100,14 @@ where
     Ok(unsafe { raw::sc_main(argv.argc(), argv.ptrs.as_mut_ptr()) })
 }
 
+/// The files the sessions read in place of the disk (`sc_set_files`): the
+/// paths under `files.root`, for their clang and wasm-ld. With `sc.wasm`,
+/// which does not export it, nothing.
+pub fn set_files(files: &'static sys::sc_files) {
+    // SAFETY: what files points to lives until the process ends
+    unsafe { raw::sc_set_files(files) }
+}
+
 /// A REPL session: each cell is compiled on top of the ones before.
 pub struct Session {
     raw: NonNull<sys::sc_session>,

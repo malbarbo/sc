@@ -25,7 +25,7 @@ from corpuslib import only_names, run_all, source_name, sources
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
-from flags import session  # the engine's flags
+from flags import PACK, session  # the engine's flags
 B = f'{R}/build'
 ENG = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else f'{B}/sc')
 LIB = f'{B}/sysroot/lib/wasm32-wasip1'
@@ -44,7 +44,11 @@ KNOWN = {
 
 
 def flags(cxx, gnu17, mod):
-    return session(cxx, B, gnu17, mod, f'{OUT}/std.pcm')
+    # the pack sc embeds (PLANO-REPL.md §5.4), but for a host of sc.wasm
+    # (<engine>.wasm), which reads the disk, and with std.pcm, which sc --cc1
+    # builds from the disk
+    root = B if mod or os.path.exists(f'{ENG}.wasm') else PACK
+    return session(cxx, root, gnu17, mod, f'{OUT}/std.pcm')
 
 
 def programs():

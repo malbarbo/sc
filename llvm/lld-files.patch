@@ -1,0 +1,47 @@
+diff --git a/lld/wasm/Driver.cpp b/lld/wasm/Driver.cpp
+index 0a41f2bd2..2a5fa6ea6 100644
+--- a/lld/wasm/Driver.cpp
++++ b/lld/wasm/Driver.cpp
+@@ -228,7 +228,7 @@ static std::optional<std::string> findFile(StringRef path1,
+                                            const Twine &path2) {
+   SmallString<128> s;
+   path::append(s, path1, path2);
+-  if (fs::exists(s))
++  if ((fileHook && fileHook(s)) || fs::exists(s))
+     return std::string(s);
+   return std::nullopt;
+ }
+diff --git a/lld/wasm/InputFiles.cpp b/lld/wasm/InputFiles.cpp
+index a9877cbdd..1127cef5a 100644
+--- a/lld/wasm/InputFiles.cpp
++++ b/lld/wasm/InputFiles.cpp
+@@ -65,9 +65,14 @@ void InputFile::checkArch(Triple::ArchType arch) const {
+ 
+ std::unique_ptr<llvm::TarWriter> tar;
+ 
++std::optional<StringRef> (*fileHook)(StringRef path);
++
+ std::optional<MemoryBufferRef> readFile(StringRef path) {
+   log("Loading: " + path);
+ 
++  if (fileHook)
++    if (std::optional<StringRef> b = fileHook(path))
++      return MemoryBufferRef(*b, saver().save(path));
+   auto mbOrErr = MemoryBuffer::getFile(path);
+   if (auto ec = mbOrErr.getError()) {
+     error("cannot open " + path + ": " + ec.message());
+diff --git a/lld/wasm/InputFiles.h b/lld/wasm/InputFiles.h
+index fd7fcb13f..bcda274f8 100644
+--- a/lld/wasm/InputFiles.h
++++ b/lld/wasm/InputFiles.h
+@@ -195,6 +195,10 @@ InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName = "",
+ // Opens a given file.
+ std::optional<MemoryBufferRef> readFile(StringRef path);
+ 
++// The bytes of a file the linker reads in place of the disk, which live until
++// the process ends; nothing for the rest (sc, PLANO-REPL.md §5.4).
++extern std::optional<StringRef> (*fileHook)(StringRef path);
++
+ std::string replaceThinLTOSuffix(StringRef path);
+ 
+ } // namespace wasm

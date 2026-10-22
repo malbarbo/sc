@@ -2,15 +2,12 @@
 // that link the engine into sc and the tests (scripts/link.py --emit-link):
 // the file SC_LINK_ARGS names, else build/link-session-cut/engine.args, the
 // cut engine. Without SC_LINK_ARGS and outside make, make sc-deps builds it
-// and what sc reads at run time, so that cargo build alone makes sc. Then the
-// pack sc embeds (PLANO-REPL.md §5.4): $OUT_DIR/sc.sqfs.
-use std::{
-    collections::BTreeMap,
-    env, fs,
-    io::Cursor,
-    path::{Path, PathBuf},
-    process::Command,
-};
+// and what sc reads at run time, so that cargo build alone makes sc. And the
+// pack sc embeds (PLANO-REPL.md §5.4), $OUT_DIR/sc.sqfs, also with the wasm
+// feature.
+use std::{env, fs, path::PathBuf, process::Command};
+#[cfg(feature = "engine")]
+use std::{collections::BTreeMap, io::Cursor, path::Path};
 
 fn main() {
     // cargo watches build.rs anyway: this only keeps it from running again
@@ -31,6 +28,8 @@ fn main() {
         .expect("bindgen engine/sc.h")
         .write_to_file(PathBuf::from(env::var("OUT_DIR").unwrap()).join("sc.rs"))
         .unwrap();
+    #[cfg(feature = "engine")]
+    pack(&root, &PathBuf::from(env::var("OUT_DIR").unwrap()).join("sc.sqfs"));
 
     if env::var_os("CARGO_FEATURE_WASM").is_some() {
         return;
@@ -52,12 +51,11 @@ fn main() {
         println!("cargo:rustc-link-arg-bin=sc={arg}");
         println!("cargo:rustc-link-arg-tests={arg}");
     }
-    #[cfg(feature = "engine")]
-    pack(&root, &PathBuf::from(env::var("OUT_DIR").unwrap()).join("sc.sqfs"));
 }
 
 /// The libraries a session links and loads (scripts/flags.py, solibs), with
 /// those they need.
+#[cfg(feature = "engine")]
 const LIBS: [&str; 5] = ["libc.so", "libc++.so", "libc++abi.so", "libsc_rt.so", "libsetjmp.so"];
 
 /// The pack: a squashfs (zstd -19, blocks of 128 KiB) with what a session

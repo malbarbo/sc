@@ -49,7 +49,7 @@ from cells import expected, run, same, std_pcm
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
-from flags import session  # the engine's flags
+from flags import PACK, session  # the engine's flags
 B = f'{R}/build'
 SEQ = f'{R}/test/seq'
 W_EXTRA = os.environ.get('WFLAGS', '').split()
@@ -98,11 +98,19 @@ KNOWN = {f'ses-{k}': v for k, v in {
 SKIP = {C + 'CodeGenCXX_mangle-ms-back-references-pr13207', C + 'CodeGenCXX_pr29160'}
 
 
+def root(mod=False):
+    """where the session's headers and libraries are: the pack sc embeds
+    (PLANO-REPL.md §5.4), but for sc.wasm, which reads the disk, and with
+    std.pcm, which sc --cc1 builds from the disk"""
+    return B if WASM or mod else PACK
+
+
 def flags(p):
     """the session's flags for the source p"""
     cxx = p.endswith(('.cpp', '.cc', '.cxx'))
     c17 = p.startswith((f'{B}/c-testsuite/', f'{B}/gcc-ts/'))
-    fl = session(cxx, B, c17, '/test/mod/' in p or 'import std;' in open(p, errors='replace').read(), f'{OUT}/std.pcm')
+    mod = '/test/mod/' in p or 'import std;' in open(p, errors='replace').read()
+    fl = session(cxx, root(mod), c17, mod, f'{OUT}/std.pcm')
     return fl[:fl.index('--')] + W_EXTRA + fl[fl.index('--'):]
 
 
@@ -272,7 +280,7 @@ def mem(name, cxx):
     rows, t0, bad = [], time.time(), []
     c = Child(600)
     try:
-        c.start(session(cxx, B))
+        c.start(session(cxx, root()))
         for i, src in enumerate(mem_cells(cxx, 1000)):
             st, (diags, _, _) = c.send(Child.CELL, Child.SO, src.encode())
             if st != 0:

@@ -1270,6 +1270,11 @@ três leitores: o VFS do clang, um gancho no wasm-ld e o loader.
    entra no `sc.wasm`).
 4. O loader lendo do pacote; os `.cwasm` pelo `build.rs`; o epoch sempre
    ligado; a `cache` fora. `make test-loader`.
+   **Os passos 2 e 3 e o loader do 4 foram feitos juntos em 2026-10-21**
+   (ANALISE.md §53): sem o gancho do lld e sem o loader no pacote, os
+   `.args` com `/sc/` não ligam nem carregam as células. Com eles saíram
+   o `build_dir()` e o `build/repl`, e o `frames` passou a usar `/sc/`.
+   Faltam os `.cwasm`, o epoch sempre ligado e a `cache` fora.
 5. O `frames` com `/sc/` e `/src/`, sem o `build_dir()`.
 6. Docs: README (instalar é copiar o `sc`), AGENTS, ANALISE.
 

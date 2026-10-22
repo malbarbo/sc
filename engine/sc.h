@@ -88,6 +88,24 @@ int sc_session_depth(sc_session *s, const char *src, unsigned len);
 const unsigned char *sc_result_ptr(sc_session *s, int part);
 unsigned sc_result_len(sc_session *s, int part);
 
+/* The files a session reads in place of the disk: those under root (the
+   pack the native sc embeds, PLANO-REPL.md §5.4), for its clang and its
+   wasm-ld. The rest are on the disk, and so is all without them (sc.wasm,
+   which does not export sc_set_files) and in the one-shot engine. A path
+   asked for is absolute and without "." or "..", with '/' or the system's
+   separator. What read and list return is valid until the process ends. */
+struct sc_files {
+  const char *root; /* "/sc" */
+  /* 0: no such path; 1: a file of *size bytes; 2: a directory */
+  int (*status)(const char *path, unsigned long long *size);
+  /* a file's *size bytes, with a NUL after them; NULL if it is not a file */
+  const char *(*read)(const char *path, unsigned long long *size);
+  /* the names in a directory, each followed by a NUL, *size bytes in all;
+     NULL if it is not a directory */
+  const char *(*list)(const char *path, unsigned long long *size);
+};
+void sc_set_files(const struct sc_files *files);
+
 /* The one-shot engine: sc -cc1 ..., sc ld ... (argv[0] is the program). */
 int sc_main(int argc, const char **argv);
 

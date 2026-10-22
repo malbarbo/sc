@@ -3,7 +3,8 @@
 //! from files, and `sc` runs the cells of its REPL.
 //!
 //! The first module is loaded with what its `dylink.0` section lists as
-//! needed (libc.so, libc++.so...), looked up in the `-L` directories. The
+//! needed (libc.so, libc++.so...), which [`Libs`] finds: in the `-L`
+//! directories for `scload`, in the pack for `sc`. The
 //! entries after it are loaded one at a time on top of the ones before, as
 //! REPL inputs: a definition in an entry shadows an older one with the same
 //! name for the entries loaded after it. A weak definition (an inline
@@ -131,7 +132,7 @@ pub struct Loader {
     table: Table,
     sp: Global,
     wasi: HashMap<String, Func>,
-    libdirs: Vec<PathBuf>,
+    libs: Libs,
     loaded: HashSet<String>,
     bump: Option<u32>, // the next free address, until the heap is set up
     later: Vec<(String, Global)>, // GOT.mem imports of symbols not defined yet
@@ -139,6 +140,14 @@ pub struct Loader {
     slots: HashMap<String, u32>,  // table slots of functions not defined yet
     asan: bool,                   // the memory has ASan's shadow
     debug: Vec<Debug>,            // of the modules with DWARF
+}
+
+/// Where the loader finds the libraries a module needs: by name, their bytes.
+pub type Libs = Box<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
+
+/// The libraries in `dirs`, from the first one that has each.
+pub fn libdirs(dirs: Vec<PathBuf>) -> Libs {
+    Box::new(move |lib| dirs.iter().find_map(|d| std::fs::read(d.join(lib)).ok()))
 }
 
 type Dwarf = gimli::EndianArcSlice<gimli::LittleEndian>;
@@ -279,7 +288,7 @@ const INTERNAL: &[&str] = &["__wasm_call_ctors", "__wasm_apply_data_relocs", "_i
 impl Loader {
     /// `interruptible`: the code running can be stopped ([`Loader::arm`]),
     /// at a small cost in every loop and call.
-    pub fn new(wasi: WasiP1Ctx, libdirs: Vec<PathBuf>, stack: u32, interruptible: bool) -> Result<Loader> {
+    pub fn new(wasi: WasiP1Ctx, libs: Libs, stack: u32, interruptible: bool) -> Result<Loader> {
         let mut config = Config::new();
         config.epoch_interruption(interruptible);
         // a trap's file and line come from Loader::symbols. Frames: the
@@ -299,7 +308,7 @@ impl Loader {
         let mut linker = Linker::new(&engine);
         p1::add_to_linker_sync(&mut linker, |h: &mut Host| &mut h.wasi)?;
         linker.define(&mut store, "env", "memory", memory)?;
-        let mut l = Loader { engine, store, linker, memory, table, sp, wasi: HashMap::new(), libdirs,
+        let mut l = Loader { engine, store, linker, memory, table, sp, wasi: HashMap::new(), libs,
                              loaded: HashSet::new(), bump: Some(stack), later: Vec::new(), undefined: Vec::new(),
                              slots: HashMap::new(), asan: false, debug: Vec::new() };
         l.define("__stack_low", Sym::Data(16), false);
@@ -314,11 +323,6 @@ impl Loader {
         }
     }
 
-    fn find(&self, lib: &str) -> Result<PathBuf> {
-        self.libdirs.iter().map(|d| d.join(lib)).find(|p| p.exists())
-            .ok_or_else(|| format_err!("{lib}: not found (use -L)"))
-    }
-
     /// The module `name` and the libraries it needs, not loaded yet,
     /// dependencies first.
     fn collect(&self, name: &str, bytes: &[u8], seen: &mut HashSet<String>, out: &mut Vec<Pending>) -> Result<()> {
@@ -330,8 +334,7 @@ impl Loader {
             if self.loaded.contains(n) || seen.contains(n) {
                 continue;
             }
-            let p = self.find(n)?;
-            let lib = std::fs::read(&p).with_context(|| format!("{}", p.display()))?;
+            let lib = (self.libs)(n).ok_or_else(|| format_err!("{n}: not found (use -L)"))?;
             self.collect(n, &lib, seen, out)?;
         }
         let module = Module::new(&self.engine, bytes).with_context(|| name.to_string())?;

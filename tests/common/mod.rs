@@ -1,7 +1,7 @@
 //! The module of the tests: one per file, so each runs in its own process
 //! (the signal handler, the resident memory).
 
-use sc::loader::{Loader, STACK};
+use sc::loader::{libdirs, Loader, STACK};
 use wasmtime_wasi::WasiCtxBuilder;
 
 /// A shared object as the cells are: the C++ exceptions' tag comes from
@@ -28,7 +28,7 @@ pub const MODULE: &str = r#"
 "#;
 
 pub fn loader(interruptible: bool) -> Loader {
-    let mut l = Loader::new(WasiCtxBuilder::new().build_p1(), Vec::new(), STACK, interruptible).unwrap();
+    let mut l = Loader::new(WasiCtxBuilder::new().build_p1(), libdirs(Vec::new()), STACK, interruptible).unwrap();
     l.load_bytes("cell", &wat::parse_str(MODULE).unwrap(), true).unwrap();
     l
 }

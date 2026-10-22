@@ -4028,3 +4028,80 @@ O `Cargo.lock` ganhou o `backhand` e as dependências dele (19 crates). O
 `deku` traz.
 
 O `test-aluno` e o `test-checks` passaram sem diferença.
+
+## 53. Fase 7 do REPL, passos 2 a 4: o `sc` lê do pacote
+
+O `PLANO-REPL.md` §5.4 previa o VFS do clang (passo 2), o gancho no
+wasm-ld (passo 3) e o loader (passo 4) em passos separados. Eles foram
+feitos juntos (decidido em 2026-10-21), porque os `.args` do pacote dão
+`-L/sc/...` também ao link, e o loader lia as `.so` do `build/sysroot`:
+nenhum dos três fecha sozinho. Os `.cwasm`, o epoch sempre ligado e a
+saída da `cache` do wasmtime ficam para depois.
+
+**A interface.** O `sc.h` ganhou `struct sc_files` (a raiz `/sc` e três
+funções: `status`, `read`, `list`) e `sc_set_files`. O que `read` e `list`
+devolvem vale até o fim do processo, com um NUL depois dos bytes, para o
+`MemoryBuffer` que o clang pede com terminador.
+
+**O clang.** O `engine/sc_files.cpp` tem um `ProxyFileSystem` sobre o FS
+real, que responde pelos caminhos sob a raiz (`status`, `exists`,
+`openFileForRead`, `dir_begin`, `getRealPath`, `isLocal`) e passa o resto
+adiante. O `UniqueID` de cada arquivo é o hash do caminho: o
+`FileManager` distingue os arquivos por ele. Sem `sc_set_files` (o
+`sc.wasm`, que não o exporta), o `scFileSystem()` é o FS real.
+
+**O wasm-ld.** O `llvm/lld-files.patch` (15 linhas) põe um gancho
+`lld::wasm::fileHook` no `readFile` e no `findFile`, que pergunta ao
+gancho antes do disco. O `sc_set_files` o liga. O `stat` do `.imports` do
+`libclang_rt.builtins.a` continua indo ao disco, como o §5.4 previa.
+
+**O Rust.** O `src/bin/sc/pack.rs` lê o squashfs com o `backhand` (agora
+também dependência normal): um índice dos 2.151 nós (arquivos e
+diretórios), montado na primeira leitura, e cada arquivo descomprimido uma
+vez e guardado. O `sc --engine` chama o `pack::install()` antes de servir.
+O `Machine` lê o `.args` e as bibliotecas do loader do pacote; o loader
+recebe uma função `Libs` (nome → bytes) no lugar dos diretórios, e o
+`scload` e os `tests/` passam `libdirs(...)`. O `build_dir()` saiu, e com
+ele o `build/repl`. O `frames` trata `/sc/` como fora do código do aluno
+(o `/src/` do passo 5 ainda falta).
+
+O `sc` da feature `wasm` também embute o pacote, para o código ser um só,
+mas o `sc.wasm` lê o disco: ele é só o host de teste (`--replay` com os
+caminhos do build).
+
+Medido numa máquina carregada: o índice leva de 3 a 4 ms; o `stdio.h`,
+0,35 ms; a `libc.so`, 2,2 ms; descomprimir o pacote inteiro, 31 ms.
+
+**Fora do checkout.** Com o `sc` copiado para um diretório temporário e o
+`build/` escondido (`bwrap --tmpfs build`), o `test-aluno` (66 execuções)
+e o `test-checks` (165) dão 0 diferenças. O `strace -f -e trace=%file`
+não mostra nenhum caminho do checkout, e o único `/sc/...` no disco é o
+`access` do `.imports`. O mesmo vale para o `sc` de dist, que também roda
+o REPL (`x * 21` mostra `(int) 42`, um `std::vector` na célula seguinte) e
+um trap com a linha (`at main (b.c:2:46)`).
+
+**As bases.** O `test-session` e o `test-split` passam aos `.args` com
+`/sc/`, menos o `sc-wasm` e os programas com `import std;`, cujo `std.pcm`
+o `sc --cc1` constrói do disco. Dos 11.916 resultados do `session-base`,
+mudaram 120, todos esperados:
+- 74 só pelos caminhos: `/sc/sysroot/...` e `/sc/res/...` no lugar dos
+  do build, nas notas e nos erros do wasm-ld;
+- 46 incluem cabeçalhos de intrínsecos de x86 ou ARM, que ficaram fora do
+  pacote (§52). Eles já falhavam (`#error "This header is only meant to
+  be used on x86..."`), e agora falham com "file not found". O status é
+  o mesmo.
+
+O `test-split` (10.541 células, 0 diferenças do `pic-`), o `make test`
+(17.715 arquivos, 0 diferenças: o patch entra no `sc.wasm` com o gancho
+nulo), o `test-session-wasm` e o `test-loader` passaram.
+
+**Tamanho.**
+
+| | antes | depois | |
+| --- | --- | --- | --- |
+| `sc` de dist | 36.950.432 (§52) | 37.167.200 | +216.768, o leitor |
+| `sc.wasm` | 20.047.936 (§48) | 20.052.756 | +4.820 |
+| `sc.wasm` zstd | 5.654.725 (§48) | 5.657.074 | +0,04% |
+
+O leitor ficou abaixo dos 302 KB medidos no §5.4, provavelmente porque o `zstd` já estava no
+binário, pela `cache` do wasmtime.

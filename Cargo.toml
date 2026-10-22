@@ -23,6 +23,8 @@ gimli = { version = "0.33", default-features = false, features = ["read", "std",
 bpaf = { version = "0.9", features = ["derive", "bright-color"], optional = true }
 rustyline = { version = "18", features = ["derive", "custom-bindings"], optional = true }
 dirs = { version = "6", optional = true }
+# the pack sc embeds (src/bin/sc/pack.rs), which build.rs writes
+backhand = { version = "0.25.5", default-features = false, features = ["zstd"], optional = true }
 # Ctrl-C (the loader), the child's signals and pipes (the engine)
 libc = "0.2"
 # the wasm feature: WASI of sc.wasm's sessions

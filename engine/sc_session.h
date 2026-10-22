@@ -1,5 +1,6 @@
 #pragma once
 #include "sc_inv.h"
+#include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/StringRef.h"
 #include <functional>
 #include <memory>
@@ -9,6 +10,11 @@
 
 namespace llvm { class Module; class raw_ostream; }
 namespace clang { class Decl; }
+namespace llvm::vfs { class FileSystem; }
+
+// The session's file system: the real one, with the files of sc_set_files
+// (sc.h) under their root (sc_files.cpp).
+llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> scFileSystem();
 
 // What a cell left: SC_OK with the object, SC_ERROR (an error; the session
 // keeps part of the cell, §3.3), SC_LOST (the session must be recreated

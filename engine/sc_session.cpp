@@ -682,7 +682,7 @@ std::unique_ptr<ScSession> ScSession::create(ScOptions O, llvm::raw_ostream *Dia
   S->I = std::make_unique<Impl>();
   Impl &I = *S->I;
   I.CI = std::make_unique<CompilerInstance>(std::move(Inv));
-  I.CI->createVirtualFileSystem(llvm::vfs::getRealFileSystem());
+  I.CI->createVirtualFileSystem(scFileSystem());
   I.First = new FirstError(Diags ? *Diags : llvm::errs(), I.CI->getDiagnosticOpts());
   I.CI->createDiagnostics(I.First);
   // the main file is empty, the cells come after it (-Wpedantic)

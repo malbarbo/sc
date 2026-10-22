@@ -283,3 +283,7 @@ pub unsafe fn sc_result_ptr(s: *mut sc_session, part: c_int) -> *const u8 {
 pub unsafe fn sc_result_len(s: *mut sc_session, part: c_int) -> c_uint {
     with(|g| check(g.len.call(&mut g.store, (s as usize as u32, part))))
 }
+
+/// `sc_set_files`: `sc.wasm` does not export it, and its sessions read the
+/// disk.
+pub unsafe fn sc_set_files(_: *const super::sys::sc_files) {}
