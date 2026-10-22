@@ -4223,3 +4223,33 @@ main`, como o `expected.txt` já tinha.
 
 O `make test-loader` passou. O engine e os cortes não mudaram, então o
 `make test` e o `test-session-wasm` não precisam rodar de novo.
+
+## 55. O wasm-ld e uma anotação numa função só declarada
+
+O teste `ses-src_clang_test_CodeGen_annotations-decl-use-decl` era um
+conhecido do `test-session`: o wasm-ld nativo dava segfault no link da
+célula. A célula tem `__attribute__((annotate("bar")))` numa função que
+ela só declara. O objeto ganha a seção `llvm.func_attr.annotate.bar`, com
+uma relocação `R_WASM_FUNCTION_INDEX_I32` para essa função. No link
+`-shared --unresolved-symbols=import-dynamic`, uma função usada só numa
+seção custom não é importada e fica sem índice. O
+`FunctionSymbol::getFunctionIndex` faz então o cast de um
+`UndefinedFunction` para `DefinedFunction`. No nativo isso é segfault,
+também num link de linha de comando (`sc --cc1` e `sc --ld`). No
+`sc.wasm` o link passa e escreve o índice 0, que é o de outra função.
+
+**Decidido em 2026-10-22:** um patch, `llvm/lld-undef-index.patch` (9
+linhas no `ObjFile::calcNewValue`). Uma função indefinida sem índice e sem
+stub dá o mesmo valor que um símbolo morto já dá ali: o tombstone da
+seção, ou o addend. Um corte não serve, porque o código que quebra é usado.
+Os dois motores agora dão o mesmo resultado nesse teste, e a entrada sai
+do `KNOWN`.
+
+**As baterias.**
+- `make test`: 17.715 arquivos, 0 diferenças;
+- `make test-session`: 11.918 resultados, 0 ruins (38 conhecidos, eram
+  39);
+- `make test-session-wasm`: 11.926 resultados, 0 ruins (38 conhecidos).
+
+Os cortes não precisaram de `make learn`: as baterias nos motores
+cortados (`build/sc`, `build/sc-wasm`) passaram.

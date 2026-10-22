@@ -149,6 +149,10 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   lookup entry: the variable of a tuple-like binding is added hidden, and
   a decl added to a namespace from a module is not in its lazy table; the
   release build read past the table there (§48).
+  `lld-undef-index.patch` keeps wasm-ld from taking the function index
+  of an undefined function that only a custom section names, as an
+  annotation on a declared function does: in a `-shared` link it has
+  none, and wasm-ld crashed (§55).
   `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the

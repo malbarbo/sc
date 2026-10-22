@@ -65,7 +65,8 @@ $(B)/src/llvm/CMakeLists.txt:
 	  $(CURDIR)/llvm/incremental-stmts.patch $(CURDIR)/llvm/incremental-main-file.patch \
 	  $(CURDIR)/llvm/asan-cleanupret.patch $(CURDIR)/llvm/pattern-init.patch $(CURDIR)/llvm/repl-outside-function.patch \
 	  $(CURDIR)/llvm/incremental-anon-namespace.patch $(CURDIR)/llvm/incremental-input-end.patch \
-	  $(CURDIR)/llvm/incremental-access.patch $(CURDIR)/llvm/incremental-remove-decl.patch $(CURDIR)/llvm/lld-files.patch
+	  $(CURDIR)/llvm/incremental-access.patch $(CURDIR)/llvm/incremental-remove-decl.patch $(CURDIR)/llvm/lld-files.patch \
+	  $(CURDIR)/llvm/lld-undef-index.patch
 
 $(B)/c-testsuite/.git:
 	git init -q $(B)/c-testsuite && cd $(B)/c-testsuite \

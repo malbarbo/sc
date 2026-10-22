@@ -92,11 +92,6 @@ KNOWN = {f'ses-{k}': v for k, v in {
     C + 'CodeGenCXX_wasm-reftypes-mangle': 'the guess between a statement and a declaration at the top takes'
                                           ' `void (*__funcref f)();` for a statement',
 }.items()}
-# a function index for an annotation on a function the object does not
-# define (llvm.func_attr.annotate.*), which import-dynamic does not import:
-# the native wasm-ld segfaults, sc.wasm's writes 0
-if not WASM:
-    KNOWN['ses-' + C + 'CodeGen_annotations-decl-use-decl'] = LD + ': a segfault, for an annotation on a function the object does not define'
 # not run: names whose demangling grows exponentially, which wasm-ld does
 # for each cell's link (the corpus only compiles them)
 SKIP = {C + 'CodeGenCXX_mangle-ms-back-references-pr13207', C + 'CodeGenCXX_pr29160'}
