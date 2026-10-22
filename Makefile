@@ -300,8 +300,9 @@ test-split-wasm: $(B)/sc-wasm $(SCLOAD) $(B)/res/native-base/summary.json
 # the same slices with the child on Node (test/node, PLANO-REPL.md §5.5): a
 # snapshot of the memory in place of the fork. With 300 KB of stack V8
 # exhausts it where wasmtime does; its default, as a browser's, goes deeper
+# --liftoff-only: each child would tier sc.wasm up again (ANALISE.md §56)
 test-session-node: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-base/summary.json
-	SC_NODE_FLAGS=--stack-size=300 test/session.py --wasm test/node/sc-node $(B)/res/session-node \
+	SC_NODE_FLAGS='--stack-size=300 --liftoff-only' test/session.py --wasm test/node/sc-node $(B)/res/session-node \
 	  $(B)/res/session-wasm-base/summary.json
 
 # --- the REPL's loader, runs the shared objects (native, wasmtime): scload,

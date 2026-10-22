@@ -4311,9 +4311,28 @@ nas páginas pesa nela, como na primeira cópia. O snapshot custa menos
 que o `fork`, e o host Node fica mais rápido que o `sc-wasm`.
 
 Com 48 jobs, cada filho Node compila o `sc.wasm` de novo, sem `.cwasm`.
-A bateria leva 17 min, com 728 min de CPU. Numa das três rodadas, 3
+A bateria levava 17 min, com 728 min de CPU. Numa das três rodadas, 3
 programas grandes passaram dos 120 s do `ses-` e falharam; sozinhos,
 passam.
+
+**O tier-up.** A compilação do módulo é preguiçosa (64 ms): cada função
+é compilada pelo Liftoff na primeira chamada, e as quentes de novo pelo
+TurboFan, em threads de fundo. Essa segunda compilação, refeita em cada
+filho, era quase todo o custo. Numa amostra de 215 casos do `ses-`:
+
+| V8 | tempo | CPU |
+| --- | ---: | ---: |
+| padrão (Liftoff e TurboFan) | 28 s | 14,1 min |
+| `--liftoff-only` | 13 s | 3,6 min |
+| `--no-liftoff` (só TurboFan) | 129 s | 78,5 min |
+| wasmtime (`sc-wasm`, `.cwasm`) | 10 s | 1,3 min |
+
+Com `--liftoff-only`, a bateria inteira leva 5,5 min, com 221 min de
+CPU, e dá os mesmos resultados (0 ruins, 41 conhecidos). O alvo usa a
+flag. Numa sessão longa o código do Liftoff é mais lento: depois de
+1000 células, 18,3 ms por célula em C (10,9 com o TurboFan) e 33,7 ms em
+C++ (23,9). O host de verdade fica com o padrão, que compila uma vez por
+página; as sessões da bateria são curtas.
 
 **Fica para depois.** Um trap deixa abertos os fds que a célula abriu no
 WASI do Node, que a restauração não alcança. No navegador o shim é nosso
