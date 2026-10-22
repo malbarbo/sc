@@ -42,6 +42,7 @@
 
 use wasmtime::error::Context;
 use wasmtime::{bail, format_err, Result};
+use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -50,6 +51,8 @@ use wasm_encoder as we;
 use wasmparser::{Dylink0Subsection, KnownCustom, Parser, Payload, SymbolFlags};
 use wasmtime::*;
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
+
+pub mod config;
 
 pub const STACK: u32 = 1 << 20; // the default; the stack is first, so an overflow traps below 0
 const PAGE: u32 = 1 << 16;
@@ -142,12 +145,22 @@ pub struct Loader {
     debug: Vec<Debug>,            // of the modules with DWARF
 }
 
-/// Where the loader finds the libraries a module needs: by name, their bytes.
-pub type Libs = Box<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
+/// Where the loader finds the libraries a module needs: by name.
+pub type Libs = Box<dyn Fn(&str) -> Option<Lib> + Send + Sync>;
+
+/// A library: its module and, if there is one, the module compiled for
+/// this loader ([`config::config`]), which saves compiling it.
+pub struct Lib {
+    pub wasm: Cow<'static, [u8]>,
+    pub cwasm: Option<&'static [u8]>,
+}
 
 /// The libraries in `dirs`, from the first one that has each.
 pub fn libdirs(dirs: Vec<PathBuf>) -> Libs {
-    Box::new(move |lib| dirs.iter().find_map(|d| std::fs::read(d.join(lib)).ok()))
+    Box::new(move |lib| {
+        let wasm = dirs.iter().find_map(|d| std::fs::read(d.join(lib)).ok())?;
+        Some(Lib { wasm: Cow::Owned(wasm), cwasm: None })
+    })
 }
 
 type Dwarf = gimli::EndianArcSlice<gimli::LittleEndian>;
@@ -286,22 +299,11 @@ impl Shim {
 const INTERNAL: &[&str] = &["__wasm_call_ctors", "__wasm_apply_data_relocs", "_initialize", "__wasm_init_memory"];
 
 impl Loader {
-    /// `interruptible`: the code running can be stopped ([`Loader::arm`]),
-    /// at a small cost in every loop and call.
-    pub fn new(wasi: WasiP1Ctx, libs: Libs, stack: u32, interruptible: bool) -> Result<Loader> {
-        let mut config = Config::new();
-        config.epoch_interruption(interruptible);
-        // a trap's file and line come from Loader::symbols. Frames: the
-        // default of 20 would lose the main of a recursion. A frame takes 16
-        // bytes or more of max_wasm_stack's 512 KiB; more would make each
-        // backtrace reserve memory that malloc takes from mmap
-        config.wasm_backtrace_details(WasmBacktraceDetails::Disable);
-        config.wasm_backtrace_max_frames(std::num::NonZeroUsize::new(1 << 15));
-        if let Ok(c) = Cache::from_file(None) {
-            config.cache(Some(c));
-        }
-        let engine = Engine::new(&config)?;
+    pub fn new(wasi: WasiP1Ctx, libs: Libs, stack: u32) -> Result<Loader> {
+        let engine = Engine::new(&config::config())?;
         let mut store = Store::new(&engine, Host { wasi, syms: HashMap::new(), stacks: Stacks::default(), data: Vec::new(), roots: Vec::new() });
+        // the epoch does not move until a Ctrl-C ([`Loader::arm`])
+        store.set_epoch_deadline(1);
         let memory = Memory::new(&mut store, MemoryType::new(stack.div_ceil(PAGE), Some(UNDEFINED / PAGE)))?;
         let table = Table::new(&mut store, TableType::new(RefType::FUNCREF, 1, None), Ref::Func(None))?;
         let sp = Global::new(&mut store, GlobalType::new(ValType::I32, Mutability::Var), Val::I32(stack as i32))?;
@@ -325,7 +327,7 @@ impl Loader {
 
     /// The module `name` and the libraries it needs, not loaded yet,
     /// dependencies first.
-    fn collect(&self, name: &str, bytes: &[u8], seen: &mut HashSet<String>, out: &mut Vec<Pending>) -> Result<()> {
+    fn collect(&self, name: &str, bytes: &[u8], cwasm: Option<&[u8]>, seen: &mut HashSet<String>, out: &mut Vec<Pending>) -> Result<()> {
         if self.loaded.contains(name) || !seen.insert(name.to_string()) {
             return Ok(());
         }
@@ -335,9 +337,15 @@ impl Loader {
                 continue;
             }
             let lib = (self.libs)(n).ok_or_else(|| format_err!("{n}: not found (use -L)"))?;
-            self.collect(n, &lib, seen, out)?;
+            self.collect(n, &lib.wasm, lib.cwasm, seen, out)?;
         }
-        let module = Module::new(&self.engine, bytes).with_context(|| name.to_string())?;
+        // SAFETY: a .cwasm comes from the binary, which build.rs made with
+        // the same wasmtime; one that does not fit this Engine fails
+        let compiled = cwasm.and_then(|c| unsafe { Module::deserialize(&self.engine, c) }.ok());
+        let module = match compiled {
+            Some(m) => m,
+            None => Module::new(&self.engine, bytes).with_context(|| name.to_string())?,
+        };
         let debug = debug(&module, bytes).with_context(|| name.to_string())?;
         out.push(Pending { name: name.to_string(), module, info, debug });
         Ok(())
@@ -543,7 +551,7 @@ impl Loader {
     /// entry); otherwise the first definition wins.
     pub fn load_bytes(&mut self, name: &str, bytes: &[u8], shadow: bool) -> Result<()> {
         let mut group = Vec::new();
-        self.collect(name, bytes, &mut HashSet::new(), &mut group)?;
+        self.collect(name, bytes, None, &mut HashSet::new(), &mut group)?;
         self.debug.extend(group.iter_mut().filter_map(|p| p.debug.take()));
         if group.iter().any(|p| p.module.get_export("__asan_init").is_some()) && !self.asan {
             // the shadow, after the stack: the first group has the memory to itself
@@ -857,7 +865,7 @@ impl Loader {
     }
 
     /// From now on, a Ctrl-C ([`Loader::on_ctrl_c`]) stops the code running
-    /// with a trap (in a loader made `interruptible`).
+    /// with a trap.
     pub fn arm(&mut self) {
         self.store.set_epoch_deadline(1);
     }

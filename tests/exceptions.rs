@@ -17,7 +17,7 @@ fn rss() -> u64 {
 #[test]
 fn many_exceptions() {
     // each throw allocates the exception in the GC heap, which DRC frees
-    let mut l = common::loader(false);
+    let mut l = common::loader();
     let n = 100_000;
     let throws = |l: &mut Loader| l.call("throws", &[Val::I32(n)]).unwrap().unwrap().unwrap_i32();
     assert_eq!(throws(&mut l), (n as i64 * (n as i64 + 1) / 2) as i32);

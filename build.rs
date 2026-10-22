@@ -9,6 +9,11 @@ use std::{env, fs, path::PathBuf, process::Command};
 #[cfg(feature = "engine")]
 use std::{collections::BTreeMap, io::Cursor, path::Path};
 
+// the loader's wasmtime Config, which the libraries' .cwasm must have
+#[cfg(feature = "engine")]
+#[path = "src/loader/config.rs"]
+mod config;
+
 fn main() {
     // cargo watches build.rs anyway: this only keeps it from running again
     // on a change to any file of the package, as it does when nothing is said
@@ -61,7 +66,9 @@ const LIBS: [&str; 5] = ["libc.so", "libc++.so", "libc++abi.so", "libsc_rt.so", 
 /// The pack: a squashfs (zstd -19, blocks of 128 KiB) with what a session
 /// reads, at the paths of the pack's view (scripts/flags.py, PACK): the
 /// sysroot's headers, libraries and ignorelist in sysroot/, clang's headers
-/// and builtins in res/, the arguments in repl/. Out of clang's headers go the
+/// and builtins in res/, the arguments in repl/. Each library has its
+/// <name>.cwasm next to it, compiled for the loader and cargo's target, with
+/// the CPU features that any of it has. Out of clang's headers go the
 /// intrinsics of the other targets, and out of libc its DWARF, which frames
 /// hides (wasisdk://).
 #[cfg(feature = "engine")]
@@ -93,13 +100,18 @@ fn pack(root: &Path, out: &Path) {
     files.extend(inputs.into_iter().map(|(from, to)| (to, from)));
 
     // build.rs also runs again for a change to the engine: then the 35 s of
-    // zstd are not needed
+    // zstd are not needed. This program, which wasmtime and the Config are
+    // in, and the target make the .cwasm
+    let me = env::current_exe().unwrap();
     let stamp: String = files
         .iter()
+        .map(|(to, from)| (to.as_str(), from))
+        .chain([("", &me)])
         .map(|(to, from)| {
             let m = fs::metadata(from).unwrap();
             format!("{to} {} {} {:?}\n", from.display(), m.len(), m.modified().unwrap())
         })
+        .chain([env::var("TARGET").unwrap()])
         .collect();
     let stamp_file = out.with_extension("stamp");
     if out.exists() && fs::read_to_string(&stamp_file).is_ok_and(|s| s == stamp) {
@@ -114,13 +126,21 @@ fn pack(root: &Path, out: &Path) {
     fs.set_block_size(128 << 10);
     fs.set_no_padding();
     fs.set_root_mode(0o755);
+    let mut cfg = config::config();
+    cfg.target(&env::var("TARGET").unwrap()).unwrap();
+    let engine = wasmtime::Engine::new(&cfg).unwrap();
+    let file = NodeHeader::new(0o644, 0, 0, 0);
     for (to, from) in &files {
         fs.push_dir_all(Path::new(to).parent().unwrap(), NodeHeader::new(0o755, 0, 0, 0)).unwrap();
         let mut bytes = fs::read(from).unwrap_or_else(|e| panic!("{}: {e}", from.display()));
         if to.ends_with("/libc.so") {
             bytes = strip_debug(&bytes);
         }
-        fs.push_file(Cursor::new(bytes), to, NodeHeader::new(0o644, 0, 0, 0)).unwrap();
+        if to.ends_with(".so") {
+            let cwasm = engine.precompile_module(&bytes).unwrap_or_else(|e| panic!("{to}: {e}"));
+            fs.push_file(Cursor::new(cwasm), format!("{to}.cwasm"), file).unwrap();
+        }
+        fs.push_file(Cursor::new(bytes), to, file).unwrap();
     }
     fs.write(fs::File::create(out).unwrap()).unwrap();
     fs::write(stamp_file, stamp).unwrap();

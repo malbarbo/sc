@@ -9,8 +9,8 @@ use wasmtime::{Trap, Val};
 /// of the second session, as after a %restart: the first one's is replaced.
 #[test]
 fn signal_stops_a_loop() {
-    common::loader(true).on_ctrl_c(|| {});
-    let mut l = common::loader(true);
+    common::loader().on_ctrl_c(|| {});
+    let mut l = common::loader();
     l.on_ctrl_c(|| {});
     // armed before the signal can come: one before would be lost
     l.arm();

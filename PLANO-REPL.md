@@ -1274,8 +1274,11 @@ três leitores: o VFS do clang, um gancho no wasm-ld e o loader.
    (ANALISE.md §53): sem o gancho do lld e sem o loader no pacote, os
    `.args` com `/sc/` não ligam nem carregam as células. Com eles saíram
    o `build_dir()` e o `build/repl`, e o `frames` passou a usar `/sc/`.
-   Faltam os `.cwasm`, o epoch sempre ligado e a `cache` fora.
-5. O `frames` com `/sc/` e `/src/`, sem o `build_dir()`.
+   O resto do 4 foi feito em 2026-10-22 (ANALISE.md §54), com o 5 e o 6.
+5. O `frames` com `/sc/` e `/src/`, sem o `build_dir()`. Feito com os
+   prefixos exatos do compiler-rt (`/src/src/llvm-project/` e
+   `/src/build/`): um `/src/` inteiro esconderia o código de um aluno que
+   trabalha em `/src`, comum num container.
 6. Docs: README (instalar é copiar o `sc`), AGENTS, ANALISE.
 
 **Critério de saída.**

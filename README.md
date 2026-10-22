@@ -80,7 +80,10 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   what a session reads (`PLANO-REPL.md` §5.4): a squashfs `build.rs`
   writes, with the sysroot's headers and libraries, clang's headers and
   the session's arguments, which the engine sees under `/sc`
-  (`src/bin/sc/pack.rs`). Copied anywhere, `sc` runs.
+  (`src/bin/sc/pack.rs`), and each library compiled by wasmtime (its
+  `.cwasm`, which the loader takes in place of compiling it). Installing
+  `sc` is copying it: it runs anywhere, and writes only the REPL's history
+  and theme.
   From a clean checkout that is the LLVM pin built twice (native tools,
   host libraries) and the sysroot, without `make learn`: the cuts are in
   `cuts/`. It took 14 min on 56 cores (7.3 h of CPU) and 6.6 GB.
@@ -97,7 +100,8 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
     `libc.so` and `libc++.so` from wasi-sdk, then each input, sharing one
     memory and one function table. A definition in an input hides an
     older one for the inputs after it, and an input may use what a later
-    one defines. `ANALISE.md` §18 has the design.
+    one defines. `ANALISE.md` §18 has the design. `src/loader/config.rs`
+    is its wasmtime `Config`, which `build.rs` compiles the `.cwasm` with.
   - `src/bin/sc/` is the REPL, `src/bin/scload.rs` the loader alone, for
     the batteries. `sc --replay` is the test of the REPL's side
     (`test/split.py`, `test/session.py`); `build/sc-full` is `sc` with the

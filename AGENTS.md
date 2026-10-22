@@ -29,7 +29,7 @@ make test-session-wasm # the same slices on sc.wasm's session (build/sc-wasm)
 make test-session-wasm-warn # and test-split-wasm
 make repl        # build/cargo/release/sc, the REPL (sc, sc FILE, sc help), unstripped
 cargo build --release # the same sc (build.rs runs make sc-deps)
-make dist        # build/cargo/dist/scload and sc: small, LTO (~3 min)
+make dist        # build/cargo/dist/scload and sc: small, LTO (~4 min)
 make test-aluno  # test/aluno, correct code, at each --safety level (scripts/flags.py)
 make test-checks # test/checks, one bug per program: what sc says of it at each level
 make test-loader # src/loader.rs: Ctrl-C, many exceptions, after changing the loader or wasmtime (no engine)

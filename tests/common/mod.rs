@@ -27,8 +27,8 @@ pub const MODULE: &str = r#"
     (local.get $sum)))
 "#;
 
-pub fn loader(interruptible: bool) -> Loader {
-    let mut l = Loader::new(WasiCtxBuilder::new().build_p1(), libdirs(Vec::new()), STACK, interruptible).unwrap();
+pub fn loader() -> Loader {
+    let mut l = Loader::new(WasiCtxBuilder::new().build_p1(), libdirs(Vec::new()), STACK).unwrap();
     l.load_bytes("cell", &wat::parse_str(MODULE).unwrap(), true).unwrap();
     l
 }

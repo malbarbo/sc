@@ -4,7 +4,7 @@
 //! statements at the top level, which the session's incremental mode accepts.
 use sc::engine::{Answer, Repl, Status};
 use crate::{pack, show};
-use sc::loader::{source_name, Loader, STACK};
+use sc::loader::{source_name, Lib, Loader, STACK};
 use std::io::IsTerminal;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -94,8 +94,7 @@ const MEMORY: u64 = 1 << 30;
 impl Machine {
     /// A session in `lang` at `safety`, whose programs see `argv`. One that
     /// is not `interactive` takes one cell, the whole program. Only an
-    /// `interactive` one is stopped by Ctrl-C: the epoch checks cost in
-    /// every loop and call.
+    /// `interactive` one is stopped by Ctrl-C.
     pub fn new(lang: Lang, safety: Safety, argv: Vec<String>, interactive: bool) -> crate::Result<Machine> {
         let file = if interactive { "" } else { "-file" };
         let args_file = format!("repl/{}-{}{file}.args", lang.name(), safety.name());
@@ -116,8 +115,11 @@ impl Machine {
 
         let mut wasi = WasiCtxBuilder::new();
         wasi.inherit_stdio().inherit_env().args(&argv);
-        let libs = Box::new(|lib: &str| pack::read(&format!("sysroot/lib/wasm32-wasip1/{lib}")).map(<[u8]>::to_vec));
-        let mut loader = Loader::new(wasi.build_p1(), libs, STACK, interactive)?;
+        let libs = Box::new(|lib: &str| {
+            let path = format!("sysroot/lib/wasm32-wasip1/{lib}");
+            Some(Lib { wasm: pack::read(&path)?.into(), cwasm: pack::read(&format!("{path}.cwasm")) })
+        });
+        let mut loader = Loader::new(wasi.build_p1(), libs, STACK)?;
         loader.keep_stacks();
         let shown = Arc::new(Mutex::new(None));
         let (s, null) = (Arc::clone(&shown), if lang == Lang::C { "NULL" } else { "nullptr" });
@@ -377,15 +379,17 @@ fn message(e: &Error, loader: &mut Loader) -> String {
 /// a recursion, comes once, with how many times; a cycle of 2 to 4 frames
 /// too. A long list keeps its start and its end.
 fn frames(bt: &wasmtime::WasmBacktrace, loader: &Loader, library: bool) -> Vec<String> {
-    // the headers' code, compiled in the cell, is from the pack
+    // the headers' code, compiled in the cell, is from the pack; the
+    // compiler-rt in libc++.so from wasi-sdk's build, without -ffile-prefix-map
     let pack = format!("{}/", pack::ROOT);
+    let theirs = [pack.as_str(), "/src/src/llvm-project/", "/src/build/"];
     // (function, where in the student's code), inlined functions first
     let entries = bt.frames().iter().flat_map(|f| {
         let name = f.func_name().map(source_name).unwrap_or_default();
         let syms: Vec<_> = loader.symbols(f).into_iter().map(|s| {
             // the libraries' own sources are wasi-sdk's (wasisdk://...)
             let file = s.file.unwrap_or_default();
-            let user = !file.is_empty() && !file.starts_with(&pack) && !file.contains("://");
+            let user = !file.is_empty() && !theirs.iter().any(|p| file.starts_with(p)) && !file.contains("://");
             let at = s.line.filter(|_| user).map(|l| format!("{file}:{l}:{}", s.column.unwrap_or(0)));
             (s.name.as_deref().map(source_name).unwrap_or_else(|| name.clone()), at)
         }).collect();
@@ -411,7 +415,10 @@ fn frames(bt: &wasmtime::WasmBacktrace, loader: &Loader, library: bool) -> Vec<S
             fs.remove(0);
         }
     }
-    let mut out = Vec::new();
+    // from the outside in: where a recursion starts does not depend on
+    // where the stack ran out, which changes with the build
+    fs.reverse();
+    let mut groups = Vec::new();
     let mut i = 0;
     while i < fs.len() {
         // a recursion through more than one function: its cycle once
@@ -421,13 +428,21 @@ fn frames(bt: &wasmtime::WasmBacktrace, loader: &Loader, library: bool) -> Vec<S
             (k >= 3).then_some((p, k))
         }).next();
         let (p, k) = cycle.unwrap_or((1, 1));
-        out.extend(fs[i..i + p].iter()
-            .map(|(l, times)| if *times > 1 { format!("{l}, {times} times") } else { l.clone() }));
+        let mut g: Vec<String> = fs[i..i + p].iter().rev()
+            .map(|(l, times)| if *times > 1 { format!("{l}, {times} times") } else { l.clone() })
+            .collect();
         if k > 1 {
-            out.push(format!("(the {p} frames above, {k} times)"));
+            g.push(format!("(the {p} frames above, {k} times)"));
         }
+        groups.push(g);
         i += p * k;
+        // the innermost frames, the cycle cut short: nothing more to say
+        let rest = fs.len() - i;
+        if k > 1 && rest < p && fs[i..] == fs[i - p..i - p + rest] {
+            i = fs.len();
+        }
     }
+    let mut out: Vec<String> = groups.into_iter().rev().flatten().collect();
     // what is left of a long recursion: its start and its end
     const HEAD: usize = 10;
     const TAIL: usize = 3;

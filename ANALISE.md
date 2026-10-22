@@ -4105,3 +4105,120 @@ nulo), o `test-session-wasm` e o `test-loader` passaram.
 
 O leitor ficou abaixo dos 302 KB medidos no §5.4, provavelmente porque o `zstd` já estava no
 binário, pela `cache` do wasmtime.
+
+## 54. Fase 7 do REPL, passos 4 a 6: os `.cwasm` no pacote, sem cache
+
+**O `Config` é um só.** O `src/loader/config.rs` tem o `Config` do
+wasmtime do loader, e o `build.rs` o inclui (`#[path]`) para compilar as
+bibliotecas com as mesmas opções: o `Module::deserialize` só aceita um
+`.cwasm` de um `Engine` igual. O epoch fica sempre ligado (§49: abaixo de
+1%), e o `interruptible` saiu do `Loader::new`, do `Machine`, do `scload` e
+dos `tests/`. Sem Ctrl-C o epoch não anda; o `Loader::new` já põe o prazo
+em 1.
+
+**Os `.cwasm`.** O `build.rs` compila cada `.so` do pacote com o wasmtime
+48.0.3, agora também dependência de build (as mesmas features, e o
+`build-override` de `opt-level` 2 do §52), para o `TARGET` do cargo: sai o
+código da CPU base, que serve a qualquer máquina do alvo. Cada um vai ao
+lado da sua biblioteca (`sysroot/lib/wasm32-wasip1/libc.so.cwasm`). A
+`libc.so` é compilada já sem o DWARF, que é o que o pacote leva. O carimbo
+do pacote inclui o próprio `build.rs` compilado (o wasmtime e o `Config`
+estão nele) e o `TARGET`.
+
+O loader recebe de `Libs` um `Lib { wasm, cwasm }`. Com o `cwasm`, ele
+tenta o `Module::deserialize` e, se falhar, compila. Os bytes da `.so`
+continuam necessárias: o `dylink.0` e o DWARF saem delas. O `scload` e os
+`tests/` não têm `.cwasm`. Conferido com um `eprintln` provisório: no `sc`
+só as células e os shims passam pelo Cranelift (17 ms no total, num
+`hello` em C); as cinco bibliotecas vêm do `.cwasm`.
+
+| `.cwasm` | bytes |
+| --- | ---: |
+| `libc++.so` | 2.590.328 |
+| `libc.so` | 1.835.368 |
+| `libc++abi.so` | 496.360 |
+| `libsc_rt.so` | 205.144 |
+| `libsetjmp.so` | 14.944 |
+| total | 5.142.144 |
+
+São 11% a mais que os 4,62 MB do `wasmtime compile` medidos no §5.4. Os
+números não são comparáveis: lá não havia as checagens de epoch, e o
+código não era o da CPU base.
+
+**A `cache` sai.** A feature `cache` saiu do wasmtime, e com ela 130
+linhas do `Cargo.lock`. O `sc` não grava mais nada em `~/.cache`: só o
+histórico e o tema do REPL.
+
+**O passo 5.** O `frames` esconde também o compiler-rt de dentro da
+`libc++.so`, que tem `/src/src/llvm-project/...` e `/src/build/...` (o
+`DW_AT_comp_dir` do build do wasi-sdk). O filtro usa esses dois prefixos e
+não `/src/` inteiro, que esconderia o código de um aluno em `/src`. Um
+`__int128` dividido por zero mostrava três quadros do compiler-rt
+(`__divti3`, `__divXi3`, `__udivmodti4` com as linhas) antes do código do
+aluno. Agora mostra `in __udivmodti4`, seguido da função do aluno.
+
+**Tamanho e tempo.**
+
+| | 182cc2d (§53) | agora | |
+| --- | ---: | ---: | --- |
+| pacote | 2.612.568 | 4.177.083 | +1.564.515, os `.cwasm` |
+| `sc` de dist | 37.167.200 | 38.199.744 | +1.032.544 |
+| `scload` de dist | | 7.489.488 | sem a `cache` |
+
+O `sc` cresceu 0,5 MB a menos que o pacote: saíram a `cache` e as
+dependências dela. O `make dist` passou de 2m51s para 4m10s, porque o
+wasmtime é compilado também como dependência de build.
+
+Tempo de `sc FILE` (dist, numa máquina carregada; os tempos quentes pelo
+`hyperfine`):
+
+| programa | antes, cache fria | antes, cache quente | agora |
+| --- | ---: | ---: | ---: |
+| `hello` em C | 0,23 s | 84 ms | 97 ms |
+| `std::vector` e `iostream` | 2,14 s | 1,84 s | 1,88 s |
+
+A primeira execução numa máquina caiu de 0,23 s para 0,10 s em C e de
+2,14 s para 1,86 s em C++, e não há mais diferença entre a primeira
+execução e as seguintes. Contra a cache quente, o `sc` novo fica de 13 a
+40 ms mais lento. A `cache` guardava todo módulo, células e shims
+inclusive, e o `sc` agora compila esses toda vez. Isso é o que o §5.4
+aceitou ao não guardar as células.
+
+**Fora do checkout.** O `sc` de dist foi copiado para um diretório vazio,
+com o `build/` e o `~/.cache/wasmtime` escondidos (`bwrap --tmpfs`). Rodou
+C++ com `std::vector` e exceções, o REPL (`x * 21` mostra `(int) 42`) e um
+trap com a linha (`at f (t.c:1:24)`). O `strace -f -e trace=%file` não
+mostra nenhum caminho do checkout. O único `/sc/...` no disco é o
+`access` do `.imports` do lld. Nada foi gravado no `HOME`.
+
+**A pilha das recursões.** As checagens de epoch aumentam os quadros
+nativos do Cranelift, e numa recursão mútua de funções pequenas o
+`max_wasm_stack` (512 KiB, nativo) acaba antes da pilha da memória linear.
+O `test/checks/mutual.c` em `sc FILE` ia a 8.190 ciclos de 2 quadros e
+agora vai a 5.459. É o que o REPL, que já tinha o epoch, sempre deu.
+A recursão de uma função só não mudou (10.920 quadros). O limite fica
+como está: o `config.rs` explica por que ele não sobe.
+
+O ponto em que a pilha acaba varia com o build, e com ele o quadro mais
+interno. O `sc` de release estourava em `impar`, depois de 5.458 ciclos.
+O de dist estourava em `par`, depois de 5.459, e aí o ciclo, achado a
+partir de dentro, começava um quadro antes e sobrava um `par` no fim. O
+`test-checks` (release) e o `test-dist` (dist) usam o mesmo
+`expected.txt`, e um dos dois falhava. Antes eles concordavam por acaso.
+**Decidido em 2026-10-22:** o `frames` acha os ciclos a partir de fora (do
+`main`), que não depende do build, e omite o pedaço de ciclo que o
+estouro cortou do lado de dentro, porque são quadros iguais aos do ciclo.
+Um trap dentro do ciclo continua com a sua linha, que é outra. Os dois
+builds dão agora `at impar / at par / (the 2 frames above, N times) / at
+main`, como o `expected.txt` já tinha.
+
+**As baterias.** `make test-dist`:
+- `test-split`: 1.947 programas, 10.541 células, 0 diferenças (6
+  conhecidas);
+- `test-session`: 11.918 resultados, 0 ruins (39 conhecidos);
+- `test-aluno`: 66 execuções, 0 diferenças;
+- `test-checks`: 165 execuções, iguais ao `expected.txt`, no `sc` de
+  dist e no de release.
+
+O `make test-loader` passou. O engine e os cortes não mudaram, então o
+`make test` e o `test-session-wasm` não precisam rodar de novo.

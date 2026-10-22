@@ -45,7 +45,7 @@ fn run(libdirs: Vec<PathBuf>, mods: Vec<PathBuf>, dirs: Vec<String>, args: Vec<S
         let (h, g) = d.split_once("::").unwrap_or((&d, &d));
         b.preopened_dir(h, g, FsPerms::ReadWrite)?;
     }
-    let mut l = Loader::new(b.build_p1(), sc::loader::libdirs(libdirs), stack, false)?;
+    let mut l = Loader::new(b.build_p1(), sc::loader::libdirs(libdirs), stack)?;
     let r = (|| {
         for (i, m) in mods.iter().enumerate() {
             l.load(m, i > 0)?;

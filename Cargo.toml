@@ -13,7 +13,7 @@ cpp_demangle = "0.5"
 # the minimal set (PLANO-REPL.md §5.3). gc turns on the exceptions; gc-drc
 # is the one collector. wasmtime-wasi's p1 brings p2, so async and
 # component-model come back with it
-wasmtime = { version = "48.0.3", default-features = false, features = ["runtime", "std", "cranelift", "gc", "gc-drc", "cache", "parallel-compilation"] }
+wasmtime = { version = "48.0.3", default-features = false, features = ["runtime", "std", "cranelift", "gc", "gc-drc", "parallel-compilation"] }
 wasmtime-wasi = { version = "48.0.3", default-features = false, features = ["p1"] }
 # a frame's file and line ([loader::Loader::symbols]), the versions wasmtime
 # uses
@@ -30,10 +30,12 @@ libc = "0.2"
 # the wasm feature: WASI of sc.wasm's sessions
 tokio = { version = "1", features = ["rt"], optional = true }
 
-# the bindings of engine/sc.h; the pack sc embeds (build.rs)
+# the bindings of engine/sc.h; the pack sc embeds (build.rs), with the
+# libraries compiled by the wasmtime of the loader, with its features
 [build-dependencies]
 bindgen = { version = "0.72", default-features = false, features = ["runtime"], optional = true }
 backhand = { version = "0.25.5", default-features = false, features = ["zstd"], optional = true }
+wasmtime = { version = "48.0.3", default-features = false, features = ["runtime", "std", "cranelift", "gc", "gc-drc", "parallel-compilation"], optional = true }
 
 # make test-loader and test-proto (tests/)
 [dev-dependencies]
@@ -44,7 +46,7 @@ default = ["engine"]
 # sc, with the engine linked in (PLANO-REPL.md §1.1): build.rs links the
 # arguments of SC_LINK_ARGS, by default build/link-session-cut/engine.args,
 # which it asks make for
-engine = ["dep:bindgen", "dep:backhand", "dep:bpaf", "dep:rustyline", "dep:dirs"]
+engine = ["dep:bindgen", "dep:backhand", "dep:wasmtime", "dep:bpaf", "dep:rustyline", "dep:dirs"]
 # the same API over sc.wasm's exports through wasmtime (src/engine/wasm.rs),
 # in place of the linked engine: build/sc-wasm (PLANO-REPL.md §5.2)
 wasm = ["engine", "dep:tokio"]
