@@ -1423,6 +1423,13 @@ O snapshot precisa também de:
   encolhe;
 - fechar no shim os arquivos que a célula deixou abertos.
 
+**Feito em 2026-10-22, no Node (ANALISE.md §56).** O `__stack_pointer` é
+exportado. O `test/node/engine.mjs` é o filho `sc --engine` com o
+snapshot e a restauração, e a bateria inteira passa nele (`make
+test-session-node`). Uma célula custa 11 ms em C e 23 ms em C++, contra 17
+e 29 ms do wasmtime com `fork`. Falta o shim WASI próprio, que fecha os
+arquivos e serve o pacote em memória.
+
 **Os limites.**
 - **Timeout e Ctrl-C da compilação:** `terminate` do worker, um worker
   novo e o repasse do log, como o `SC_LOST`.

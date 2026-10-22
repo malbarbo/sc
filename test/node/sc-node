@@ -1,0 +1,7 @@
+#!/bin/sh
+# build/sc-wasm with its engine child on Node (engine.mjs): test/session.py
+# --wasm test/node/sc-node. sc --replay starts SC_CHILD --engine; SC_NODE_FLAGS
+# are node's (--stack-size=...)
+d=$(dirname "$(realpath "$0")")
+[ "$1" = --engine ] && exec node --no-warnings $SC_NODE_FLAGS "$d/engine.mjs" "$@"
+SC_CHILD="$d/sc-node" exec "$d/../../build/sc-wasm" "$@"

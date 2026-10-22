@@ -4253,3 +4253,68 @@ do `KNOWN`.
 
 Os cortes não precisaram de `make learn`: as baterias nos motores
 cortados (`build/sc`, `build/sc-wasm`) passaram.
+
+## 56. O host JS, passo 1: o snapshot da memória no Node
+
+O primeiro passo do host JS (PLANO-REPL.md §5.5) mede a recomendação do
+§5.5: voltar uma célula que falha copiando a memória linear, no lugar do
+`fork`.
+
+**O que foi feito.**
+- O `scripts/link.py` exporta o `__stack_pointer` do `sc.wasm`, o único
+  global do módulo. O `sc.wasm` cresceu 86 bytes (20.052.842; zstd
+  5.656.992).
+- `test/node/engine.mjs` é o filho `sc --engine` no Node: o `wasm.rs` e
+  o `serve` em JS, com o WASI do Node (`node:wasi`). Antes de cada célula
+  que não é repasse, ele copia a memória e o `__stack_pointer`. Se a
+  célula falha, é um tipo, dá trap ou chama `exit`, ele restaura a cópia e
+  zera o que a memória cresceu.
+- O `sc --replay` aceita `SC_CHILD`, o programa do filho. O
+  `test/node/sc-node` é o `build/sc-wasm` com esse filho, e o
+  `test/session.py --wasm` o usa como qualquer host. O alvo é `make
+  test-session-node`.
+
+**Três ajustes.**
+- O `WASI.initialize` do Node recusa um módulo que exporta `_start`, e o
+  `sc.wasm` exporta os dois. O host passa só a memória e o `_initialize`.
+- Com `returnOnExit`, um `exit` do engine (um `LLVM ERROR`) encerrava o
+  processo. O `proc_exit` agora lança uma exceção, que a célula trata
+  como um trap.
+- A cópia num buffer guardado de uma célula para a outra custa de metade
+  a um terço da de um `slice()` novo (C++: 6,7 ms contra 22,9).
+
+**As baterias.** `make test-session-node`: 11.926 resultados, 0 ruins (41
+conhecidos). Os 3 conhecidos a mais são só do Node: objetos de centenas de
+MB (`arr[100000000]`). O WASI do wasmtime falha ao gravá-los ("IO failure
+on output stream: Out of memory"), e a base com ele; o do Node grava. Em
+47 dos 48 `crash-`, como no wasmtime, o engine deu trap ou saiu, e a
+sessão seguiu restaurada, com o repasse exportando os mesmos nomes. `make test` (0 diferenças) e `make
+test-session-wasm` (0 ruins) passaram com o export.
+
+**A pilha.** Com a pilha padrão do Node (984 KB), 6 resultados diferiam
+do wasmtime: o engine ia mais fundo e compilava o que no wasmtime estoura
+a pilha (`many-logical-ops`, `cxx2b-deducing-this`). Com
+`--stack-size=300`, o V8 estoura onde o wasmtime estoura, e o alvo usa
+esse valor. O navegador, como o Node padrão, vai mais fundo.
+
+**O tempo.** Uma sessão, sem carga, depois das 100 primeiras células do
+`mem-`:
+
+| | memória | cópia (mediana) | célula, Node | célula, wasmtime e `fork` |
+| --- | ---: | ---: | ---: | ---: |
+| C | 16 MB | 1,8 ms | 11,1 ms | 17,1 ms |
+| C++ | 41 MB | 6,7 ms | 23,0 ms | 28,8 ms |
+
+A restauração, no `seq-` e no `crash-` (62 vezes, 14 MB de mediana, numa
+sessão nova), custou 11 ms de mediana e 16 ms no máximo. O primeiro toque
+nas páginas pesa nela, como na primeira cópia. O snapshot custa menos
+que o `fork`, e o host Node fica mais rápido que o `sc-wasm`.
+
+Com 48 jobs, cada filho Node compila o `sc.wasm` de novo, sem `.cwasm`.
+A bateria leva 17 min, com 728 min de CPU. Numa das três rodadas, 3
+programas grandes passaram dos 120 s do `ses-` e falharam; sozinhos,
+passam.
+
+**Fica para depois.** Um trap deixa abertos os fds que a célula abriu no
+WASI do Node, que a restauração não alcança. No navegador o shim é nosso
+e os fecha (§5.5).

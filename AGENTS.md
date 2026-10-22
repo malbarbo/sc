@@ -27,6 +27,7 @@ make test-session # the session's slices on build/sc against the uncut engine (b
 make test-session-warn # ses-, seq- and crash- with -Weverything
 make test-session-wasm # the same slices on sc.wasm's session (build/sc-wasm)
 make test-session-wasm-warn # and test-split-wasm
+make test-session-node # the same slices with the child on Node (test/node/engine.mjs)
 make repl        # build/cargo/release/sc, the REPL (sc, sc FILE, sc help), unstripped
 cargo build --release # the same sc (build.rs runs make sc-deps)
 make dist        # build/cargo/dist/scload and sc: small, LTO (~4 min)

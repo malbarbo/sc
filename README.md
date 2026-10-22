@@ -171,7 +171,10 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   the session: every source of the corpus as one cell (`ses-`), the
   sequences of cells, undos and restarts in `test/seq/` (`seq-`), the
   sources that crash the engine between good cells (`crash-`) and the
-  memory over 1000 cells (`mem-`). `test/repl/` has
+  memory over 1000 cells (`mem-`). `test/node/engine.mjs` is the child
+  of `sc --replay` (`sc --engine`) on Node, the prototype of the JS host:
+  a snapshot of the memory in place of the fork (`make
+  test-session-node`, `ANALISE.md` §56). `test/repl/` has
   sequences of REPL inputs (`c1.c`, `c2.c`...).
 - `rt/sc_rt.c` is `libsc_rt`, in the sysroot: the handlers of UBSan's
   checks and of libc++'s hardening for the levels `on` and `strict` of
@@ -217,6 +220,7 @@ make test-session-warn # ses-, seq- and crash- with -Weverything
 make test-session-wasm # the same slices on sc.wasm's session (build/sc-wasm)
 make test-session-wasm-warn
 make test-split-wasm
+make test-session-node # the slices with the child on Node (test/node)
 ```
 
 The first `make` fetches wasi-sdk 29, the LLVM pin with the patches, and the

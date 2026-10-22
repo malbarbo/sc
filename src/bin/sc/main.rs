@@ -179,7 +179,9 @@ fn replay(args: &[String]) -> Result<()> {
     let usage = "--replay <dir> <cell>... -- <session args>";
     let sep = args.iter().position(|a| a == "--").ok_or(usage)?;
     let (dir, cells) = args[..sep].split_first().ok_or(usage)?;
-    let mut r = Repl::new(std::env::current_exe()?, args[sep + 1..].to_vec(), None, None)?;
+    // SC_CHILD: another engine, as test/node/sc-node
+    let program = std::env::var_os("SC_CHILD").map_or_else(std::env::current_exe, |p| Ok(p.into()))?;
+    let mut r = Repl::new(program, args[sep + 1..].to_vec(), None, None)?;
     let mut sos: Vec<PathBuf> = vec![];
     let mut out = io::stdout().lock();
     for (k, cell) in cells.iter().enumerate() {

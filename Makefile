@@ -50,7 +50,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-aluno test-checks test-dist repl sc-deps test-loader dist clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-session-node test-aluno test-checks test-dist repl sc-deps test-loader dist clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -296,6 +296,13 @@ test-session-wasm-warn: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-wev-base/su
 
 test-split-wasm: $(B)/sc-wasm $(SCLOAD) $(B)/res/native-base/summary.json
 	test/split.py $(B)/sc-wasm $(B)/res/split-wasm
+
+# the same slices with the child on Node (test/node, PLANO-REPL.md §5.5): a
+# snapshot of the memory in place of the fork. With 300 KB of stack V8
+# exhausts it where wasmtime does; its default, as a browser's, goes deeper
+test-session-node: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-base/summary.json
+	SC_NODE_FLAGS=--stack-size=300 test/session.py --wasm test/node/sc-node $(B)/res/session-node \
+	  $(B)/res/session-wasm-base/summary.json
 
 # --- the REPL's loader, runs the shared objects (native, wasmtime): scload,
 # for the batteries, without the engine; and sc, with the cut engine

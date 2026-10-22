@@ -5,6 +5,7 @@ with the protocol's loop (build/sc), as the REPL drives it,
 
 usage: session.py [--update] [--wasm] [<engine> [<outdir> [<base summary.json>]]]
        (build/sc, build/res/session); --wasm: <engine> is a host of sc.wasm
+       (build/sc-wasm, or test/node/sc-node, its child on Node)
 SLICES=ses,seq,crash,mem picks the slices (all); ONLY=<name>,... (or a
 file of names) the results; JOBS sets the parallelism (48); WFLAGS adds warning flags to the
 session's (e.g. -Weverything; then seq- is not checked against expected.txt)
@@ -92,6 +93,13 @@ KNOWN = {f'ses-{k}': v for k, v in {
     C + 'CodeGenCXX_wasm-reftypes-mangle': 'the guess between a statement and a declaration at the top takes'
                                           ' `void (*__funcref f)();` for a statement',
 }.items()}
+# the engine on Node (test/node/sc-node, PLANO-REPL.md §5.5), against the
+# base of wasmtime: its WASI writes what wasmtime's does not
+NODE = os.path.basename(ENG) == 'sc-node'
+BIG = ('an object of hundreds of MB: wasmtime\'s WASI fails to write it ("IO failure on output stream:'
+       ' Out of memory"), and the base with it; Node\'s writes it')
+HOST = {f'ses-{k}': BIG for k in (G + 'compile_20080625-1', G + 'compile_pr103813', C + 'SemaCXX_large-array-init')} if NODE else {}
+KNOWN.update(HOST)
 # not run: names whose demangling grows exponentially, which wasm-ld does
 # for each cell's link (the corpus only compiles them)
 SKIP = {C + 'CodeGenCXX_mangle-ms-back-references-pr13207', C + 'CodeGenCXX_pr29160'}
@@ -349,7 +357,7 @@ def main():
     if len(ARGS) > 2:
         # the corpus's IGNORE, in each slice
         base = {k: v for k, v in json.load(open(ARGS[2])).items()
-                if k in summary and k.split('-', 1)[1] not in IGNORE}
+                if k in summary and k.split('-', 1)[1] not in IGNORE and k not in HOST}
         for k in diff(base, summary):
             print('DIFF', k)
             bad.append(k)

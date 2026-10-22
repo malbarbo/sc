@@ -90,7 +90,9 @@ toks = shlex.split(ninja_cmd('bin/clang-23').split(': && ', 1)[1].removesuffix('
 flags = [t for t in toks if not t.endswith(('.a', '.obj', '.o')) and t not in ('-o', 'bin/clang-23', '-Os', '-Xlinker')
          and not t.startswith(('--dependency-file', '-Wl,--color-diagnostics', '-fdiagnostics-color'))]
 EXPORTS = ('sc_session_new', 'sc_session_free', 'sc_session_cell', 'sc_session_undo', 'sc_session_depth',
-           'sc_result_ptr', 'sc_result_len', 'malloc', 'free', 'chdir')
+           'sc_result_ptr', 'sc_result_len', 'malloc', 'free', 'chdir',
+           # a host without fork restores it with the memory (PLANO-REPL.md §5.5)
+           '__stack_pointer')
 if not NATIVE:  # _start is sc_start.cpp's; the host calls chdir after _initialize
     flags += ['-mexec-model=reactor', '-lc-printscan-long-double'] + [f'-Wl,--export={f}' for f in EXPORTS]
 archives = [t for t in shlex.split(ninja_cmd('bin/lld')) if t.startswith('lib/liblld') and t.endswith('.a')]
