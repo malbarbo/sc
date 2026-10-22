@@ -623,7 +623,7 @@ só entra na fase 4, depois do aprendizado.
 | 5. reactor (feita, §5.2) | `sc.wasm` reactor + `_start`; as exports | antes de trocar, congelar `res/base/summary.json`; depois, o `sc-full.wasm` novo reproduz a base hash por hash (T-B2) |
 | 6a. loader mínimo (feita, §5.3) | o loader com as features mínimas do §1.4, exceções ligadas e tags compartilhadas, `epoch_interruption` | `pic-` e `repl-` com a mesma saída; tamanho do loader registrado |
 | 6b. hosts (nativo feito, ANALISE.md §50) | crate `sc-proto` (bindgen sobre `sc.h`), binário único `build/sc` (engine ligado pelo `--emit-link`), filho `sc --engine`, timeout, válvula, repasse; host JS documentado | `crash-` pelo REPL nativo: o REPL segue vivo e a célula seguinte funciona |
-| 7. docs e distribuição | ANALISE.md (§20), README, AGENTS (alvos novos), Makefile (`.PHONY`, `clean` de `res/ses*` etc.); o `sc` fora do checkout (ANALISE.md §51): os `.args` sem caminhos absolutos, relativos a uma raiz, e a escolha entre uma árvore ao lado do binário e o sysroot embutido | o `sc` copiado para fora do `build/` roda |
+| 7. docs e distribuição | ANALISE.md (§20), README, AGENTS (alvos novos), Makefile (`.PHONY`, `clean` de `res/ses*` etc.); o `sc` fora do checkout (ANALISE.md §51): os `.args` sem caminhos absolutos, relativos a uma raiz, e o sysroot embutido, sem extração (§5.4) | o `sc` copiado para fora do `build/` roda (§5.4) |
 
 ### 5.1 Orçamento de tamanho (T-m1)
 
@@ -1024,6 +1024,327 @@ O cache frio custa a compilação da `libc.so` (1,9 MB) e da `libc++.so`
   e pelos vazamentos;
 - `opt-level` menor deixar o Cranelift lento demais: o passo 4 mede antes
   de escolher.
+
+### 5.4 Fase 7 em detalhe: um binário só (proposta)
+
+**Objetivo.** O `sc` é um arquivo só. Copiado para qualquer lugar, ou para
+outra máquina do mesmo sistema, ele roda sem árvore ao lado, sem extrair
+nada para um diretório temporário e sem cache em disco. A solução não pode
+depender de recursos só do Linux: o alvo inclui o Windows.
+
+**O que o `sc` lê hoje em tempo de execução** (medido em 2026-10-21):
+
+| o quê | quem lê | onde está | tamanho |
+| --- | --- | --- | --- |
+| os `.args` da sessão (`<lang>-<nível>[-file].args`, um argumento por linha) | `Machine::new` (`machine.rs`) | `build/repl`, achado por `build_dir()` (`SC_BUILD` ou o primeiro ancestral do binário com `repl/`) | 40 KB (68 KB em disco) |
+| os cabeçalhos: sysroot e os do clang (`-internal-isystem`, `-internal-externc-isystem`) | o clang da sessão, pelo VFS criado em `sc_session.cpp:685` | `build/sysroot/include`, `build/wasi-sdk-*/lib/clang/21/include` | 18 MB + 7,8 MB (4,3 MB deles são intrínsecos de x86 e ARM) |
+| a ignorelist dos sanitizadores (`-fsanitize-ignorelist`, só em `strict`) | o clang, pelo mesmo VFS (`NoSanitizeList`, `clang/lib/Basic/NoSanitizeList.cpp:24`, com o VFS do `FileManager`) | `build/sysroot/share/sc/ignorelist.txt` | 659 bytes |
+| as `.so` para o link de cada célula (`-L` e `-l`) e o `libclang_rt.builtins.a` | o wasm-ld, por `findFile` (`fs::exists`, `lld/wasm/Driver.cpp:227`), `readFile` (`MemoryBuffer::getFile`, `lld/wasm/InputFiles.cpp:68`) e, para o `.a`, um `fs::exists` do `.imports` ao lado (`Driver.cpp:312`, que dá falso) | `build/sysroot/lib/wasm32-wasip1`, `build/wasi-sdk-*/lib/clang/21/lib/...` | 2,9 MB + 0,45 MB |
+| as `.so` carregadas no wasmtime (`libc`, `libc++`, `libc++abi`, `libsc_rt`, `libsetjmp` e as que elas pedem) | `Loader::find` e `collect` (`loader.rs:317`, `std::fs::read`). Os bytes servem também ao `dylink` e ao DWARF (`debug`) | `build/sysroot/lib/wasm32-wasip1` | as mesmas |
+| o código compilado pelo Cranelift (as `.so`, e também cada célula e os shims) | `Cache::from_file(None)` do wasmtime (`loader.rs:291`), que lê `~/.config/wasmtime/config.toml` se existir | `~/.cache/wasmtime` | gravado no primeiro uso |
+
+Não entram: um `std.pcm` (os `.args` do `sc` não têm `-fmodule-file`, e
+`import std;` no `sc` dá "module 'std' not found"; só o `test/session.py`
+constrói o seu, de 38 MB), um `-resource-dir`, os `crt` (o link é
+`-shared`), os `.ctype` e `.setjmp` (carimbos do make) e o código-fonte
+das bibliotecas. Fora do build, o `sc` lê o tema
+(`~/.config/sc/config`) e o histórico (`~/.local/share/sc/history`),
+que ficam como estão.
+
+Em tar, as cinco primeiras linhas somam 26 MB: 2,5 MB em `zstd -19`
+e 2,3 MB em `xz -9e`. Com um quadro zstd por arquivo, são 3,9 MB sem os
+intrínsecos (2,9 MB de cabeçalhos e 1,0 MB de bibliotecas). O squashfs
+que a proposta pede fica perto do tar (a tabela no fim desta seção). O
+`sc` de dist tem hoje 34 MB.
+
+O `sc` também grava num diretório temporário, mas não para extrair nada: é
+o `.o` e o `.so` de cada célula (`sc_api.cpp`, `createUniqueDirectory`).
+Isso não entra nesta fase, ver "Fora da fase".
+
+**A proposta.** Um pacote embutido no binário, lido em memória por
+três leitores: o VFS do clang, um gancho no wasm-ld e o loader.
+
+1. **O pacote.**
+   - **É um squashfs com zstd -19 e blocos de 128 KB** (decidido em
+     2026-10-21). O índice traz os diretórios e o tamanho original de
+     cada arquivo, que o `status` pede. Os arquivos pequenos ficam juntos
+     em blocos ("fragments"), e ler um cabeçalho descomprime só o bloco
+     dele; o `backhand` guarda os blocos já abertos. Um tar.zst inteiro
+     não serve: obrigaria a descomprimir tudo para ler um cabeçalho. É
+     um formato padrão (o `unsquashfs` e o 7-Zip o abrem), e o menor dos
+     medidos, com o leitor incluído (a tabela no fim desta seção). O zip
+     comprime cada arquivo sozinho e não tem dicionário; com um
+     dicionário nosso dentro dele (entradas "stored" com quadros zstd),
+     ficaria 260 KB maior, e só o `sc` o leria.
+   - Entram os cabeçalhos (sem os intrínsecos de x86 e ARM), a
+     ignorelist, as `.so`, o `libclang_rt.builtins.a`, os `.args` e os
+     `.cwasm` (item 6).
+   - Quem o monta é o `build.rs`, com o crate `backhand` como
+     dependência de build (o mesmo `build.rs` que gera os `.cwasm`, item
+     6), a partir do que o `sc-deps` já produz. A raiz da imagem tem
+     `sysroot/` e `res/`, que o `sc` vê como `/sc/sysroot` e `/sc/res`.
+     O `sc` a embute com
+     `include_bytes!`, que funciona igual no Windows. O pacote fica no
+     binário `sc` (`src/bin/sc`), não na biblioteca, para o `scload` não
+     crescer.
+   - Os caminhos dentro do pacote ficam sob um prefixo virtual fixo,
+     com uma raiz para o sysroot e outra para o diretório do clang:
+     `/sc/sysroot/...` e `/sc/res/...`. Uma raiz só (`/sc/include`) não
+     serve: os dois têm `limits.h`, `stdint.h`, `float.h` e outros, que
+     se encadeiam por `#include_next`.
+2. **Os `.args` sem caminhos da máquina.** O `scripts/flags.py` já escreve
+   os caminhos numa visão virtual (`/sysroot`, `/res`, `/m/std.pcm`), que
+   `real()` troca pelos do build. O `--session` passa a trocá-los por
+   `/sc/sysroot` e `/sc/res` no lugar de `$(CURDIR)/build/...`, e o
+   `Machine::new` lê o `.args` do pacote, não do disco.
+   - O `build_dir()` sai do `sc`: ele só achava os `.args` e o sysroot, e
+     servia ao `frames` (item 8). Nenhum teste passa `SC_BUILD` ao `sc`
+     (só o `test/corpus.py` o lê, para si).
+3. **O clang: um `llvm::vfs::FileSystem` sobre o pacote, sem patch no LLVM.**
+   - Em `sc_session.cpp:685`, o `getRealFileSystem()` vira um FS que
+     responde por `/sc/` a partir do pacote e passa o resto ao FS real,
+     para o `#include "meu.h"` do aluno e para o `sc FILE`. A forma mais
+     simples é uma subclasse de `ProxyFileSystem` sobre o FS real. Um
+     `OverlayFileSystem` também serve, mas o `getRealPath` e o `isLocal`
+     dele perguntam primeiro ao FS de baixo (`VirtualFileSystem.cpp:532`
+     e `:539`), o que vai ao disco atrás de `/sc/...`, e o
+     `setCurrentWorkingDirectory` dele exige que o FS do pacote aceite o
+     diretório.
+   - O FS do pacote implementa `status`, `openFileForRead` e `dir_begin`
+     (a busca de cabeçalhos pede `status` de diretórios). Diretórios são
+     implícitos: os prefixos dos caminhos do índice.
+   - Esse código fica em `engine/` (um `sc_files.cpp`), mas a
+     descompressão fica do lado do Rust. O `status` precisa do tamanho
+     sem descomprimir, e o índice é o do squashfs, que só o Rust lê. O C++
+     recebe funções do Rust: uma que diz se um caminho é arquivo ou
+     diretório e o tamanho, uma que lista um diretório (para o
+     `dir_begin`) e uma que devolve os bytes, num
+     `sc_set_files(const struct sc_files *)`.
+     Os bytes que o `read` devolve valem até o fim do processo (o Rust os
+     guarda), porque o clang e o lld guardam ponteiros para eles.
+   - O C++ não precisa de zstd. Sem leitor registrado, tudo continua indo
+     ao FS real: é o caso do `sc.wasm`, que não exporta o `sc_set_files`,
+     e o `src/engine/wasm.rs` (o `sc` com a feature `wasm`) o implementa
+     como nada.
+4. **O wasm-ld: um patch pequeno, `llvm/lld-files.patch`.** O lld não usa
+   o VFS, então o patch põe um gancho global com a mesma função de
+   leitura em `readFile` (`InputFiles.cpp:68`), antes do
+   `MemoryBuffer::getFile`, e em `findFile` (`Driver.cpp:227`), antes do
+   `fs::exists`. O `fs::exists` do `.imports` (`Driver.cpp:312`) pode
+   ficar: dá falso para `/sc/...`, só aparece no `strace`.
+   - Não há outro acesso do lld aos arquivos de entrada deste link: os
+     membros do `.a` saem do buffer (o `libclang_rt.builtins.a` não é
+     thin), arquivos de resposta só com `@` (`Driver.cpp:249`, o `sc` não
+     passa nenhum), e a saída (`tryCreateFile`, `Driver.cpp:1366`) é o
+     diretório das células.
+   - Por que um patch e não um corte: não há outro caminho de entrada no
+     lld. A alternativa seria passar os arquivos ao lld por caminhos
+     reais, o que obriga a extrair.
+   - O patch tem umas 10 a 15 linhas (o gancho, a declaração e as duas
+     chamadas), em funções que mudam pouco entre versões. Ele entra
+     também no `sc.wasm`, com o gancho nulo: `make test` e o orçamento do
+     §5.1.
+5. **O loader.** O `libdirs: Vec<PathBuf>` vira uma função que devolve,
+   pelo nome, os bytes da biblioteca e, se houver, o `.cwasm` dela. Os
+   bytes da `.so` continuam necessários com o `.cwasm`: o `dylink.0` e o
+   DWARF saem deles (`loader.rs:327` e `:338`), não do módulo compilado.
+   O `sc` passa o pacote, e o `scload` e os `tests/` continuam com os
+   diretórios (`-L`).
+6. **O código das `.so` pré-compilado.**
+   - O pacote leva um `.cwasm` de cada `.so`, e em tempo de execução o
+     `Module::deserialize` os carrega sem compilar. As células e os shims
+     (`wasi_shim`, `stubs`) continuam compilados na hora pelo Cranelift
+     (`Module::new`), como hoje: a `Cache` nunca os reaproveitou. A
+     feature `cache` sai do wasmtime (`Cargo.toml:16`, usada só em
+     `loader.rs:291`), e com ela as gravações em `~/.cache`.
+   - Medido com o `wasmtime compile` 48: 4,7 MB (1,35 MB em zstd, um
+     quadro por arquivo). Compilar é rápido aqui (0,03 a 0,14 s por
+     biblioteca em 56 núcleos), mas não numa máquina de aluno, e hoje o
+     primeiro uso grava no `~/.cache`.
+   - **Decidido em 2026-10-21: embutir, sem cache.** Manter a `.so` ao
+     lado não custa nada: o wasm-ld a lê para ligar cada célula. O que
+     custa são os `.cwasm`, 1,34 MB comprimidos (4,62 MB crus, contra
+     2,96 MB das `.so`, 894 KB comprimidas). Preencher um cache no
+     primeiro uso pouparia esses 1,34 MB, mas a primeira célula de cada
+     máquina e de cada versão pagaria a compilação, e o `sc` voltaria a
+     gravar em disco. A `Cache` do wasmtime não serve para isso: guarda
+     todo módulo, células inclusive, e a limpeza é feita de vez em quando
+     por uma thread que os processos curtos não esperam. Aqui o
+     `~/.cache/wasmtime` tem 1007 MB em 138 mil arquivos, acima dos
+     limites padrão (512 MiB, 65.536 arquivos). Um cache só das cinco
+     bibliotecas, por versão, seria limitado por construção, mas embutir
+     é mais simples.
+   - **O DWARF da libc sai do pacote.** São 1,32 MB dos 1,91 MB da
+     `libc.so`, e o `frames()` já esconde as linhas `wasisdk://`. Sem ele
+     (`wasm-tools strip -d '.debug.*'`), a libc comprimida cai de 646 KB
+     para 287 KB: 359 KB a menos, um quarto do que os `.cwasm` custam. As outras bibliotecas quase não têm DWARF (libc++ 15 KB).
+   - **Quem compila.** Os `.cwasm` têm de existir antes de o `sc` ser
+     compilado (`include_bytes!`), então não podem sair do próprio `sc`,
+     como o `--precompile` do `sc-wasm` (`src/engine/wasm.rs:34`), que
+     grava um arquivo ao lado do binário. A saída é o `build.rs` compilar
+     com o wasmtime 48.0.3 como dependência de build, com as mesmas
+     features do `Cargo.toml:16`. O custo: o wasmtime compilado duas
+     vezes, e em `opt-level` 0 se o perfil não tiver `build-override`.
+   - **Cuidado:** o `Module::deserialize` confere (`wasmtime`,
+     `engine/serialization.rs:204`) a versão do wasmtime, a arquitetura e
+     o sistema, as flags do Cranelift, os `Tunables` (entre eles o
+     `epoch_interruption`) e as features de wasm (as do módulo têm de
+     estar no `Engine`). Hoje o `epoch_interruption` muda entre o REPL
+     interativo e o `sc FILE` (`Loader::new(..., interactive)`). As
+     saídas são:
+     - ligar o epoch sempre no `sc`. O §5.3 mediu o custo das checagens:
+       abaixo de 1%. O `sc FILE` não registra o Ctrl-C, então o epoch
+       nunca avança e o `arm()` de cada chamada não muda nada;
+     - ou compilar duas variantes, o que dobra os 4,7 MB.
+     A proposta é ligar sempre.
+   - **A CPU.** Um `Config::target(...)` explícito desliga a detecção das
+     extensões da máquina que compila (`isa_builder.rs:33` do
+     `wasmtime-internal-cranelift`): sai o código da CPU base. Na carga,
+     uma flag de CPU ligada no módulo tem de existir na máquina
+     (`engine.rs:529`); uma desligada sempre serve. No `build.rs`, o
+     alvo é o `TARGET` do cargo, o que também serve a um build cruzado
+     para o Windows.
+   - O `Module::deserialize` é `unsafe` porque confia nos bytes. Aqui os
+     bytes vêm do próprio binário, gerados no mesmo build, então isso é
+     aceitável.
+7. **O filho `sc --engine`** é o mesmo binário, então já tem o pacote: o
+   `main` do modo `--engine` chama o `sc_set_files` antes de abrir a
+   sessão. Os filhos do `--replay` são o mesmo `sc --engine`.
+8. **As linhas da pilha.** O `frames` (`machine.rs`) trata como do aluno
+   um arquivo do DWARF que não começa pelo diretório de build e não tem
+   `://`. O prefixo esconde o código dos cabeçalhos compilado dentro da
+   célula (funções inline e templates da libc++, que vêm de
+   `build/sysroot/include`). Os quadros das bibliotecas já se escondem
+   de outro jeito: a `libc.so` e as `wasi-emulated` têm caminhos
+   `wasisdk://`, e a libc++, a libc++abi e a `libsc_rt` não têm DWARF
+   próprio (medido com `llvm-dwarfdump`). Por isso o critério não pode
+   ser o módulo do quadro: um `std::vector` da célula é código da célula.
+   - O prefixo passa a ser o `/sc/` fixo, e o `build_dir()` sai.
+   - Junto, o `/src/`: o compiler-rt dentro da `libc.so` e da `libc++.so`
+     tem `DW_AT_comp_dir` `/src/build/sysroot/compiler-rt-...`, do build
+     do wasi-sdk. Hoje um trap num `__divti3` apareceria como código do
+     aluno. O projeto não usa `-ffile-prefix-map` em lugar nenhum.
+
+**O que muda para quem usa.**
+- Uma nota de diagnóstico mostra `/sc/sysroot/include/...` em vez de
+  `.../build/sysroot/include/...`. Fica mais curto e igual em toda
+  máquina.
+- As bases não mudam sozinhas. O `ses-`, o `seq-`, o `crash-` e o
+  `split-` passam os próprios argumentos ao `sc --replay`, com os
+  caminhos reais (`flags.session(...)`, `test/session.py:105`,
+  `test/split.py:78`), e o FS real continua por baixo. O `test-aluno` e
+  o `test-checks` usam os `.args` do `sc`, mas o `expected.txt` deles não
+  tem nenhum caminho do build.
+- O `sc` cresce uns 4,3 MB: 4,01 MB do squashfs e 302 KB do leitor
+  (o `backhand` sem as features padrão, só `zstd`, e o `zstd-sys`, em C,
+  que o build do engine já sabe compilar; com a `cache` fora do wasmtime,
+  só o pacote o usa). Medido em 2026-10-21 com o pacote inteiro (2.035
+  arquivos, 23,4 MB crus: cabeçalhos, `.args`, ignorelist, `.so` com a
+  libc sem DWARF, builtins e `.cwasm`). O leitor é o aumento de um
+  binário de teste com o perfil `dist` sobre um sem leitor; os três
+  leram os 23.371.456 bytes certos.
+
+  | | pacote | leitor | total |
+  | --- | --- | --- | --- |
+  | squashfs, zstd -19, blocos de 128 KB (`backhand`) | 4,01 MB | 302 KB | **4,31 MB** |
+  | zip "stored" com quadros zstd e dicionário (`zip` + `zstd`) | 4,38 MB | 187 KB | 4,57 MB |
+  | o mesmo, com o `ruzstd` | 4,38 MB | 178 KB | 4,56 MB |
+  | zip com zstd, método 93, sem dicionário | 5,29 MB | ~190 KB | ~5,48 MB |
+
+  O zip perde 403 KB só nos cabeçalhos das 2.035 entradas (cada nome
+  duas vezes, sem compressão). O dicionário, treinado nos cabeçalhos,
+  não muda as bibliotecas nem os `.cwasm` (1,988 MB contra 1,990 MB). Só
+  os cabeçalhos, por arquivo: 3,42 MB em zip deflate, 2,91 MB em zstd,
+  1,88 MB com dicionário, 1,95 MB em squashfs.
+
+**Passos.**
+1. `flags.py` com `/sc/sysroot` e `/sc/res`; o squashfs (`build.rs` e
+   embutido), sem leitores ainda. Conferir o tamanho com a tabela acima.
+2. O VFS do clang e o `sc_set_files`. Rodar `test-aluno` e `test-checks`,
+   que são os que passam pelos `.args` do `sc`, com o `sc` copiado para
+   fora do checkout. O `test-session` e o `test-split` passam aos `.args`
+   com `/sc/` (decidido abaixo) e refazem as bases uma vez.
+3. O patch do lld; o link das células sem o disco. `make test` (o patch
+   entra no `sc.wasm`).
+4. O loader lendo do pacote; os `.cwasm` pelo `build.rs`; o epoch sempre
+   ligado; a `cache` fora. `make test-loader`.
+5. O `frames` com `/sc/` e `/src/`, sem o `build_dir()`.
+6. Docs: README (instalar é copiar o `sc`), AGENTS, ANALISE.
+
+**Critério de saída.**
+- O `build/cargo/dist/sc` copiado para um diretório vazio, com o checkout
+  inacessível (renomeado), roda C, C++ com exceções, o REPL e um trap com
+  a linha da pilha.
+- `strace -f -e trace=%file` não mostra nenhum caminho do checkout e
+  nenhum `/sc/...` no disco, fora o `stat` do `.imports` do lld. O que
+  pode aparecer: as bibliotecas do sistema (`libstdc++.so.6`, `libc`), o
+  `/proc/self/exe`, o tema e o histórico, os `#include "..."` do aluno e
+  o diretório das células.
+- `make test-dist` sem diferença.
+- Tamanho do `sc` e tempo da primeira execução (antes e depois) no ANALISE.
+
+**Riscos.**
+- **Windows.** O LLVM junta caminhos com o separador nativo
+  (`path::append`), então o clang e o `findFile` do lld pedem
+  `/sc/sysroot/include\stdio.h`. O leitor do pacote, que o clang e o lld
+  compartilham, tem de aceitar os dois separadores. E `/sc/...` não é
+  absoluto no Windows (falta a unidade): o `makeAbsolute` do VFS o
+  completa com a unidade do diretório atual (`C:\sc\...`), que o FS do
+  pacote também teria de reconhecer, ou o prefixo vira um com letra de
+  unidade. Isso só será verificado quando houver build para Windows. O
+  pacote não é o maior obstáculo: o `fork` de cada célula
+  (`session.rs:398`), o SIGIO do filho (`session.rs:350`) e o SIGINT do
+  loader (`loader.rs:870`) são só Unix (ANALISE.md §51).
+- **Um leitor esquecido.** Algum arquivo que o clang ou o lld abra por
+  fora do VFS ou do gancho só aparece fora do checkout. O `strace` do
+  critério acha isso.
+- **`.cwasm` incompatível.** Se o `Module::deserialize` falhar (outra
+  CPU, outra `Config`), compilar o `.so` do pacote na hora em vez de
+  abortar. Os bytes da `.so` estão no pacote de qualquer forma.
+- **O sistema.** Um arquivo só não quer dizer sem dependências: o `sc` de
+  dist liga dinamicamente a `libstdc++.so.6` (até `GLIBCXX_3.4.29`) e a
+  glibc (até `GLIBC_2.39`). "Outra máquina do mesmo sistema" quer dizer
+  uma glibc 2.39 ou mais nova. Um `-static-libstdc++` é uma decisão à
+  parte.
+
+**Fora da fase.**
+- O diretório temporário das células. Tirá-lo exige que o lld grave a
+  saída em memória, o que é outro patch (`FileOutputBuffer`), e que leia
+  o `.o` da célula da memória (o mesmo gancho do `readFile` serve).
+- Os modos one-shot `sc --cc1` e `sc --ld` (`sc_main.cpp:61`, FS real):
+  são dos testes (`test-native`, `learn-native`) e continuam no disco.
+- O host JS (6b), que fornece os mesmos arquivos ao `sc.wasm` pelo WASI.
+  O pacote pode ser o mesmo.
+- `import std;` no `sc` (decidido em 2026-10-21: fica fora). Hoje não
+  funciona. Embutido, o `std.pcm` (38 MB sem comprimir, feito com as
+  flags da sessão) passaria de longe o resto do pacote. Construído no
+  primeiro uso, voltaria a gravar em disco. Fica para uma fase própria,
+  junto com o PCH.
+- Um PCH dos cabeçalhos para acelerar a primeira célula: seria mais um
+  arquivo no pacote. É uma decisão à parte.
+
+**Decisões.**
+- **Decidido em 2026-10-21:** o `test-session` e o `test-split` passam a
+  usar `/sc/` (o `sc-full` e o `build/sc` lendo do pacote), para o corpus
+  exercitar o pacote. Um leitor esquecido no clang ou no lld só aparece
+  fora do checkout, e o corpus é a única bateria grande o bastante para
+  pegá-lo. As bases do `session-*` e do `split-` mudam uma vez (57
+  resultados do `session-base` e 10 do `split` citam `build/sysroot`), e
+  a mudança fica no ANALISE como intencional. O `sc-wasm` continua com os
+  caminhos reais: o `sc.wasm` não tem leitor.
+- **Decidido em 2026-10-21:** os `.cwasm` saem do `build.rs`, com o
+  wasmtime 48.0.3 como dependência de build e um
+  `[profile.*.build-override] opt-level = 2`. O `cargo build` sozinho
+  continua fazendo o `sc`, e o `Config` do `Engine` sai de uma função só,
+  usada pelo `build.rs` e pelo loader. Um passo à parte no make
+  compilaria o wasmtime uma vez, mas o `cargo build` deixaria de bastar e
+  a ordem ficaria circular (os `.cwasm` vão dentro do `sc`). O tempo a
+  mais do build se mede no passo 4.
+- **Decidido em 2026-10-21:** o pacote é um squashfs (item 1), gravado
+  e lido pelo `backhand`. Foi o menor dos medidos com o leitor incluído
+  (4,31 MB), e é um formato padrão. O zip foi considerado: sem
+  dicionário, 5,5 MB; com um dicionário nosso dentro dele, 4,57 MB e
+  legível só pelo `sc`.
 
 ## 6. Testes
 
