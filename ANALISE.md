@@ -3700,7 +3700,8 @@ nele.
 `test-proto`, `test-loader`, `test-aluno` e `test-checks` sem diferença.
 
 **Fica para depois:** o host JS documentado (o `sc.wasm` no navegador,
-com a cópia da memória antes da célula no lugar do `fork`).
+com a cópia da memória antes da célula no lugar do `fork`). Documentado em 2026-10-22,
+como proposta, no PLANO-REPL.md §5.5.
 
 ## 51. Um crate só, e o `cargo build` constrói o `sc`
 

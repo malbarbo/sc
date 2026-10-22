@@ -608,8 +608,12 @@ só entra na fase 4, depois do aprendizado.
   `sc --cc1` e `sc --ld`;
 - `sc-engine-full` e `sc-engine`: o `build/sc-full` e o `build/sc`, com
   `sc --engine` e `sc --replay`;
-- `sc-proto` (`proto/`): o crate `sc`, na raiz;
-- `sc-engine-wasm*`: o `build/sc-wasm*`.
+- `sc-proto` (`proto/`, `sc_proto::`) e o `loader/`: o crate `sc`, na
+  raiz (`src/engine/`, `sc::engine::`; `src/loader.rs`; `src/bin/`);
+- `sc-engine-wasm*`: o `build/sc-wasm*`;
+- `build/repl`: o `repl/` do pacote que o `sc` embute (§5.4), escrito em
+  `build/pack/repl`;
+- `test/spike.py`: o `test/cells.py`, desde que o spike saiu.
 
 | fase | entrega | critério de saída |
 | --- | --- | --- |
@@ -622,7 +626,7 @@ só entra na fase 4, depois do aprendizado.
 | 4. cortes | `make learn` e `learn-native` dirigindo o `build/sc-engine repl` com as fatias novas; `test-warn` delas | `make test` 0 diferenças com as fatias novas; tempo do learn medido; tamanho dentro do orçamento (§5.1) |
 | 5. reactor (feita, §5.2) | `sc.wasm` reactor + `_start`; as exports | antes de trocar, congelar `res/base/summary.json`; depois, o `sc-full.wasm` novo reproduz a base hash por hash (T-B2) |
 | 6a. loader mínimo (feita, §5.3) | o loader com as features mínimas do §1.4, exceções ligadas e tags compartilhadas, `epoch_interruption` | `pic-` e `repl-` com a mesma saída; tamanho do loader registrado |
-| 6b. hosts (nativo feito, ANALISE.md §50) | crate `sc-proto` (bindgen sobre `sc.h`), binário único `build/sc` (engine ligado pelo `--emit-link`), filho `sc --engine`, timeout, válvula, repasse; host JS documentado | `crash-` pelo REPL nativo: o REPL segue vivo e a célula seguinte funciona |
+| 6b. hosts (nativo feito, ANALISE.md §50; JS proposto no §5.5) | crate `sc-proto` (bindgen sobre `sc.h`), binário único `build/sc` (engine ligado pelo `--emit-link`), filho `sc --engine`, timeout, válvula, repasse; host JS documentado | `crash-` pelo REPL nativo: o REPL segue vivo e a célula seguinte funciona |
 | 7. docs e distribuição | ANALISE.md (§20), README, AGENTS (alvos novos), Makefile (`.PHONY`, `clean` de `res/ses*` etc.); o `sc` fora do checkout (ANALISE.md §51): os `.args` sem caminhos absolutos, relativos a uma raiz, e o sysroot embutido, sem extração (§5.4) | o `sc` copiado para fora do `build/` roda (§5.4) |
 
 ### 5.1 Orçamento de tamanho (T-m1)
@@ -1323,8 +1327,8 @@ três leitores: o VFS do clang, um gancho no wasm-ld e o loader.
   o `.o` da célula da memória (o mesmo gancho do `readFile` serve).
 - Os modos one-shot `sc --cc1` e `sc --ld` (`sc_main.cpp:61`, FS real):
   são dos testes (`test-native`, `learn-native`) e continuam no disco.
-- O host JS (6b), que fornece os mesmos arquivos ao `sc.wasm` pelo WASI.
-  O pacote pode ser o mesmo.
+- O host JS (6b, §5.5), que fornece os mesmos arquivos ao `sc.wasm` pelo
+  WASI. O pacote pode ser o mesmo.
 - `import std;` no `sc` (decidido em 2026-10-21: fica fora). Hoje não
   funciona. Embutido, o `std.pcm` (38 MB sem comprimir, feito com as
   flags da sessão) passaria de longe o resto do pacote. Construído no
@@ -1355,6 +1359,107 @@ três leitores: o VFS do clang, um gancho no wasm-ld e o loader.
   (4,31 MB), e é um formato padrão. O zip foi considerado: sem
   dicionário, 5,5 MB; com um dicionário nosso dentro dele, 4,57 MB e
   legível só pelo `sc`.
+
+### 5.5 O host JS (proposta)
+
+O REPL no navegador, documentado na fase 6b e ainda não feito. Ele
+substitui as duas metades do `sc` nativo:
+- o compilador (`sc --engine`) vira o `sc.wasm` como biblioteca;
+- o loader (`src/loader.rs`) vira um loader em JS.
+
+Este plano junta o que as fases 5 a 7 deixaram anotado (§1.2, §1.5, §3.6
+e ANALISE.md §25 e §48).
+
+**Dois Web Workers.** A página só mostra o prompt e a saída.
+- O worker do compilador tem o `sc.wasm`. Uma compilação longa não trava
+  a página, e o `terminate` para qualquer uma.
+- O worker do programa tem o loader e os `.so`. O V8 não tem epoch, e um
+  laço infinito do aluno só para com o `terminate` do worker.
+
+Os dois conversam por `postMessage`. O `.so` da célula vai do compilador
+ao programa como `ArrayBuffer` transferido, sem cópia.
+
+**Os arquivos.**
+- O `sc.wasm` não exporta o `sc_set_files`. A sessão lê os arquivos pelo
+  WASI, e o shim WASI do worker serve um FS em memória:
+  - o pacote do §5.4 (headers, bibliotecas, ignorelist, builtins e os
+    `.args`), só leitura, na raiz dos `.args` do pacote (`/sc`,
+    `scripts/flags.py`, `PACK`). Os `.args` do `sc` nativo servem sem
+    mudança;
+  - um `/tmp` gravável, onde a sessão guarda o `.o` e o `.so` de cada
+    célula (§5.2, passo 3).
+- Falta escolher o formato que a página baixa. O squashfs do `sc` pede um
+  leitor em JS. Um tar com zstd pede só um descompressor.
+- Os `.cwasm` não servem no navegador. O V8 compila os `.so` e guarda o
+  código do `WebAssembly.compileStreaming` no cache HTTP dele.
+
+**A sessão.** O contrato é o do README, o mesmo do `src/engine/wasm.rs`:
+1. instanciar e chamar o `_initialize` uma vez;
+2. chamar o `chdir` (o guest começa em `/`);
+3. pôr os argumentos com o `malloc` e chamar o `sc_session_new`;
+4. a cada célula, `sc_session_cell` e as partes por `sc_result_ptr` e
+   `sc_result_len`, lidas do `memory.buffer`.
+
+O `Repl` do `src/engine/child.rs` vira JS, com o log das células aceitas
+e o repasse depois de um `SC_LOST` (§3.6).
+
+**A célula que falha, sem `fork`** (ANALISE.md §25). A recomendação é o
+snapshot da memória linear antes de cada célula, restaurado se ela falha
+ou se o engine dá trap. No V8 ele custa (ANALISE.md §48, depois de 100
+células):
+
+| memória | copiar | restaurar |
+| --- | ---: | ---: |
+| 19 MB (C) | 3,7 ms | 2,5 ms |
+| 42 MB (C++) | 16,9 ms | 4,4 ms |
+
+São de 15% a 50% de uma célula. A outra opção, repassar o log a cada
+erro, custou ~2 s por erro na sessão medida (ANALISE.md §25).
+
+O snapshot precisa também de:
+- o `__stack_pointer`, que vai para a lista `EXPORTS` do
+  `scripts/link.py`. Depois de um trap, ele fica onde o trap aconteceu;
+- zerar o trecho que a memória cresceu na célula, porque a memória não
+  encolhe;
+- fechar no shim os arquivos que a célula deixou abertos.
+
+**Os limites.**
+- **Timeout e Ctrl-C da compilação:** `terminate` do worker, um worker
+  novo e o repasse do log, como o `SC_LOST`.
+- **Memória:** a válvula de 1 GB do nativo vira um teste do
+  `memory.buffer.byteLength` depois de cada célula. Durante a célula, o
+  limite é o da memória wasm32, 4 GB.
+- **Pilha:** o V8 fixa a pilha do wasm (~1 MB, §1.2). Os 16 casos de
+  "call stack exhausted" do corpus continuam falhando no navegador.
+
+**O loader em JS.** Ele segue o `src/loader.rs`:
+- uma `WebAssembly.Memory` e uma `WebAssembly.Table` para todos os
+  módulos;
+- o `dylink.0` lido dos bytes;
+- os GOT como `WebAssembly.Global` mutáveis;
+- os stubs pela tabela;
+- o `__cpp_exception` e o `__c_longjmp` como um `WebAssembly.Tag` só.
+  Pede exnref (§1.5).
+
+Os stubs e o shim WASI do loader nativo são gerados com o `wasm-encoder`.
+Em JS eles são funções do host, ou módulos pequenos montados em bytes.
+
+Uma exceção não capturada é tratada como no loader nativo (§1.5): o
+`WebAssembly.Exception.getArg` com a tag `__cpp_exception`, depois o
+`__cxa_begin_catch` e o `std::terminate`.
+
+O arquivo e a linha de um trap (`frames`) dependem do DWARF dos `.so` e
+da pilha do `Error`. O V8 dá a pilha com os offsets das funções; o resto
+é o `Loader::symbols` em JS, ou fica sem linha.
+
+**A decidir** (§8):
+- O laço infinito do aluno. Com o `terminate`, o estado das células se
+  perde, e os `.so` aceitos são carregados de novo, o que roda outra vez
+  os statements do topo. A outra opção é um passo nosso que insere
+  `check_interrupt` nos laços (ANALISE.md §7.2), lido de um
+  `SharedArrayBuffer`.
+- O stdin do aluno. Num worker, ele precisa de `Atomics.wait` sobre um
+  `SharedArrayBuffer`, e isso exige a página isolada (COOP e COEP).
 
 ## 6. Testes
 
@@ -1391,7 +1496,7 @@ O front end do REPL:
 - stdin;
 - ordem entre statements do topo e `constructor`;
 - política quando o código do aluno dá trap;
-- interrupção de laço infinito: no nativo, `epoch_interruption` do wasmtime; no navegador, `check_interrupt` (§7.2) ou matar o worker.
+- interrupção de laço infinito: no nativo, `epoch_interruption` do wasmtime; no navegador, `check_interrupt` (ANALISE.md §7.2) ou matar o worker (§5.5).
 
 Eles afetam a premissa de que "o estado do aluno vive no loader" e precisam
 de um plano próprio antes da fase 6.
