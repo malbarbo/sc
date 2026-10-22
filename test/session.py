@@ -46,7 +46,7 @@ import difflib, glob, json, os, re, shutil, statistics, struct, subprocess, sys,
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from corpuslib import IGNORE, diff, kill_session, norm_hash, only_names, run_all, sources, source_name
-from cells import expected, run, same, std_pcm
+from cells import JS, expected, run, same, std_pcm
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, f'{R}/scripts')
@@ -99,6 +99,7 @@ NODE = os.path.basename(ENG) == 'sc-node'
 BIG = ('an object of hundreds of MB: wasmtime\'s WASI fails to write it ("IO failure on output stream:'
        ' Out of memory"), and the base with it; Node\'s writes it')
 HOST = {f'ses-{k}': BIG for k in (G + 'compile_20080625-1', G + 'compile_pr103813', C + 'SemaCXX_large-array-init')} if NODE else {}
+HOST.update({f'ses-{k}': v for k, v in JS.items()})
 KNOWN.update(HOST)
 # not run: names whose demangling grows exponentially, which wasm-ld does
 # for each cell's link (the corpus only compiles them)

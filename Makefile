@@ -50,7 +50,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-session-node test-aluno test-checks test-dist repl sc-deps test-loader dist clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-split-node test-session-node test-aluno test-checks test-dist repl sc-deps test-loader dist clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -297,12 +297,18 @@ test-session-wasm-warn: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-wev-base/su
 test-split-wasm: $(B)/sc-wasm $(SCLOAD) $(B)/res/native-base/summary.json
 	test/split.py $(B)/sc-wasm $(B)/res/split-wasm
 
+# the corpus as cells with the JS loader (test/node/loader.mjs) in place of
+# scload; the cells compile on build/sc
+test-split-node: $(B)/sc $(SCLOAD) $(B)/res/native-base/summary.json
+	SCLOAD=test/node/scload test/split.py $(B)/sc $(B)/res/split-node
+
 # the same slices with the child on Node (test/node, PLANO-REPL.md §5.5): a
-# snapshot of the memory in place of the fork. With 300 KB of stack V8
-# exhausts it where wasmtime does; its default, as a browser's, goes deeper
+# snapshot of the memory in place of the fork, and the JS loader. With 300
+# KB of stack V8 exhausts it where wasmtime does; its default, as a
+# browser's, goes deeper
 # --liftoff-only: each child would tier sc.wasm up again (ANALISE.md §56)
 test-session-node: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-base/summary.json
-	SC_NODE_FLAGS='--stack-size=300 --liftoff-only' test/session.py --wasm test/node/sc-node $(B)/res/session-node \
+	SCLOAD=test/node/scload SC_NODE_FLAGS='--stack-size=300 --liftoff-only' test/session.py --wasm test/node/sc-node $(B)/res/session-node \
 	  $(B)/res/session-wasm-base/summary.json
 
 # --- the REPL's loader, runs the shared objects (native, wasmtime): scload,

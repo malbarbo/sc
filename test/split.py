@@ -20,7 +20,7 @@ run) and <outdir>/report.txt, and lists the programs that differ.
 import glob, os, re, shutil, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cells import expected, same, split, std_pcm
+from cells import JS, SCLOAD, expected, same, split, std_pcm
 from corpuslib import only_names, run_all, source_name, sources
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -29,7 +29,6 @@ from flags import PACK, session  # the engine's flags
 B = f'{R}/build'
 ENG = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else f'{B}/sc')
 LIB = f'{B}/sysroot/lib/wasm32-wasip1'
-SCLOAD = f'{B}/cargo/release/scload'
 OUT = os.path.realpath(sys.argv[2] if len(sys.argv) > 2 else f'{B}/res/split')
 G = 'gcc-ts_gcc_testsuite_gcc.c-torture_execute_'
 # where cells cannot be the program (ANALISE.md §24)
@@ -41,7 +40,7 @@ KNOWN = {
     G + 'pr98304-2': "#include \"../../gcc.dg/...\": the -I of the cells finds it, the whole compile does not",
     G + '20090711-1': "div, with another signature than libc's: the next cell links against libc.so's",
 }
-
+KNOWN.update(JS)
 
 def flags(cxx, gnu17, mod):
     # the pack sc embeds (PLANO-REPL.md §5.4), but for a host of sc.wasm

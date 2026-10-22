@@ -1459,6 +1459,13 @@ O arquivo e a linha de um trap (`frames`) dependem do DWARF dos `.so` e
 da pilha do `Error`. O V8 dá a pilha com os offsets das funções; o resto
 é o `Loader::symbols` em JS, ou fica sem linha.
 
+**Feito em 2026-10-22, no Node (ANALISE.md §57).** O
+`test/node/loader.mjs` carrega os `.so` como o `src/loader.rs`, sem o ASan
+e sem o DWARF. O `make test-split-node` passa com 0 diferenças, e o `make
+test-session-node` roda nele os programas. Os tipos dos imports vêm dos
+bytes, e os stubs são módulos montados em bytes. Um `exit` vira um trap,
+que o wasm não captura.
+
 **A decidir** (§8):
 - O laço infinito do aluno. Com o `terminate`, o estado das células se
   perde, e os `.so` aceitos são carregados de novo, o que roda outra vez

@@ -4337,3 +4337,64 @@ página; as sessões da bateria são curtas.
 **Fica para depois.** Um trap deixa abertos os fds que a célula abriu no
 WASI do Node, que a restauração não alcança. No navegador o shim é nosso
 e os fecha (§5.5).
+
+## 57. O host JS, passo 2: o loader em JS
+
+O `test/node/loader.mjs` é o `src/loader.rs` sobre a API JS do
+WebAssembly, e o `test/node/scload` é o `scload` sobre ele, com os mesmos
+argumentos e a mesma saída. São 559 linhas, sem dependências, e servem ao
+Node e, depois, ao worker do navegador.
+
+**O que a API JS não dá, os bytes dão.** Sem a reflexão de tipos
+(`--experimental-wasm-type-reflection`, desligada), a API não diz o tipo
+de um import nem se um global exportado é constante. O loader lê do
+módulo as seções de tipos, imports, globais e exports, além do
+`dylink.0`. Uma função que vai para a tabela tem de ser wasm, e não JS.
+Por isso os stubs (uma `call_indirect` pelo slot) e as funções de
+"undefined symbol" são módulos pequenos montados em bytes, como os do
+`wasm-encoder` no loader nativo. O WASI dispensa o módulo shim do nativo:
+o `wasiImport` do `node:wasi` entra direto nos imports, depois de um
+`wasi.initialize` com a memória compartilhada. O exnref já vem ligado no
+V8 13.6 do Node 24, e a tag `__cpp_exception` é uma `WebAssembly.Tag` só.
+
+**Um `exit` não pode ser capturado.** Uma exceção JS que atravessa o
+wasm é capturada por um `catch_all`, e os destrutores rodariam durante o
+`exit`. O `proc_exit` guarda o código e chama uma função wasm que é só
+`unreachable`. O trap do V8 atravessa o JS e o wasm sem ser capturado,
+como no wasmtime: verificado com um `exit` dentro de um `try` com
+destrutor. O mesmo vale para "undefined symbol": a função grava a
+mensagem e dá trap. Outra diferença do JS: uma chamada com argumentos a
+mais não falha. O `call` compara com o `length` da função e diz o que o
+wasmtime diz (`alias-4`: `main(int)` chamado com dois).
+
+**O trap.** O `scload.mjs` escreve o trap no formato do wasmtime, com as
+palavras dele para cada mensagem do V8. A pilha some na normalização do
+`norm_hash`. Em dois programas o V8 diz menos, e eles ficam conhecidos só
+com o loader JS (`JS` no `test/cells.py`):
+- `ct-00187`: o V8 tem uma mensagem só, "null function or function
+  signature mismatch", para um slot nulo e para um tipo errado. O
+  wasmtime diz "uninitialized element";
+- `pr23135`: o wasmtime diz também o endereço e o tamanho da memória.
+
+**Fora por enquanto:** o runtime do ASan (`libsc_rt` nos níveis com
+checagem de `--safety`), o arquivo e a linha de um frame (DWARF), as
+pilhas dos blocos e os vazamentos. O loader recusa um módulo que
+exporta `__asan_init`.
+
+**As baterias.**
+- `make test-split-node` compila no `build/sc` e roda com o loader JS:
+  1.947 programas, 10.541 células, 0 diferenças (8 conhecidos, os 6 do
+  `test-split` e os 2 acima), em 5,5 min.
+- `make test-session-node` usa agora o loader JS também: o compilador e
+  os programas rodam no Node. São 11.926 resultados, 0 ruins (43
+  conhecidos), em 7 min.
+- `make test-split` segue com 0 diferenças.
+
+**O começo de um programa.** O V8 compila preguiçosamente, e o
+`scload` sem `.cwasm` compila tudo com o Cranelift (3 execuções cada):
+
+| | `scload.mjs` | `scload` (`-L`, sem `.cwasm`) |
+| --- | ---: | ---: |
+| `int main(void){return 0;}` | 0,11 s, 0,1 s de CPU | 0,12 s, 2,0 s de CPU |
+| hello com `iostream` | 0,14 s, 0,2 s de CPU | 0,29 s, 5,4 s de CPU |
+
