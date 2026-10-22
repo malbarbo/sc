@@ -67,7 +67,7 @@ FILE = '__FILE__ (#include, #embed, __has_embed) names the cell, which is no fil
 MODULE = 'a module declaration cannot be in a cell'
 STMT = 'an expression at the top is a statement in a cell'
 DIR = 'the session runs in the source\'s directory, which has what "../" names; the corpus maps only the source'
-TMP = 'the corpus runs the engine without /tmp, which #pragma clang module build writes to'
+TMP = 'the corpus runs the engine without /tmp, which #pragma clang module build writes to (sc.wasm\'s hosts too)'
 TU = 'a check at the end of the translation unit, which a session does not reach'
 LD = 'wasm-ld fails on the shared object, outside the session too'
 G = 'gcc-ts_gcc_testsuite_gcc.c-torture_'
@@ -75,7 +75,6 @@ C = 'src_clang_test_'
 KNOWN = {f'ses-{k}': v for k, v in {
     G + 'execute_pr98304-2': DIR, G + 'compile_pr88423': DIR, C + 'SemaCXX_attr-callback': DIR,
     C + 'CodeGenCXX_alloc-token-pointer': DIR, C + 'CodeGenCXX_alloc-token': DIR,
-    C + 'CodeGenCXX_microsoft-abi-emit-dependent': TMP,
     C + 'Preprocessor_cl-pathmap': STMT, C + 'Preprocessor_dumptokens_phyloc': STMT,
     C + 'Preprocessor_macro_rparen_scan': STMT, C + 'Misc_diag-macro-backtrace': STMT, C + 'Frontend_rewrite-macros': STMT,
     C + 'CXX_basic_basic.def_p4': TU, C + 'CXX_basic_basic.link_p8': TU,
@@ -93,12 +92,11 @@ KNOWN = {f'ses-{k}': v for k, v in {
     C + 'CodeGenCXX_wasm-reftypes-mangle': 'the guess between a statement and a declaration at the top takes'
                                           ' `void (*__funcref f)();` for a statement',
 }.items()}
-# the engine on Node (test/node/sc-node, PLANO-REPL.md §5.5), against the
-# base of wasmtime: its WASI writes what wasmtime's does not
-NODE = os.path.basename(ENG) == 'sc-node'
-BIG = ('an object of hundreds of MB: wasmtime\'s WASI fails to write it ("IO failure on output stream:'
-       ' Out of memory"), and the base with it; Node\'s writes it')
-HOST = {f'ses-{k}': BIG for k in (G + 'compile_20080625-1', G + 'compile_pr103813', C + 'SemaCXX_large-array-init')} if NODE else {}
+if not WASM:
+    KNOWN[f'ses-{C}CodeGenCXX_microsoft-abi-emit-dependent'] = TMP
+BIG = ('an object of hundreds of MB: the corpus\'s sc.wasm fails to write it under wasmtime ("IO failure on output'
+       ' stream: Out of memory"); a session links it in memory')
+HOST = {f'ses-{k}': BIG for k in (G + 'compile_20080625-1', G + 'compile_pr103813', C + 'SemaCXX_large-array-init')} if WASM else {}
 HOST.update({f'ses-{k}': v for k, v in JS.items()})
 KNOWN.update(HOST)
 # not run: names whose demangling grows exponentially, which wasm-ld does
@@ -108,9 +106,9 @@ SKIP = {C + 'CodeGenCXX_mangle-ms-back-references-pr13207', C + 'CodeGenCXX_pr29
 
 def root(mod=False):
     """where the session's headers and libraries are: the pack sc embeds
-    (PLANO-REPL.md §5.4), but for sc.wasm, which reads the disk, and with
-    std.pcm, which sc --cc1 builds from the disk"""
-    return B if WASM or mod else PACK
+    (PLANO-REPL.md §5.4), but with std.pcm, which sc --cc1 builds from the
+    disk"""
+    return B if mod else PACK
 
 
 def flags(p):

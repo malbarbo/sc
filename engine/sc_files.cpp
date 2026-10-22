@@ -1,6 +1,7 @@
 // The files of sc_set_files (sc.h): for the session's clang, a file system
 // that answers for the paths under the root and passes the rest to the real
-// one; for its wasm-ld, the hook of llvm/lld-files.patch.
+// one; for its wasm-ld, the hooks of llvm/lld-files.patch, which also give
+// it the cell it links (ScLink).
 #include "sc.h"
 #include "sc_session.h"
 #include "llvm/ADT/Hashing.h"
@@ -11,6 +12,7 @@
 
 namespace lld::wasm {
 extern std::optional<llvm::StringRef> (*fileHook)(llvm::StringRef path);
+extern void (*outputHook)(llvm::StringRef bytes);
 }
 
 using namespace llvm;
@@ -131,12 +133,35 @@ struct PackFS : vfs::ProxyFileSystem {
 };
 } // namespace
 
+// the cell ScLink links
+static StringRef CellPath, CellObj;
+static std::string *CellOut;
+
+static std::optional<StringRef> linkerFile(StringRef Path) {
+  if (!CellPath.empty() && Path == CellPath)
+    return CellObj;
+  std::optional<std::string> P = under(Path);
+  return P ? read(*P) : std::nullopt;
+}
+
 void sc_set_files(const sc_files *F) {
   Files = F;
-  lld::wasm::fileHook = F ? +[](StringRef Path) -> std::optional<StringRef> {
-    std::optional<std::string> P = under(Path);
-    return P ? read(*P) : std::nullopt;
-  } : nullptr;
+  lld::wasm::fileHook = F ? linkerFile : nullptr;
+}
+
+ScLink::ScLink(StringRef Path, StringRef Obj, std::string &Out) {
+  CellPath = Path;
+  CellObj = Obj;
+  CellOut = &Out;
+  lld::wasm::fileHook = linkerFile;
+  lld::wasm::outputHook = [](StringRef B) { *CellOut = B.str(); };
+}
+
+ScLink::~ScLink() {
+  CellPath = CellObj = {};
+  CellOut = nullptr;
+  lld::wasm::fileHook = Files ? linkerFile : nullptr;
+  lld::wasm::outputHook = nullptr;
 }
 
 IntrusiveRefCntPtr<vfs::FileSystem> scFileSystem() {

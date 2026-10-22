@@ -66,7 +66,8 @@ def engine(dirs, args):
     if NATIVE:
         return ['bwrap', '--ro-bind', '/usr', '/usr', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
                 '--dev', '/dev', '--ro-bind', eng, '/sc'] + [x for h, g in dirs.items() for x in ('--bind', h, g)] + ['/sc'] + args
-    return ['wasmtime', 'run', '--allow-precompiled'] + [x for h, g in dirs.items() for x in ('--dir', f'{h}::{g}')] + [cw] + args
+    # the imports of the session's files, which the one-shot engine never calls (engine/sc_host_files.cpp)
+    return ['wasmtime', 'run', '--allow-precompiled', '-W', 'unknown-imports-trap=y'] + [x for h, g in dirs.items() for x in ('--dir', f'{h}::{g}')] + [cw] + args
 
 # (path, kind) — True: link and execute; False: compile only (diagnostics + object
 # hash); 'pic': compile with -fPIC and link a shared object, as the REPL does

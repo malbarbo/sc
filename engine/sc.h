@@ -90,8 +90,9 @@ unsigned sc_result_len(sc_session *s, int part);
 
 /* The files a session reads in place of the disk: those under root (the
    pack the native sc embeds, PLANO-REPL.md §5.4), for its clang and its
-   wasm-ld. The rest are on the disk, and so is all without them (sc.wasm,
-   which does not export sc_set_files) and in the one-shot engine. A path
+   wasm-ld. The rest are on the disk, and so is all without them and in the
+   one-shot engine. sc.wasm does not export it: its host gives the files
+   through sc_host_files (sc_host_files.cpp). A path
    asked for is absolute and without "." or "..", with '/' or the system's
    separator. What read and list return is valid until the process ends. */
 struct sc_files {

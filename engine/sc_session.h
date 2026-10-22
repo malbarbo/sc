@@ -16,6 +16,13 @@ namespace llvm::vfs { class FileSystem; }
 // (sc.h) under their root (sc_files.cpp).
 llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> scFileSystem();
 
+// While a cell is linked (sc_api.cpp): wasm-ld reads its object Obj at Path
+// and writes to Out the output of "-o -", in place of the disk.
+struct ScLink {
+  ScLink(llvm::StringRef Path, llvm::StringRef Obj, std::string &Out);
+  ~ScLink();
+};
+
 // What a cell left: SC_OK with the object, SC_ERROR (an error; the session
 // keeps part of the cell, §3.3), SC_LOST (the session must be recreated
 // and replayed) or SC_INCOMPLETE (an error where the cell ends: SC_CELL_WHOLE).

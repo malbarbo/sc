@@ -4398,3 +4398,54 @@ exporta `__asan_init`.
 | `int main(void){return 0;}` | 0,11 s, 0,1 s de CPU | 0,12 s, 2,0 s de CPU |
 | hello com `iostream` | 0,14 s, 0,2 s de CPU | 0,29 s, 5,4 s de CPU |
 
+
+## 58. Os arquivos da sessão sem disco: o pacote pelo host e as células em memória
+
+Para o REPL no simplecode, o `sc.wasm` lê os arquivos como o `sc` nativo,
+e não por um FS no shim WASI da página. O shim do simplecode não tem
+arquivos (`path_open` falha), e assim continua.
+
+**As células em memória.** A sessão gravava o `cell_N.o` num diretório
+temporário, o wasm-ld gravava o `cell_N.so` ao lado e a sessão o lia de
+volta. Agora o `ScLink` (`sc_files.cpp`) dá ao wasm-ld, durante a
+ligação, o objeto pelo gancho de leitura do `lld-files.patch` e recebe a
+saída de `-o -` por um gancho novo no mesmo patch, o `outputHook` do
+`Writer.cpp`. Sem o gancho, `-o -` iria para o stdout (`InMemoryBuffer`
+do `FileOutputBuffer`). Vale para o nativo também: nenhuma sessão abre
+mais o `/tmp`, e o `src/engine/wasm.rs` e o `test/node/engine.mjs` não o
+dão ao guest.
+
+**O pacote pelo host.** Um `sc_files` com ponteiros de função não
+atravessa a fronteira do wasm. O `engine/sc_host_files.cpp`, só do
+`sc.wasm`, implementa o `sc_files` sobre dois imports:
+- `sc_files.status(caminho, n, *tamanho)`: 0, 1 (arquivo) ou 2 (diretório,
+  com o tamanho dos nomes);
+- `sc_files.read(caminho, n, destino)`: os bytes do arquivo ou os nomes.
+
+O host chama o `sc_host_files("/sc")` exportado depois do `_initialize`.
+Cada arquivo é copiado uma vez para a memória do guest e guardado, como o
+`sc_files` pede. Com isso a sessão do `sc.wasm` lê o pacote embutido no
+`build/sc-wasm` (o mesmo do nativo) e, no Node, os diretórios do build
+nos caminhos do pacote. O `engine.mjs` tira os intrínsecos de outros alvos
+como o `build.rs`: sem o filtro, 46 resultados diferiam, todos de
+programas que incluem `immintrin.h` ou `arm_neon.h`. Num caso grande de C,
+foram 9 chamadas e 1,5 ms.
+
+O `wasmtime run` do corpus (`test/corpus.py`) passa
+`-W unknown-imports-trap=y`: o one-shot nunca chama os imports. O
+`sc.wasm` cresceu 1,4 KB (20.054.224 bytes).
+
+**O que mudou nas baterias.**
+- Os 3 objetos de centenas de MB (§56) agora são aceitos também no
+  wasmtime: a sessão não os grava pelo WASI. A compilação inteira do
+  corpus continua falhando ao gravá-los, e eles ficam conhecidos em todo
+  host do `sc.wasm`, e não só no Node.
+- `microsoft-abi-emit-dependent` (`#pragma clang module build`, que grava
+  em `/tmp`) passou a concordar com o corpus nos hosts do `sc.wasm`, que
+  não têm mais `/tmp`, e ficou conhecido só no nativo.
+- `make test`: 0 diferenças. `make test-session`: 11.918 resultados, 0
+  ruins (38 conhecidos). `make test-session-wasm`: 11.926, 0 ruins (40).
+  `make test-split-node`: 0 diferenças (8). `make test-session-node`:
+  11.926, 0 ruins (42), em 4,7 min. Numa das rodadas,
+  `limits-externdecl` passou dos 120 s com a máquina cheia; sozinho leva
+  63 s no Node (Liftoff) e 41 s no wasmtime, e passou nas outras duas.

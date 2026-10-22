@@ -5,13 +5,13 @@
 // of __stack_pointer, restored when the cell fails, is a type or traps.
 //
 // usage: node engine.mjs --engine (SC_WASM: the module, build/sc.wasm)
-// The guest sees the repository's parent at its path and a directory of
-// this process as /tmp; its stdout goes to stderr. SC_MEMORY_SIZE writes
+// The guest sees the repository's parent at its path, and the session the
+// pack at /sc, from the build (packFile); its stdout goes to stderr.
+// SC_MEMORY_SIZE writes
 // the memory's size after each cell, as wasm.rs does; SC_SNAPSHOT_LOG
 // appends to that file, for each snapshot, the memory's size and the ms to
 // copy and to restore it (or -).
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { WASI } from 'node:wasi';
 
@@ -24,8 +24,6 @@ const [SO, REPLAY, WHOLE, TYPE] = [0, 1, 2, 3];
 const CRASHED = 'sc: the engine crashed on this cell; the session is as it was before it\n';
 const enc = new TextEncoder();
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-node-'));
-process.on('exit', () => fs.rmSync(tmp, { recursive: true, force: true }));
 const module = await WebAssembly.compile(fs.readFileSync(WASM));
 
 // --- the protocol, on fds 0 and 1
@@ -75,6 +73,38 @@ function reply(status, parts) {
   writeAll(Buffer.concat([h, ...ps]));
 }
 
+// --- the pack: what sc embeds (build.rs) at the paths of the build
+
+const B = `${R}/build`;
+const PACK = { sysroot: `${B}/sysroot`, res: `${B}/wasi-sdk-29.0-x86_64-linux/lib/clang/21`, repl: `${B}/pack/repl` };
+
+/// the path of the build for a path of the pack, '' for its root, null out
+/// of it
+function packFile(p) {
+  const m = /^\/sc(?:\/([^/]+)(.*))?$/.exec(p);
+  if (!m) return null;
+  return m[1] === undefined ? '' : PACK[m[1]] ? PACK[m[1]] + m[2] : null;
+}
+
+/// what build.rs leaves out of clang's headers: the intrinsics of the other
+/// targets
+function left(p) {
+  const n = /^\/sc\/res\/include\/([^/]+)$/.exec(p)?.[1];
+  return n !== undefined && (n.includes('intrin') || n.startsWith('arm_'));
+}
+
+/// sc_files (engine/sc_host_files.cpp): the kind (0 none, 1 a file, 2 a
+/// directory) and the bytes, of the file or of the names in the directory
+function packEntry(p) {
+  const f = left(p) ? null : packFile(p);
+  const names = (ns) => () => enc.encode(ns.filter((n) => !left(`${p}/${n}`)).map((n) => n + '\0').join(''));
+  if (f === '') return { kind: 2, bytes: names(Object.keys(PACK)) };
+  const st = f === null ? undefined : fs.statSync(f, { throwIfNoEntry: false });
+  if (st?.isFile()) return { kind: 1, size: st.size, bytes: () => fs.readFileSync(f) };
+  if (st?.isDirectory()) return { kind: 2, bytes: names(fs.readdirSync(f)) };
+  return { kind: 0 };
+}
+
 // --- the guest
 
 class Exit extends Error {
@@ -87,17 +117,33 @@ class Guest {
   constructor() {
     const wasi = new WASI({
       version: 'preview1', args: ['sc'], env: {}, stdout: 2,
-      preopens: { [ROOT]: ROOT, '/tmp': tmp },
+      preopens: { [ROOT]: ROOT },
     });
+    const str = (p, n) => Buffer.from(this.bytes().subarray(p, p + n)).toString();
+    const sc_files = {
+      status: (p, n, size) => {
+        const e = packEntry(str(p, n));
+        const sz = e.kind === 2 ? e.bytes().length : (e.size ?? 0);
+        new DataView(this.x.memory.buffer).setBigUint64(size, BigInt(sz), true);
+        return e.kind;
+      },
+      read: (p, n, out) => {
+        const e = packEntry(str(p, n));
+        if (e.kind) this.bytes().set(e.bytes(), out);
+      },
+    };
     // an exit of the guest (a fatal error) unwinds to the cell, as a trap
     const proc_exit = (code) => {
       throw new Exit(code);
     };
-    const imports = { wasi_snapshot_preview1: { ...wasi.wasiImport, proc_exit } };
+    const imports = { wasi_snapshot_preview1: { ...wasi.wasiImport, proc_exit }, sc_files };
     this.inst = new WebAssembly.Instance(module, imports);
     this.x = this.inst.exports;
     // sc.wasm exports _start too (the one-shot engine), which initialize refuses
     wasi.initialize({ exports: { memory: this.x.memory, _initialize: this.x._initialize } });
+    const root = this.put(enc.encode('/sc\0'));
+    this.x.sc_host_files(root);
+    this.x.free(root);
     // the session finds a cell's "..." includes from the directory
     const p = this.put(enc.encode(process.cwd() + '\0'));
     this.x.chdir(p);

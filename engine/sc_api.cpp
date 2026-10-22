@@ -1,11 +1,9 @@
 // The session part of the C API (sc.h) over ScSession (sc_session.cpp): the
 // diagnostics go to a string, and each cell's object is linked by wasm-ld
-// into a shared object in the session's temporary directory (§3.1).
+// into a shared object (§3.1), both in memory (ScLink).
 #include "sc.h"
 #include "sc_session.h"
 #include "lld/Common/Driver.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
 LLD_HAS_DRIVER(wasm)
@@ -13,18 +11,13 @@ LLD_HAS_DRIVER(wasm)
 struct sc_session {
   std::unique_ptr<ScSession> S;
   std::vector<std::string> LinkArgs; // after "--"
-  llvm::SmallString<128> Dir;        // the cells' objects and shared objects
   std::string Diags, So, Syms;       // the result of the last call
   llvm::raw_string_ostream DiagOS{Diags};
   unsigned N = 0;                    // cells linked
   bool Accepted = false, Lost = false;
   bool OneCell = false; // -sc-one-cell: a symbol no library defines is an error
 
-  ~sc_session() {
-    S.reset();
-    if (!Dir.empty())
-      llvm::sys::fs::remove_directories(Dir);
-  }
+  ~sc_session() { S.reset(); } // before DiagOS, which it may write to
   void clear() {
     Diags.clear();
     So.clear();
@@ -32,37 +25,22 @@ struct sc_session {
   }
   // the object as a shared object in So; false if wasm-ld failed
   bool link(llvm::StringRef Obj) {
-    std::string Base = (Dir + "/cell_" + llvm::Twine(++N)).str();
-    std::string O = Base + ".o", SO = Base + ".so";
-    {
-      std::error_code EC;
-      llvm::raw_fd_ostream OS(O, EC);
-      if (EC) {
-        DiagOS << "sc: " << O << ": " << EC.message() << "\n";
-        return false;
-      }
-      OS << Obj;
-    }
+    std::string O = "cell_" + std::to_string(++N) + ".o";
+    ScLink L(O, Obj, So);
     std::vector<const char *> Args = {"wasm-ld", "-shared", "--experimental-pic",
                                       OneCell ? "--unresolved-symbols=report-all" : "--unresolved-symbols=import-dynamic",
                                       O.c_str()};
     for (auto &A : LinkArgs)
       Args.push_back(A.c_str());
     Args.push_back("-o");
-    Args.push_back(SO.c_str());
-    std::string Out; // without the object's temporary path, which says nothing
+    Args.push_back("-");
+    std::string Out; // without the object's name, which says nothing
     llvm::raw_string_ostream OutOS(Out);
     lld::Result R = lld::lldMain(Args, OutOS, OutOS, {{lld::Wasm, &lld::wasm::link}});
     for (size_t P; (P = Out.find(O + ": ")) != std::string::npos;)
       Out.erase(P, O.size() + 2);
     DiagOS << Out;
-    auto Buf = llvm::MemoryBuffer::getFile(SO);
-    llvm::sys::fs::remove(O);
-    llvm::sys::fs::remove(SO);
-    if (R.retCode || !Buf)
-      return false;
-    So = (*Buf)->getBuffer().str();
-    return true;
+    return !R.retCode && !So.empty();
   }
 };
 
@@ -81,11 +59,6 @@ int sc_session_new(int argc, const char *const *argv, sc_session **out) {
     return SC_ERROR;
   }
   s->OneCell = O.OneCell;
-  if (std::error_code EC = llvm::sys::fs::createUniqueDirectory("sc", s->Dir)) {
-    s->Dir.clear();
-    s->DiagOS << "sc: temporary directory: " << EC.message() << "\n";
-    return SC_ERROR;
-  }
   s->S = ScSession::create(O, &s->DiagOS);
   return s->S ? SC_OK : SC_ERROR;
 }

@@ -43,10 +43,9 @@ KNOWN = {
 KNOWN.update(JS)
 
 def flags(cxx, gnu17, mod):
-    # the pack sc embeds (PLANO-REPL.md §5.4), but for a host of sc.wasm
-    # (<engine>.wasm), which reads the disk, and with std.pcm, which sc --cc1
-    # builds from the disk
-    root = B if mod or os.path.exists(f'{ENG}.wasm') else PACK
+    # the pack sc embeds (PLANO-REPL.md §5.4), but with std.pcm, which sc
+    # --cc1 builds from the disk
+    root = B if mod else PACK
     return session(cxx, root, gnu17, mod, f'{OUT}/std.pcm')
 
 

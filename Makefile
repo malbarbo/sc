@@ -42,7 +42,7 @@ PACK = $(PACK_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(I
 # the engine with the session (sc.h); sc.wasm is a reactor, with its _start
 # (PLANO-REPL.md §5.2). scripts/link.py has the same lists
 ENGINE := sc_entry sc_main sc_inv sc_backend sc_cuts sc_session sc_api sc_files
-WENGINE := $(ENGINE) sc_start
+WENGINE := $(ENGINE) sc_start sc_host_files
 ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI_EMULATED_MMAN \
   -DLLVM_BUILD_STATIC -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS \
   -I$(B)/src/clang/include -I$(B)/wasm/tools/clang/include -I$(B)/wasm/include -I$(B)/src/llvm/include \

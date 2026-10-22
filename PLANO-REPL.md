@@ -1322,13 +1322,12 @@ três leitores: o VFS do clang, um gancho no wasm-ld e o loader.
   parte.
 
 **Fora da fase.**
-- O diretório temporário das células. Tirá-lo exige que o lld grave a
-  saída em memória, o que é outro patch (`FileOutputBuffer`), e que leia
-  o `.o` da célula da memória (o mesmo gancho do `readFile` serve).
+- O diretório temporário das células. Feito depois, em 2026-10-22
+  (ANALISE.md §58): o lld lê o `.o` e grava o `.so` em memória.
 - Os modos one-shot `sc --cc1` e `sc --ld` (`sc_main.cpp:61`, FS real):
   são dos testes (`test-native`, `learn-native`) e continuam no disco.
-- O host JS (6b, §5.5), que fornece os mesmos arquivos ao `sc.wasm` pelo
-  WASI. O pacote pode ser o mesmo.
+- O host JS (6b, §5.5), que fornece os mesmos arquivos ao `sc.wasm`.
+  Feito depois, em 2026-10-22: pelos imports `sc_files` (ANALISE.md §58).
 - `import std;` no `sc` (decidido em 2026-10-21: fica fora). Hoje não
   funciona. Embutido, o `std.pcm` (38 MB sem comprimir, feito com as
   flags da sessão) passaria de longe o resto do pacote. Construído no
@@ -1379,15 +1378,16 @@ e ANALISE.md §25 e §48).
 Os dois conversam por `postMessage`. O `.so` da célula vai do compilador
 ao programa como `ArrayBuffer` transferido, sem cópia.
 
-**Os arquivos.**
-- O `sc.wasm` não exporta o `sc_set_files`. A sessão lê os arquivos pelo
-  WASI, e o shim WASI do worker serve um FS em memória:
-  - o pacote do §5.4 (headers, bibliotecas, ignorelist, builtins e os
-    `.args`), só leitura, na raiz dos `.args` do pacote (`/sc`,
-    `scripts/flags.py`, `PACK`). Os `.args` do `sc` nativo servem sem
-    mudança;
-  - um `/tmp` gravável, onde a sessão guarda o `.o` e o `.so` de cada
-    célula (§5.2, passo 3).
+**Os arquivos.** Decidido e feito em 2026-10-22 (ANALISE.md §58): os do
+nativo, sem um FS no shim WASI.
+- O host dá o pacote do §5.4 (headers, bibliotecas, ignorelist, builtins
+  e os `.args`) por dois imports, `sc_files.status` e `sc_files.read`, e
+  chama o `sc_host_files("/sc")` exportado
+  (`engine/sc_host_files.cpp`). A sessão lê pelo VFS do clang e pelo
+  gancho do lld, como no nativo, e os `.args` do `sc` nativo servem sem
+  mudança.
+- A sessão liga as células em memória: não há `/tmp`. O WASI do worker
+  só precisa de stdout, stderr, relógio e argumentos.
 - Falta escolher o formato que a página baixa. O squashfs do `sc` pede um
   leitor em JS. Um tar com zstd pede só um descompressor.
 - Os `.cwasm` não servem no navegador. O V8 compila os `.so` e guarda o
@@ -1421,14 +1421,15 @@ O snapshot precisa também de:
   `scripts/link.py`. Depois de um trap, ele fica onde o trap aconteceu;
 - zerar o trecho que a memória cresceu na célula, porque a memória não
   encolhe;
-- fechar no shim os arquivos que a célula deixou abertos.
+- fechar no shim os arquivos que a célula deixou abertos. Sem FS no
+  shim (ANALISE.md §58), não há nenhum.
 
 **Feito em 2026-10-22, no Node (ANALISE.md §56).** O `__stack_pointer` é
 exportado. O `test/node/engine.mjs` é o filho `sc --engine` com o
 snapshot e a restauração, e a bateria inteira passa nele (`make
 test-session-node`). Uma célula custa 11 ms em C e 23 ms em C++, contra 17
-e 29 ms do wasmtime com `fork`. Falta o shim WASI próprio, que fecha os
-arquivos e serve o pacote em memória.
+e 29 ms do wasmtime com `fork`. O pacote veio depois, pelos imports
+`sc_files` (ANALISE.md §58).
 
 **Os limites.**
 - **Timeout e Ctrl-C da compilação:** `terminate` do worker, um worker

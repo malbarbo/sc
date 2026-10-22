@@ -17,16 +17,20 @@ sc.wasm -cc1 <cc1 flags> -fmodule-file=std=std.pcm -o out.o file.cpp  # import s
 ```
 
 `sc.wasm` is also a library: a reactor that exports the REPL's session
-(`engine/sc.h`) besides `_start`. As a command (`wasmtime run`) it runs as
-above. A host of the session:
+(`engine/sc.h`) besides `_start`. As a command (`wasmtime run -W
+unknown-imports-trap=y`, for the imports below that the command never calls)
+it runs as above. A host of the session:
 - calls `_initialize` once per instance (a second call traps), and never
   `_start`;
 - calls the exported `chdir` with the directory where a cell's
   `#include "..."` files are: the guest starts in `/`;
 - puts the arguments and the cells in the guest's memory with the exported
   `malloc` and `free`, and reads a result at `sc_result_ptr`;
-- gives the guest a writable `/tmp` (or `TMPDIR`), where a session keeps
-  its cells' objects.
+- gives it the headers and libraries, the pack, under `/sc`: the imports
+  `sc_files.status` and `sc_files.read`, then the exported
+  `sc_host_files("/sc")` (`engine/sc_host_files.cpp`). Without the call the
+  session reads the disk. It links its cells in memory, with no temporary
+  files.
 
 `node:wasi` refuses a module with both `_initialize` and `_start`, so pass
 it an object in place of the instance (`e` its exports):
@@ -68,10 +72,11 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   replaces a few LLVM functions sc does not need. `sc_session.cpp` is the
   REPL's session (one clang instance, each cell parsed on top of the ones
   before), `sc_api.cpp` the session part of `sc.h` over it (each cell linked
-  into a shared object), `sc_files.cpp` the files a session reads in place
-  of the disk (`sc_set_files`: `sc`'s pack, for clang and, through
-  `llvm/lld-files.patch`, wasm-ld). `sc_start.cpp` is
-  `sc.wasm`'s `_start`. `sc` links the native engine, with the session too.
+  into a shared object, in memory), `sc_files.cpp` the files a session reads
+  in place of the disk (`sc_set_files`: `sc`'s pack, for clang and, through
+  `llvm/lld-files.patch`, wasm-ld, which also reads and writes each cell
+  there). `sc_start.cpp` is `sc.wasm`'s `_start`, and `sc_host_files.cpp`
+  its `sc_files` over the host's imports. `sc` links the native engine, with the session too.
 - `Cargo.toml`, `build.rs` and `src/` are the Rust crate `sc`
   (`ANALISE.md` §51). `cargo build --release` makes
   `build/cargo/release/sc` and `scload`: without `SC_LINK_ARGS`, `build.rs`

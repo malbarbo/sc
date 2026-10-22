@@ -19,8 +19,8 @@
 //!
 //! With the `wasm` feature (build/sc-wasm) the engine is
 //! `<this program>.wasm`, which `<this program> --precompile` compiles
-//! first ([`sc::engine::wasm`]). Its sessions read the disk, not the pack:
-//! it is the test host of `sc.wasm` (`--replay` with the build's paths).
+//! first ([`sc::engine::wasm`]): the test host of `sc.wasm`, whose sessions
+//! read the pack too.
 
 mod config;
 mod machine;
@@ -140,15 +140,8 @@ fn show_help<T>(parser: bpaf::OptionParser<T>, args: &[&str]) -> ExitCode {
     ExitCode::from(err.exit_code() as u8)
 }
 
-fn main() -> ExitCode {
-    let code = modes();
-    #[cfg(feature = "wasm")]
-    sc::engine::wasm::cleanup();
-    code
-}
-
 /// The modes of the engine and of the tests, else the student's.
-fn modes() -> ExitCode {
+fn main() -> ExitCode {
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     let engine = match args.get(1).map(String::as_str) {
         Some("--engine") => {
