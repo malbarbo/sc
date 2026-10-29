@@ -1,7 +1,6 @@
-//! The REPL's side: the engine in a child process ([`Child`]), and the log
-//! that recreates the session after it is lost ([`Repl`], PLANO-REPL.md §3.6).
-use super::{msg, sys, wire, Mode, Status};
-use std::fmt;
+//! The REPL's side: the engine in a child process ([`Child`]), the
+//! [`Compiler`] of the native REPL.
+use super::{msg, sys, wire, Answer, Compiler, Mode, Repl, ReplError, Status};
 use std::io::{self, BufReader, BufWriter, Read};
 use std::os::fd::AsRawFd;
 use std::os::raw::{c_int, c_short};
@@ -20,32 +19,13 @@ pub fn interrupt() {
     INTERRUPTED.store(true, Ordering::Relaxed);
 }
 
-/// The answer to a request, owned.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Answer {
-    pub status: Status,
-    /// The diagnostics, as clang and wasm-ld print them.
-    pub diags: String,
-    /// The cell as a wasm shared object.
-    pub so: Vec<u8>,
-    /// The names the cell exports; [`Mode::Type`]: the type.
-    pub syms: Vec<String>,
-}
-
-impl Answer {
-    /// An answer with diagnostics alone.
-    fn bare(status: Status, diags: String) -> Answer {
-        Answer { status, diags, so: vec![], syms: vec![] }
-    }
-
-    fn from_msg(m: wire::Msg) -> Answer {
-        let [diags, so, syms] = m.parts;
-        Answer {
-            status: Status::from_raw(m.status),
-            diags: String::from_utf8_lossy(&diags).into_owned(),
-            so,
-            syms: String::from_utf8_lossy(&syms).lines().map(String::from).collect(),
-        }
+fn answer(m: wire::Msg) -> Answer {
+    let [diags, so, syms] = m.parts;
+    Answer {
+        status: Status::from_raw(m.status),
+        diags: String::from_utf8_lossy(&diags).into_owned(),
+        so,
+        syms: String::from_utf8_lossy(&syms).lines().map(String::from).collect(),
     }
 }
 
@@ -57,6 +37,9 @@ impl Answer {
 /// copy ([`super::serve`]) and ends with 0: the copy, which is not ours to
 /// wait for, is reached through the process group, which they share.
 pub struct Child {
+    /// What was spawned, for [`Compiler::another`].
+    program: PathBuf,
+    args: Vec<String>,
     proc: process::Child,
     /// None once closed, in [`Drop`].
     to: Option<BufWriter<ChildStdin>>,
@@ -78,11 +61,20 @@ impl Child {
             .process_group(0).spawn()?;
         let to = BufWriter::new(proc.stdin.take().unwrap());
         let from = BufReader::new(proc.stdout.take().unwrap());
-        Ok(Child { proc, to: Some(to), from, timeout: None, memory: None, gone: false })
+        let args = args.iter().map(|a| a.to_string()).collect();
+        Ok(Child { program: program.into(), args, proc, to: Some(to), from, timeout: None, memory: None, gone: false })
+    }
+
+    /// Limits each reply to `timeout`, and the memory to `memory` bytes
+    /// (PLANO-REPL.md §4). A reply that takes longer or more, or is
+    /// [`interrupt`]ed, ends the child; so does, in a [`Repl`], an
+    /// accepted cell that leaves it above `memory`.
+    pub fn limit(&mut self, timeout: Option<Duration>, memory: Option<u64>) {
+        (self.timeout, self.memory) = (timeout, memory);
     }
 
     fn call(&mut self, kind: u32, status: u32, part: &[u8]) -> io::Result<Answer> {
-        self.request(kind, status, part).map(Answer::from_msg)
+        self.request(kind, status, part).map(answer)
     }
 
     fn request(&mut self, kind: u32, status: u32, part: &[u8]) -> io::Result<wire::Msg> {
@@ -253,183 +245,48 @@ extern "C" {
     fn sysconf(name: c_int) -> std::os::raw::c_long;
 }
 
-/// Why a [`Repl`] cannot go on.
-#[derive(Debug)]
-pub enum ReplError {
-    Io(io::Error),
-    /// The session did not start: the diagnostics.
-    Start(String),
-    /// The replay of the cell at this index of the log did not give what it
-    /// gave the first time: the student must restart the session.
-    Diverged(usize),
-}
-
-impl fmt::Display for ReplError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ReplError::Io(e) => write!(f, "{e}"),
-            ReplError::Start(d) => write!(f, "the session did not start: {d}"),
-            ReplError::Diverged(i) => write!(f, "the replay of cell {} diverged", i + 1),
-        }
-    }
-}
-
-impl std::error::Error for ReplError {}
-
-impl From<io::Error> for ReplError {
-    fn from(e: io::Error) -> ReplError {
-        ReplError::Io(e)
-    }
-}
-
-/// An accepted cell of the log: its source and the names it exported.
-struct Entry {
-    src: Vec<u8>,
-    syms: Vec<String>,
-}
-
-/// A session in a child, with the log of its accepted cells. A failed cell
-/// leaves nothing in the child ([`super::serve`]), so the log does not keep
-/// it. When the session is lost (the child ended, an undo), a new child
-/// replays the log without the backend, and each cell must export the same
-/// names (§3.6).
-pub struct Repl {
-    program: PathBuf,
-    args: Vec<String>,
-    child: Child,
-    log: Vec<Entry>,
-    timeout: Option<Duration>,
-    memory: Option<u64>,
-}
-
-impl Repl {
-    /// A child `program --engine` with a session of `args`, which starts
-    /// within the limits ([`Repl::limit`]).
-    pub fn new(program: PathBuf, args: Vec<String>, timeout: Option<Duration>, memory: Option<u64>) -> Result<Repl, ReplError> {
-        let child = Repl::start(&program, &args, timeout, memory)?;
-        Ok(Repl { program, args, child, log: vec![], timeout, memory })
-    }
-
-    /// Limits each reply of the child to `timeout`, and its memory to
-    /// `memory` bytes (PLANO-REPL.md §4). A reply that takes longer or
-    /// more, or is [`interrupt`]ed, loses the session ([`Status::Lost`]),
-    /// which a new child replays. After an accepted cell that leaves the
-    /// child above `memory`, a new child replays the log too.
-    pub fn limit(&mut self, timeout: Option<Duration>, memory: Option<u64>) {
-        (self.timeout, self.memory) = (timeout, memory);
-        (self.child.timeout, self.child.memory) = (timeout, memory);
-    }
-
-    fn start(program: &Path, args: &[String], timeout: Option<Duration>, memory: Option<u64>) -> Result<Child, ReplError> {
-        let mut child = Child::spawn(program, &["--engine"])?;
-        (child.timeout, child.memory) = (timeout, memory);
-        let a = child.new_session(args)?;
-        if a.status != Status::Ok {
-            return Err(ReplError::Start(a.diags));
-        }
+impl Compiler for Child {
+    fn another(&self) -> io::Result<Child> {
+        let args: Vec<&str> = self.args.iter().map(String::as_str).collect();
+        let mut child = Child::spawn(&self.program, &args)?;
+        child.limit(self.timeout, self.memory);
         Ok(child)
     }
 
-    /// A new child replays the log. It replaces the one before only once
-    /// the whole log is replayed: on an error, the child and the log are
-    /// as they were. The REPL calls it when the child takes too much memory
-    /// (PLANO-REPL.md §4).
-    pub fn restart(&mut self) -> Result<(), ReplError> {
-        let mut child = Repl::start(&self.program, &self.args, self.timeout, self.memory)?;
-        for (i, e) in self.log.iter().enumerate() {
-            let a = child.cell(&e.src, Mode::Replay)?;
-            if a.status != Status::Ok || a.syms != e.syms {
-                return Err(ReplError::Diverged(i));
-            }
-        }
-        self.child = child;
-        Ok(())
+    fn new_session(&mut self, args: &[String]) -> io::Result<Answer> {
+        Child::new_session(self, args)
     }
 
-    /// The accepted cells.
-    pub fn len(&self) -> usize {
-        self.log.len()
+    fn cell(&mut self, src: &[u8], mode: Mode) -> io::Result<Answer> {
+        Child::cell(self, src, mode)
     }
 
-    /// The names the accepted cells export.
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.log.iter().flat_map(|e| &e.syms).map(String::as_str)
+    fn depth(&mut self, src: &[u8]) -> io::Result<u32> {
+        Child::depth(self, src)
     }
 
-    /// Compiles a cell. [`Status::Lost`]: the cell ended the session (its
-    /// diagnostics, or how the child ended), which is back as before it, or
-    /// will be at the next request if the replay failed.
-    pub fn cell(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
-        self.compile(src, Mode::So)
-    }
-
-    /// [`Repl::cell`], or [`Status::Incomplete`] if the cell stops short
-    /// ([`Mode::Whole`]): nothing of it is kept.
-    pub fn cell_if_whole(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
-        self.compile(src, Mode::Whole)
-    }
-
-    /// The type of `src`, an expression without its `;`, if
-    /// [`Status::Ok`]. Nothing of it is kept.
-    pub fn type_of(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
-        self.compile(src, Mode::Type)
-    }
-
-    /// See [`super::sys::sc_session_depth`].
-    pub fn depth(&mut self, src: &[u8]) -> Result<u32, ReplError> {
-        match self.child.depth(src) {
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
-                self.restart()?;
-                Ok(self.child.depth(src)?)
-            }
-            r => Ok(r?),
-        }
-    }
-
-    fn compile(&mut self, src: &[u8], mode: Mode) -> Result<Answer, ReplError> {
-        let mut a = match self.child.cell(src, mode) {
-            Ok(a) => a,
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => lost(e),
-            Err(e) => return Err(e.into()),
-        };
-        match a.status {
-            Status::Ok if mode != Mode::Type => self.log.push(Entry { src: src.to_vec(), syms: a.syms.clone() }),
-            Status::Ok | Status::Error | Status::Incomplete => {}
-            // a replay that fails (interrupted too, or above the limits)
-            // leaves the child that ended: the next request replays again
-            Status::Lost => {
-                if let Err(e) = self.restart() {
-                    a.diags += &format!("sc: the session was not restored ({e}): the next cell tries again\n");
-                }
-            }
-        }
-        // the cell is in the log: on an error, the child stays, and its
-        // next reply above the limit loses it
-        if self.memory.is_some_and(|m| self.child.rss() > m) {
-            let _ = self.restart();
-        }
-        Ok(a)
-    }
-
-    /// Undoes the last accepted cell: [`Status::Ok`] once the session is
-    /// back without it, [`Status::Error`] if there is none or the replay
-    /// failed (the session stays as it was).
-    pub fn undo(&mut self) -> Result<Answer, ReplError> {
-        let Some(last) = self.log.pop() else {
-            return Ok(Answer::bare(Status::Error, "sc: no cell to undo\n".into()));
-        };
-        // the generated code cannot be undone in the session (§3.3)
-        if let Err(e) = self.restart() {
-            self.log.push(last);
-            return Ok(Answer::bare(Status::Error, format!("sc: the cell was not undone: {e}\n")));
-        }
-        Ok(Answer::bare(Status::Ok, String::new()))
+    fn over(&self) -> bool {
+        self.memory.is_some_and(|m| self.rss() > m)
     }
 }
 
-fn lost(e: io::Error) -> Answer {
-    Answer::bare(Status::Lost, format!("sc: {e}\n"))
+impl Repl<Child> {
+    /// A child `program --engine` with a session of `args`, which starts
+    /// within the limits ([`Repl::limit`]).
+    pub fn new(program: PathBuf, args: Vec<String>, timeout: Option<Duration>, memory: Option<u64>) -> Result<Repl<Child>, ReplError> {
+        let mut child = Child::spawn(&program, &["--engine"])?;
+        child.limit(timeout, memory);
+        Repl::start(child, args)
+    }
+
+    /// [`Child::limit`]: a reply above the limits loses the session
+    /// ([`Status::Lost`]), which a new child replays. After an accepted
+    /// cell that leaves the child above `memory`, a new child replays the
+    /// log too.
+    pub fn limit(&mut self, timeout: Option<Duration>, memory: Option<u64>) {
+        self.compiler.limit(timeout, memory);
+    }
 }
 
-// Answer::from_msg takes the parts in this order
+// answer takes the parts in this order
 const _: () = assert!(sys::sc_part::SC_DIAGS == 0 && sys::sc_part::SC_SO == 1 && sys::sc_part::SC_SYMS == 2);

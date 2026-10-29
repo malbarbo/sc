@@ -1,14 +1,49 @@
-//! A cell from source to run: the compiler in its child ([`sc::engine::Repl`])
-//! makes the cell a shared object, and the loader, which lives as long as the
+//! A cell from source to run: the compiler ([`crate::engine::Repl`]) makes
+//! the cell a shared object, and the loader, which lives as long as the
 //! REPL, loads it on top of the cells before. Loading runs the cell's
-//! statements at the top level, which the session's incremental mode accepts.
-use sc::engine::{Answer, Repl, Status};
-use crate::{pack, show};
-use sc::loader::native::Wasmtime;
-use sc::loader::{source_name, Error, Frame, Lib, Loader, TrapKind, Val, STACK};
-use std::io::IsTerminal;
-use std::time::Duration;
-use wasmtime_wasi::WasiCtxBuilder;
+//! statements at the top level, which the session's incremental mode
+//! accepts. Where the compiler and the code run is the [`Platform`]'s: the
+//! native `sc` has the compiler in a child and wasmtime; sc.wasm, the
+//! session in the same module and the host's primitives.
+use crate::engine::{Answer, Compiler, Repl, Status};
+use crate::loader::runtime::Runtime;
+use crate::loader::{self, source_name, Error, Frame, Lib, Loader, TrapKind, Val, STACK};
+use std::io;
+
+mod show;
+
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// Where the engine sees the pack, as the session's arguments name it
+/// (scripts/flags.py, PACK).
+pub const ROOT: &str = "/sc";
+
+/// What a machine needs of where it runs.
+pub trait Platform: Clone + Send + Sync + 'static {
+    type Compiler: Compiler;
+    type Runtime: Runtime;
+    /// A compiler without a session.
+    fn compiler(&self) -> io::Result<Self::Compiler>;
+    /// The runtime of the code, whose `main` sees `argv`. Only an
+    /// `interactive` one is stopped by Ctrl-C.
+    fn runtime(&self, argv: &[String], interactive: bool) -> loader::Result<Self::Runtime>;
+    /// The file of the pack at `path` from its root (`repl/c-on.args`).
+    fn read(&self, path: &str) -> Option<&'static [u8]>;
+    /// Whether the diagnostics have colors.
+    fn color(&self) -> bool;
+}
+
+/// The name of the command at the head of the input and what follows it, or
+/// none for code, which starts with `:` only as C++'s `::x`.
+pub fn split(input: &str) -> Option<(&str, &str)> {
+    let trimmed = input.trim();
+    if !trimmed.starts_with(':') || trimmed.starts_with("::") {
+        return None;
+    }
+    let end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+    let (name, arg) = trimmed.split_at(end);
+    Some((name, arg.trim_start()))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lang {
@@ -69,12 +104,13 @@ pub enum Outcome {
     Exit(i32),
 }
 
-pub struct Machine {
+pub struct Machine<P: Platform> {
+    platform: P,
     lang: Lang,
     safety: Safety,
     argv: Vec<String>,
-    repl: Repl,
-    loader: Loader,
+    repl: Repl<P::Compiler>,
+    loader: Loader<P::Runtime>,
     /// Cells loaded, which names each module for the loader.
     loaded: usize,
     /// The input Enter compiled to know it whole, and the answer, which the
@@ -82,24 +118,19 @@ pub struct Machine {
     pending: Option<(String, Answer)>,
 }
 
-/// How long a cell may take to compile, and how much memory the compiler
-/// may keep: above it, a new one replays the cells (PLANO-REPL.md §4).
-const TIMEOUT: Duration = Duration::from_secs(60);
-const MEMORY: u64 = 1 << 30;
-
-impl Machine {
+impl<P: Platform> Machine<P> {
     /// A session in `lang` at `safety`, whose programs see `argv`. One that
     /// is not `interactive` takes one cell, the whole program. Only an
     /// `interactive` one is stopped by Ctrl-C.
-    pub fn new(lang: Lang, safety: Safety, argv: Vec<String>, interactive: bool) -> crate::Result<Machine> {
+    pub fn new(platform: P, lang: Lang, safety: Safety, argv: Vec<String>, interactive: bool) -> Result<Machine<P>> {
         let file = if interactive { "" } else { "-file" };
         let args_file = format!("repl/{}-{}{file}.args", lang.name(), safety.name());
-        let mut args: Vec<String> = String::from_utf8_lossy(pack::read(&args_file).ok_or(format!("{args_file}: not in the pack"))?)
+        let mut args: Vec<String> = String::from_utf8_lossy(platform.read(&args_file).ok_or(format!("{args_file}: not in the pack"))?)
             .lines()
             .map(String::from)
             .collect();
         let link = args.iter().position(|a| a == "--").unwrap_or(args.len());
-        if crate::reader::color(std::io::stderr().is_terminal()) {
+        if platform.color() {
             args.insert(link, "-fcolor-diagnostics".into());
         }
         if !interactive {
@@ -107,21 +138,17 @@ impl Machine {
             // unused as a one-shot compile does
             args.insert(link, "-sc-one-cell".into());
         }
-        let repl = Repl::new(std::env::current_exe()?, args, Some(TIMEOUT), Some(MEMORY))?;
+        let repl = Repl::start(platform.compiler()?, args)?;
 
-        let mut wasi = WasiCtxBuilder::new();
-        wasi.inherit_stdio().inherit_env().args(&argv);
-        let libs = Box::new(|lib: &str| {
+        let p = platform.clone();
+        let libs = Box::new(move |lib: &str| {
             let path = format!("sysroot/lib/wasm32-wasip1/{lib}");
-            Some(Lib { wasm: pack::read(&path)?.into(), cwasm: pack::read(&format!("{path}.cwasm")) })
+            Some(Lib { wasm: p.read(&path)?.into(), cwasm: p.read(&format!("{path}.cwasm")) })
         });
-        let mut loader = Loader::new(Wasmtime::new(wasi.build_p1())?, libs, STACK)?;
+        let mut loader = Loader::new(platform.runtime(&argv, interactive)?, libs, STACK)?;
         loader.keep_stacks();
         loader.show();
-        if interactive {
-            loader.runtime().on_ctrl_c(sc::engine::interrupt);
-        }
-        Ok(Machine { lang, safety, argv, repl, loader, loaded: 0, pending: None })
+        Ok(Machine { platform, lang, safety, argv, repl, loader, loaded: 0, pending: None })
     }
 
     pub fn safety(&self) -> Safety {
@@ -130,20 +157,20 @@ impl Machine {
 
     /// Starts over, empty, at `safety`: the cells before would have to run
     /// again to be compiled at another level.
-    pub fn restart(&mut self, safety: Safety) -> crate::Result<()> {
-        *self = Machine::new(self.lang, safety, self.argv.clone(), true)?;
+    pub fn restart(&mut self, safety: Safety) -> Result<()> {
+        *self = Machine::new(self.platform.clone(), self.lang, safety, self.argv.clone(), true)?;
         Ok(())
     }
 
     /// Compiles `src` without running it: whether the compiler accepted it.
-    pub fn compile(&mut self, src: &str) -> crate::Result<bool> {
+    pub fn compile(&mut self, src: &str) -> Result<bool> {
         let a = self.repl.cell(src.as_bytes())?;
         eprint!("{}", a.diags);
         Ok(a.status == Status::Ok)
     }
 
     /// Writes the type of `expr` without running it: whether it is one.
-    pub fn type_of(&mut self, expr: &str) -> crate::Result<bool> {
+    pub fn type_of(&mut self, expr: &str) -> Result<bool> {
         let a = self.repl.type_of(expr.as_bytes())?;
         eprint!("{}", a.diags);
         match a.syms.first() {
@@ -156,13 +183,13 @@ impl Machine {
     /// What Enter does with `input`, the caret at `cursor`, as the compiler
     /// sees it. With the caret at the end (or in an input of one line), it
     /// runs the input unless the input stops short: a bracket or a comment
-    /// left open, or an error where it ends ([`sc::engine::Mode::Whole`]: a
+    /// left open, or an error where it ends ([`crate::engine::Mode::Whole`]: a
     /// declaration without its `;`, a function's header without its body).
     /// A blank line runs any input with no bracket open, for the compiler to
     /// say what is wrong with it. With the caret back in an input of several
     /// lines, Enter opens a line there.
     pub fn enter(&mut self, input: &str, cursor: usize) -> Enter {
-        if crate::shell::split(input).is_some() || input.trim().is_empty() {
+        if split(input).is_some() || input.trim().is_empty() {
             return Enter::Run;
         }
         if self.pending.as_ref().is_some_and(|(p, _)| p == input) {
@@ -192,7 +219,7 @@ impl Machine {
     }
 
     /// Compiles `src` (unless Enter did) and runs it.
-    pub fn cell(&mut self, src: &str) -> crate::Result<Outcome> {
+    pub fn cell(&mut self, src: &str) -> Result<Outcome> {
         let a = match self.pending.take() {
             Some((p, a)) if p == src => a,
             _ => self.repl.cell(src.as_bytes())?,
@@ -214,7 +241,7 @@ impl Machine {
 
     /// Undoes the last accepted cell in the compiler: its names can be
     /// defined again. What its code did stays done.
-    pub fn undo(&mut self) -> crate::Result<bool> {
+    pub fn undo(&mut self) -> Result<bool> {
         let a = self.repl.undo()?;
         eprint!("{}", a.diags);
         Ok(a.status == Status::Ok)
@@ -284,7 +311,7 @@ impl Machine {
 
     /// Runs `f` on the loader: what it printed is flushed, and a trap is
     /// told and leaves the loader ready for the next cell.
-    fn exec(&mut self, f: impl FnOnce(&mut Loader) -> sc::loader::Result<()>) -> Outcome {
+    fn exec(&mut self, f: impl FnOnce(&mut Loader<P::Runtime>) -> loader::Result<()>) -> Outcome {
         let sp = self.loader.stack_pointer();
         let r = f(&mut self.loader);
         if let Err(Error::Exit(c)) = r {
@@ -315,7 +342,7 @@ impl Machine {
 }
 
 /// What stopped the code, and where: the frames of the student's code.
-fn runtime_error(e: &Error, loader: &mut Loader) -> String {
+fn runtime_error<R: Runtime>(e: &Error, loader: &mut Loader<R>) -> String {
     let msg = message(e, loader);
     let library = !msg.is_empty() && msg != "aborted";
     let mut out: Vec<String> = Some(msg).filter(|m| !m.is_empty()).into_iter().collect();
@@ -337,7 +364,7 @@ fn runtime_error(e: &Error, loader: &mut Loader) -> String {
 
 /// What stopped the code; empty when libsc_rt has said it (a check of
 /// UBSan or of libc++'s hardening, rt/sc_rt.c).
-fn message(e: &Error, loader: &mut Loader) -> String {
+fn message<R: Runtime>(e: &Error, loader: &mut Loader<R>) -> String {
     let t = match e {
         Error::Trap(t) => t,
         Error::Fail(m) => return format!("error: {m}"),
@@ -379,10 +406,10 @@ fn message(e: &Error, loader: &mut Loader) -> String {
 /// stopped it, which says it was called). A frame repeated in a row, as in
 /// a recursion, comes once, with how many times; a cycle of 2 to 4 frames
 /// too. A long list keeps its start and its end.
-fn frames(fs: &[Frame], loader: &Loader, library: bool) -> Vec<String> {
+fn frames<R: Runtime>(fs: &[Frame], loader: &Loader<R>, library: bool) -> Vec<String> {
     // the headers' code, compiled in the cell, is from the pack; the
     // compiler-rt in libc++.so from wasi-sdk's build, without -ffile-prefix-map
-    let pack = format!("{}/", pack::ROOT);
+    let pack = format!("{ROOT}/");
     let theirs = [pack.as_str(), "/src/src/llvm-project/", "/src/build/"];
     // (function, where in the student's code), inlined functions first
     let entries = fs.iter().flat_map(|f| {

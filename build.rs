@@ -1,10 +1,10 @@
-// The bindings of engine/sc.h, and with the engine feature the arguments
-// that link the engine into sc and the tests (scripts/link.py --emit-link):
-// the file SC_LINK_ARGS names, else build/link-session-cut/engine.args, the
-// cut engine. Without SC_LINK_ARGS and outside make, make sc-deps builds it
-// and what sc reads at run time, so that cargo build alone makes sc. And the
-// pack sc embeds (PLANO-REPL.md §5.4), $OUT_DIR/sc.sqfs, also with the wasm
-// feature.
+// The bindings of engine/sc.h (the machine feature), and with the engine
+// feature the arguments that link the engine into sc and the tests
+// (scripts/link.py --emit-link): the file SC_LINK_ARGS names, else
+// build/link-session-cut/engine.args, the cut engine. Without SC_LINK_ARGS
+// and outside make, make sc-deps builds it and what sc reads at run time, so
+// that cargo build alone makes sc. And the pack sc embeds (PLANO-REPL.md
+// §5.4), $OUT_DIR/sc.sqfs, also with the wasm feature.
 use std::{env, fs, path::PathBuf, process::Command};
 #[cfg(feature = "engine")]
 use std::{collections::BTreeMap, io::Cursor, path::Path};
@@ -18,21 +18,27 @@ fn main() {
     // cargo watches build.rs anyway: this only keeps it from running again
     // on a change to any file of the package, as it does when nothing is said
     println!("cargo:rerun-if-changed=build.rs");
-    if env::var_os("CARGO_FEATURE_ENGINE").is_none() {
+    if env::var_os("CARGO_FEATURE_MACHINE").is_none() {
         return;
     }
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let header = root.join("engine/sc.h");
     println!("cargo:rerun-if-changed={}", header.display());
-    #[cfg(feature = "engine")]
+    // for the target: sc.wasm's Rust is wasm32-wasip1 (wasm/), where clang
+    // hides what it declares, and bindgen leaves out hidden functions
+    #[cfg(feature = "machine")]
     bindgen::Builder::default()
         .header(header.to_str().unwrap())
+        .clang_args([format!("--target={}", env::var("TARGET").unwrap()), "-fvisibility=default".into()])
         .allowlist_item("sc_.*|SC_.*")
         .default_enum_style(bindgen::EnumVariation::ModuleConsts)
         .generate()
         .expect("bindgen engine/sc.h")
         .write_to_file(PathBuf::from(env::var("OUT_DIR").unwrap()).join("sc.rs"))
         .unwrap();
+    if env::var_os("CARGO_FEATURE_ENGINE").is_none() {
+        return;
+    }
     #[cfg(feature = "engine")]
     pack(&root, &PathBuf::from(env::var("OUT_DIR").unwrap()).join("sc.sqfs"));
 

@@ -11,7 +11,7 @@ crate-type = ["staticlib"]
 path = "lib.rs"
 
 [dependencies]
-sc = { path = "..", default-features = false }
+sc = { path = "..", default-features = false, features = ["machine"] }
 
 [profile.release]
 opt-level = "s"

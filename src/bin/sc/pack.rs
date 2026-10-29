@@ -14,9 +14,7 @@ use std::sync::{Mutex, OnceLock};
 
 static PACK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sc.sqfs"));
 
-/// Where the engine sees the pack, as the arguments name it
-/// (scripts/flags.py, PACK).
-pub const ROOT: &str = "/sc";
+use sc::machine::ROOT;
 
 enum Entry {
     /// The node and the size.

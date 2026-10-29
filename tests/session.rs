@@ -4,7 +4,7 @@
 //!
 //! One test of the engine in this process: it stays on the first thread that
 //! uses it. The REPL's side (Repl) goes through children (sc --engine).
-use sc::engine::{main, Error, Mode, Repl, Session, Status};
+use sc::engine::{main, Child, Error, Mode, Repl, Session, Status};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::{fs, io::Write};
@@ -132,7 +132,7 @@ fn session() {
 fn repl() {
     let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
     let mut sos = vec![];
-    fn cell(r: &mut Repl, sos: &mut Vec<Vec<u8>>, src: &str) -> sc::engine::Answer {
+    fn cell(r: &mut Repl<Child>, sos: &mut Vec<Vec<u8>>, src: &str) -> sc::engine::Answer {
         let a = r.cell(src.as_bytes()).unwrap();
         if a.status == Status::Ok {
             sos.push(a.so.clone());

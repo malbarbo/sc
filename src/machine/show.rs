@@ -2,7 +2,7 @@
 //! session turns into a call to `__sc_show_int` or `__sc_show_float`
 //! (`enum sc_show` in engine/sc.h). It is written as clang-repl writes it:
 //! the type, then the value, as in `(int) 3`.
-use sc::engine::sys::sc_show as kind;
+use crate::engine::sys::sc_show as kind;
 
 /// The longest string shown.
 const MAX: usize = 1000;

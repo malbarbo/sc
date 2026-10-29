@@ -23,14 +23,14 @@
 //! read the pack too.
 
 mod config;
-mod machine;
 mod pack;
+mod platform;
 mod reader;
 mod shell;
-mod show;
 
 use bpaf::{Bpaf, Parser};
-use machine::{Lang, Machine, Outcome, Safety};
+use platform::{Machine, Native};
+use sc::machine::{Lang, Outcome, Safety};
 use sc::engine::{Repl, Status};
 use std::fs;
 use std::io::{self, Write};
@@ -258,7 +258,7 @@ fn read(file: &Path) -> Result<String> {
 fn repl(lang: Option<Lang>, safety: Safety, quiet: bool, file: Option<&Path>) -> Result<i32> {
     let lang = lang_of(lang, file);
     let src = file.map(read).transpose()?;
-    let mut machine = Machine::new(lang, safety, vec![NAME.into()], true)?;
+    let mut machine = Machine::new(Native, lang, safety, vec![NAME.into()], true)?;
     if !quiet {
         print!("{}", shell::welcome_message(lang, safety));
     }
@@ -277,7 +277,7 @@ fn repl(lang: Option<Lang>, safety: Safety, quiet: bool, file: Option<&Path>) ->
 fn run(lang: Option<Lang>, safety: Safety, file: &Path, args: Vec<String>) -> Result<i32> {
     let src = read(file)?;
     let argv = std::iter::once(file.display().to_string()).chain(args).collect();
-    let mut machine = Machine::new(lang_of(lang, Some(file)), safety, argv, false)?;
+    let mut machine = Machine::new(Native, lang_of(lang, Some(file)), safety, argv, false)?;
     match machine.cell(&src)? {
         Outcome::Ok => {}
         Outcome::Error => return Ok(1),
@@ -292,6 +292,6 @@ fn run(lang: Option<Lang>, safety: Safety, file: &Path, args: Vec<String>) -> Re
 
 fn check(lang: Option<Lang>, safety: Safety, file: &Path) -> Result<i32> {
     let src = read(file)?;
-    let mut machine = Machine::new(lang_of(lang, Some(file)), safety, vec![NAME.into()], false)?;
+    let mut machine = Machine::new(Native, lang_of(lang, Some(file)), safety, vec![NAME.into()], false)?;
     Ok(if machine.compile(&src)? { 0 } else { 1 })
 }

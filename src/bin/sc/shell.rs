@@ -1,5 +1,6 @@
 //! The REPL's loop and its `:` commands, as in sgleam and spython.
-use crate::machine::{Lang, Machine, Outcome, Safety};
+use crate::platform::Machine;
+use sc::machine::{split, Lang, Outcome, Safety};
 use std::sync::{Arc, Mutex};
 use crate::reader::{Reader, Theme};
 use crate::{config, Result};
@@ -23,18 +24,6 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     (":safety", "[off|on|strict]", "Show or switch how much the compiler checks (starts over, empty)"),
     (":theme", "[light|dark]", "Show or switch the theme"),
 ];
-
-/// The name of the command at the head of the input and what follows it, or
-/// none for code, which starts with `:` only as C++'s `::x`.
-pub fn split(input: &str) -> Option<(&str, &str)> {
-    let trimmed = input.trim();
-    if !trimmed.starts_with(':') || trimmed.starts_with("::") {
-        return None;
-    }
-    let end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
-    let (name, arg) = trimmed.split_at(end);
-    Some((name, arg.trim_start()))
-}
 
 /// The REPL until the end of the input, `:quit` or an `exit`: the status.
 pub fn run(machine: Machine) -> Result<i32> {

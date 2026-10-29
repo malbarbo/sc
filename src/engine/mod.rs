@@ -1,13 +1,13 @@
 //! The engine's API (`engine/sc.h`, PLANO-REPL.md §2) for Rust.
 //!
 //! [`sys`] is what bindgen generates from the header: the protocol's types
-//! and the raw functions. [`wire`] reads and writes the protocol's messages,
-//! and [`Child`] and [`Repl`] are the REPL's side of it: the engine in a
-//! child process and the log that replays a lost session.
+//! and the raw functions. [`wire`] reads and writes the protocol's messages.
+//! [`Repl`] is the log that replays a lost session over a [`Compiler`]:
+//! with the `engine` feature, [`Child`], the engine in a child process.
 //!
-//! The engine is linked (the `engine` feature), and [`Session`] and
-//! [`main`] are a safe API over the raw functions, and [`serve`] the child's
-//! side of the protocol:
+//! [`Session`] and [`main`] are a safe API over the raw functions of the
+//! engine linked in (in `sc`, or in sc.wasm with the loader), and, with the
+//! `engine` feature, [`serve`] is the child's side of the protocol:
 //!
 //! - a [`Reply`] borrows its session, so the engine's buffers it points to
 //!   cannot be used after the next call, which replaces them;
@@ -110,8 +110,12 @@ impl Mode {
 }
 
 pub mod wire;
+mod repl;
+pub use repl::*;
+#[cfg(feature = "engine")]
 mod child;
-pub use child::{interrupt, Answer, Child, Repl, ReplError};
+#[cfg(feature = "engine")]
+pub use child::{interrupt, Child};
 
 mod session;
 #[cfg(feature = "wasm")]

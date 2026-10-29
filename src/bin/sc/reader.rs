@@ -15,7 +15,8 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::machine::{Enter, Machine};
+use crate::platform::Machine;
+use sc::machine::Enter;
 
 /// What one level of indentation is worth, in spaces.
 const INDENT: usize = 4;
