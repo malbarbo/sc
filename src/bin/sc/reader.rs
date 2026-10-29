@@ -16,10 +16,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::platform::Machine;
-use sc::machine::Enter;
+use sc::machine::{Enter, INDENT};
 
-/// What one level of indentation is worth, in spaces.
-const INDENT: usize = 4;
 
 pub struct Reader {
     // `next` takes the editor to read and gives it back, except on the read

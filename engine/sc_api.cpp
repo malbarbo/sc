@@ -283,6 +283,10 @@ __attribute__((noinline)) int recover(sc_session *s) {
 }
 } // namespace
 
+int sc_session_restore(sc_session *s) { return recover(s); }
+
+void sc_session_snapshot(int on) { Snapping = on; }
+
 int sc_session_recover(sc_session *s) {
   // the stack of the call that stopped is gone: from its top again, before
   // this function's frame (it has none)

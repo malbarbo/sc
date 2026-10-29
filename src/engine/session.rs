@@ -173,7 +173,14 @@ impl Session {
         self.reply(st)
     }
 
-    fn reply(&self, st: c_int) -> Reply<'_> {
+    /// The engine's session, for a caller of the raw functions (the
+    /// machine inside sc.wasm calls `sc_session_cell` through its host).
+    pub fn as_raw(&self) -> *mut sys::sc_session {
+        self.raw.as_ptr()
+    }
+
+    /// The result of the last call, which said `st`.
+    pub fn reply(&self, st: c_int) -> Reply<'_> {
         Reply { session: self, status: Status::from_raw(st as u32) }
     }
 

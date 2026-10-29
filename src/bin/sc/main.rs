@@ -30,7 +30,7 @@ mod shell;
 
 use bpaf::{Bpaf, Parser};
 use platform::{Machine, Native};
-use sc::machine::{Lang, Outcome, Safety};
+use sc::machine::{check, lang_of, run, source, Lang, Outcome, Safety};
 use sc::engine::{Repl, Status};
 use std::fs;
 use std::io::{self, Write};
@@ -226,8 +226,8 @@ fn sc() -> ExitCode {
         // not a command lists the commands and does not run as a file.
         Command::Help { command: Some(name) } => return show_help(command().to_options(), &[&name, "--help"]),
         Command::Repl { lang, safety, quiet, file } => repl(lang, safety, quiet, file.as_deref()),
-        Command::Run { lang, safety, file, args } => run(lang, safety, &file, args),
-        Command::Check { lang, safety, file } => check(lang, safety, &file),
+        Command::Run { lang, safety, file, args } => run(Native, lang, safety, &file, args),
+        Command::Check { lang, safety, file } => check(Native, lang, safety, &file),
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),
@@ -240,24 +240,9 @@ fn sc() -> ExitCode {
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// The language of `file`: `-x`, else its extension.
-fn lang_of(lang: Option<Lang>, file: Option<&Path>) -> Lang {
-    lang.unwrap_or_else(|| match file.and_then(Path::extension).and_then(|e| e.to_str()) {
-        Some("cpp" | "cc" | "cxx" | "C") => Lang::Cxx,
-        _ => Lang::C,
-    })
-}
-
-/// The source of `file`, which the diagnostics name after it (`#line`).
-fn read(file: &Path) -> Result<String> {
-    let src = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    let name = file.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
-    Ok(format!("#line 1 \"{name}\"\n{src}"))
-}
-
 fn repl(lang: Option<Lang>, safety: Safety, quiet: bool, file: Option<&Path>) -> Result<i32> {
     let lang = lang_of(lang, file);
-    let src = file.map(read).transpose()?;
+    let src = file.map(source).transpose()?;
     let mut machine = Machine::new(Native, lang, safety, vec![NAME.into()], true)?;
     if !quiet {
         print!("{}", shell::welcome_message(lang, safety));
@@ -272,26 +257,4 @@ fn repl(lang: Option<Lang>, safety: Safety, quiet: bool, file: Option<&Path>) ->
         }
     }
     shell::run(machine)
-}
-
-fn run(lang: Option<Lang>, safety: Safety, file: &Path, args: Vec<String>) -> Result<i32> {
-    let src = read(file)?;
-    let argv = std::iter::once(file.display().to_string()).chain(args).collect();
-    let mut machine = Machine::new(Native, lang_of(lang, Some(file)), safety, argv, false)?;
-    match machine.cell(&src)? {
-        Outcome::Ok => {}
-        Outcome::Error => return Ok(1),
-        Outcome::Exit(code) => return Ok(machine.exit(code)),
-    }
-    Ok(match machine.main() {
-        Outcome::Ok => machine.exit(0),
-        Outcome::Error => 134,
-        Outcome::Exit(code) => machine.exit(code),
-    })
-}
-
-fn check(lang: Option<Lang>, safety: Safety, file: &Path) -> Result<i32> {
-    let src = read(file)?;
-    let mut machine = Machine::new(Native, lang_of(lang, Some(file)), safety, vec![NAME.into()], false)?;
-    Ok(if machine.compile(&src)? { 0 } else { 1 })
 }

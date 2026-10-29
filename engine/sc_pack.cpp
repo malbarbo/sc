@@ -105,6 +105,9 @@ extern "C" sqfs_decompressor sqfs_decompressor_get(sqfs_compression_type) {
 // the pack, as sc_set_files at root (scripts/flags.py, PACK)
 extern "C" __attribute__((export_name("sc_pack"))) void sc_pack(const char *root) {
   static sc_files F;
+  // the host or the machine inside (wasm/lib.rs), whichever comes first
+  if (F.root)
+    return;
   if (sqfs_init(&Fs, 0, 0))
     abort();
   Root = root;
@@ -121,6 +124,10 @@ extern "C" __attribute__((export_name("sc_pack"))) void sc_pack(const char *root
   F.list = [](const char *path, unsigned long long *size) { return of(path, true, size); };
   sc_set_files(&F);
 }
+
+// a file of the pack, a path under its root, for the machine inside
+// (wasm/lib.rs); kept as sc_files' read keeps it
+extern "C" const char *sc_pack_read(const char *path, unsigned long long *size) { return of(path, false, size); }
 
 // where the image is in the memory, and its size
 extern "C" __attribute__((export_name("sc_pack_image"))) const unsigned char *sc_pack_image(unsigned *size) {

@@ -53,7 +53,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-split-node test-split-node-rs test-session-node test-aluno test-checks test-dist repl sc-deps test-loader dist clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-split-node test-split-node-rs test-aluno-node-rs test-session-node test-aluno test-checks test-dist repl sc-deps test-loader dist clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -339,6 +339,13 @@ test-split-node: $(B)/sc $(SCLOAD) $(B)/res/native-base/summary.json
 # with only the host's primitives (test/node/wasm.mjs)
 test-split-node-rs: $(B)/sc $(B)/sc.wasm $(SCLOAD) $(B)/res/native-base/summary.json
 	SCLOAD=test/node/scload-rs test/split.py $(B)/sc $(B)/res/split-node-rs
+
+# test-aluno with sc inside sc.wasm (the machine, wasm/lib.rs's sc_cli), on
+# Node with only the host's primitives (test/node/sc-rs). test/checks.py
+# test/node/sc-rs differs only in the frames, which the host's do not tie to
+# an instance (ANALISE.md §66)
+test-aluno-node-rs: $(B)/sc.wasm
+	test/aluno.py test/node/sc-rs
 
 # the same slices with the child on Node (test/node, PLANO-REPL.md §5.5): a
 # snapshot of the memory in place of the fork, and the JS loader. With 300

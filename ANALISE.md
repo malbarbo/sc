@@ -4851,3 +4851,75 @@ Copia-se só o heap acima da imagem do pacote: +7 MB no C, +30 MB no
 C++ (o protótipo, com o buffer no heap e 25% de folga, chegava a +37
 MB). A cópia dentro do wasm (`memcpy`) custa menos que a do JS. O
 nativo segue com o `fork`.
+
+## 66. A `Machine` dentro do `sc.wasm`
+
+**O passo.** A `Machine` saiu do binário `sc` para a biblioteca
+(`src/machine.rs`, a feature `machine`). Ela é genérica numa `Platform`,
+que dá o compilador, o runtime do código, os arquivos do pacote e as
+cores:
+- no `sc` nativo (`src/bin/sc/platform.rs`), o filho com `fork`, o
+  wasmtime e o pacote embutido;
+- no `sc.wasm` (`wasm/lib.rs`), a sessão no próprio módulo com a cópia do
+  §65 ligada (`sc_session_snapshot`), as primitivas do host e o pacote do
+  módulo (`sc_pack_read`).
+
+O `Repl` (o log que repassa uma sessão perdida) ficou genérico num
+`Compiler`; o `Child` é um deles. O lado do filho no protocolo, que usa
+`fork`, foi para `src/engine/session/serve.rs`, e a API do engine compila
+para wasm32-wasip1. O bindgen roda para o alvo, com `-fvisibility=default`:
+o clang do wasm esconde o que declara, e o bindgen descarta as funções
+escondidas.
+
+O laço do REPL (`sc::machine::shell`) também é um só: o `sc` nativo o lê
+com o rustyline e acrescenta o `:theme`; o `sc.wasm` o lê do stdin.
+
+**O trap do compilador.** Com a `Machine` dentro, um trap ou um `exit` do
+clang desfaria também os quadros dela: o host só vê a chamada de fora, e
+não queremos que ele saiba do sc. A `Machine` chama então a célula
+*através do host*: `wasm_call` sobre o próprio `sc_session_cell` do
+módulo. Para isso há uma primitiva genérica a mais: em `wasm_export`, a
+instância 0 é o módulo que importa as primitivas. O trap volta como erro
+ao `wasm_call`, e os quadros da `Machine`, acima dos da célula, seguem
+vivos. `sc_session_restore` põe a memória de volta sem mexer no
+`__stack_pointer`, e o epílogo de quem chamou o restaura.
+
+Um cuidado: a cópia tem de voltar antes de qualquer alocação. O erro que
+o `Host::call` monta (a mensagem e os quadros) fica no heap, e voltar a
+memória depois o liberaria por baixo; o primeiro teste deu acesso fora da
+memória. O `Local` usa `host::call`, que não aloca, volta a cópia e só
+então lê o erro.
+
+**Os exports.**
+- `sc_cli`: o `sc` com os argumentos do WASI (`[-q] [-x LANG] [--safety
+  LEVEL] [FILE [ARG]...]`). Com um arquivo, roda o programa; sem, o REPL
+  no stdin, como o rustyline do `sc` o lê sem terminal.
+  `test/node/sc-rs` o chama no Node só com o `wasm.mjs`.
+- `repl_new`, `repl_run`, `repl_ready`, `repl_destroy`,
+  `string_allocate` e `string_deallocate`: a API do `ENGINE.md` do
+  simplecode, com a configuração `lang=c|c++ safety=… color=0|1`.
+
+**As baterias.**
+- `test/aluno.py test/node/sc-rs`: 66 execuções, iguais ao
+  `expected.txt`.
+- `test/checks.py test/node/sc-rs`: diferem só os quadros (`at f
+  (arquivo:linha:coluna)`, "the block was freed …"). O resto sai igual,
+  e a célula que derruba o clang (`compiler-crash.c.repl`) também. Os
+  quadros do V8 dizem a função e o deslocamento, mas não a instância, e o
+  `Loader::symbols` acha o DWARF pela instância. É o item aberto dos
+  quadros no navegador. O `wasm.mjs` agora tira dos nomes o
+  `<módulo>.` que o V8 põe na frente e aceita nomes de C++ com espaços,
+  e assim acha o `__sc_rt_report` (antes saía "aborted").
+
+No nativo, `test-split`, `test-session`, `test-aluno`, `test-checks`,
+`test-proto` e `test-loader` passam, e também `test-split-wasm`,
+`test-session-wasm` e `test-split-node-rs`. `make test-aluno-node-rs`
+roda a primeira bateria acima.
+
+**O tempo** ainda não foi medido: a máquina estava com load 100–550.
+Cada execução do `sc-rs` compila o `sc.wasm` inteiro no Node, como o
+`scload-rs` (§64).
+
+**O tamanho.** O `sc.wasm` vai de 39,34 MB (§64) para 39,55 MB (+202 KB);
+com zstd -19, 7,67 → 7,74 MB. O `gimli` e o `addr2line` entram agora,
+porque a `Machine` lê o DWARF.

@@ -3,8 +3,11 @@
 // sc.wasm's loader does (src/loader/host.rs, which says what each does).
 // Nothing here knows sc: a host such as simplecode's gives the same.
 //
-// Handles are numbers from 1, never reused. A module's import of the
-// default (0) is WASI on the memory it imports, or `env.wasm_stack`. WASI's
+// Handles are numbers from 1, never reused; the instance 0 is the module
+// bound, the one that imports the primitives: a call of its own export
+// through wasm_call comes back with what stopped it, as any other. A
+// module's import of the default (0) is WASI on the memory it imports, or
+// `env.wasm_stack`. WASI's
 // proc_exit and a trap the host makes stop the code with a trap of a module
 // of its own, which wasm code cannot catch (a JS exception would run the
 // C++ cleanups); the call says EXIT.
@@ -33,6 +36,7 @@ const TRAPS = [
 export function wasmApi(wasi) {
   const handles = [null];
   let engine = null; // the memory of the module that imports the primitives
+  let self = null; // and its instance
   let error = '';
   let frames = ''; // of the last trap
   let exit = null; // the code of a proc_exit
@@ -55,10 +59,16 @@ export function wasmApi(wasi) {
     return b.length;
   };
 
-  /// the wasm frames of a JS stack, as host.rs reads them
+  /// the wasm frames of a JS stack, as host.rs reads them. V8 writes a
+  /// function as `<module>.<name>`, the module's name from its name section
+  /// (in the URL, before `-<hash>`), and the name demangled, with spaces
   function wasmFrames(stack) {
-    const fs = [...(stack ?? '').matchAll(/^\s*at (?:(\S+) )?\(?wasm:\/\/wasm\/[^:]*:wasm-function\[\d+\]:0x([0-9a-f]+)/gm)];
-    return fs.map((f) => `${f[2]} ${f[1] ?? ''}\n`).join('');
+    const re = /^\s*at (?:(.+) \()?wasm:\/\/wasm\/([^:]*):wasm-function\[\d+\]:0x([0-9a-f]+)\)?$/gm;
+    return [...(stack ?? '').matchAll(re)].map(([, name, url, off]) => {
+      const mod = /^(.*)-[0-9a-f]+$/.exec(url)?.[1];
+      if (name && mod !== undefined && name.startsWith(`${mod}.`)) name = name.slice(mod.length + 1);
+      return `${off} ${name ?? ''}\n`;
+    }).join('');
   }
 
   /// the status and detail of what a call or an instantiation threw
@@ -158,7 +168,7 @@ export function wasmApi(wasi) {
     },
 
     wasm_export(inst, p, len) {
-      const x = get(inst)?.exports?.[str(p, len)];
+      const x = (inst === 0 ? self : get(inst))?.exports?.[str(p, len)];
       return x === undefined ? 0 : put(x);
     },
 
@@ -224,6 +234,7 @@ export function wasmApi(wasi) {
     env,
     bind(instance) {
       engine = instance.exports.memory;
+      self = instance;
     },
   };
 }

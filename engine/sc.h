@@ -85,6 +85,12 @@ int sc_session_undo(sc_session *s);
    cell took, and SC_ERROR; SC_LOST if there is none (the host replays the
    log). The host calls it first, before any other export. */
 int sc_session_recover(sc_session *s);
+/* sc_session_recover for a caller whose frames are still there (the
+   machine inside sc.wasm, which called sc_session_cell through its host):
+   the memory back, the stack pointer as it is. */
+int sc_session_restore(sc_session *s);
+/* sc.wasm: whether sc_session_cell takes the copy, as SC_SNAPSHOT does. */
+void sc_session_snapshot(int on);
 /* The brackets src[0, len) leaves open, by the session's lexer, one more if
    it ends inside a comment or with a `\` that joins the next line: how far
    in the REPL starts the line Enter opens. It does not touch the session. */

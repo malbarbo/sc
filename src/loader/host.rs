@@ -6,7 +6,8 @@
 //!   are `n` [`Slot`]s, one for each import of the module in its order; the
 //!   host writes the handle of a global it made back into its slot, and the
 //!   instance into `*out`;
-//! - `wasm_export(inst, name, len) -> handle`, 0 if nothing;
+//! - `wasm_export(inst, name, len) -> handle`, 0 if nothing; `inst` 0 is
+//!   the module that imports the primitives (sc.wasm itself);
 //! - `wasm_call(func, sig, sig_len, vals) -> status`, as [`Runtime::call`];
 //! - `wasm_error(buf, cap) -> len`: the message of the last failure, or of
 //!   the last trap; `len` is its whole length;
@@ -95,7 +96,7 @@ fn frames(id: u32) -> Vec<Frame> {
 }
 
 /// What a status other than OK says, with its detail.
-fn error(status: i32, detail: u64) -> Error {
+pub fn error(status: i32, detail: u64) -> Error {
     match status {
         EXIT => Error::Exit(detail as i32),
         TRAP | STOP => {
@@ -105,6 +106,16 @@ fn error(status: i32, detail: u64) -> Error {
         }
         _ => Error::Fail(message()),
     }
+}
+
+/// `wasm_call` itself: the status, with the detail in `vals[0]`, which
+/// [`error`] reads. Nothing is allocated: the machine inside sc.wasm puts
+/// the memory back after a cell that trapped before it allocates.
+pub fn call(func: H, sig: &str, vals: &mut [u64]) -> i32 {
+    let (params, results) = sig.split_once(':').unwrap_or((sig, ""));
+    assert!(vals.len() >= params.len().max(results.len()).max(1), "{sig}: {} values", vals.len());
+    // SAFETY: vals has a slot for each parameter and result, and the detail
+    unsafe { wasm_call(func, sig.as_ptr(), sig.len(), vals.as_mut_ptr()) }
 }
 
 /// The host's primitives. The host keeps what they make: there is nothing
@@ -147,8 +158,7 @@ impl Runtime for Host {
         // the detail of a status needs a slot
         let mut one = [0];
         let vals = if vals.is_empty() { &mut one[..] } else { vals };
-        // SAFETY: vals has a slot for each parameter and result
-        match unsafe { wasm_call(func, sig.as_ptr(), sig.len(), vals.as_mut_ptr()) } {
+        match call(func, sig, vals) {
             OK => Ok(()),
             st => Err(error(st, vals[0])),
         }

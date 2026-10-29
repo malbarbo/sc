@@ -9,7 +9,9 @@ use crate::engine::{Answer, Compiler, Repl, Status};
 use crate::loader::runtime::Runtime;
 use crate::loader::{self, source_name, Error, Frame, Lib, Loader, TrapKind, Val, STACK};
 use std::io;
+use std::path::Path;
 
+pub mod shell;
 mod show;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -31,6 +33,49 @@ pub trait Platform: Clone + Send + Sync + 'static {
     fn read(&self, path: &str) -> Option<&'static [u8]>;
     /// Whether the diagnostics have colors.
     fn color(&self) -> bool;
+}
+
+/// What one level of indentation is worth, in spaces.
+pub const INDENT: usize = 4;
+
+/// The language of `file`: `-x`, else its extension.
+pub fn lang_of(lang: Option<Lang>, file: Option<&Path>) -> Lang {
+    lang.unwrap_or_else(|| match file.and_then(Path::extension).and_then(|e| e.to_str()) {
+        Some("cpp" | "cc" | "cxx" | "C") => Lang::Cxx,
+        _ => Lang::C,
+    })
+}
+
+/// The source of `file`, which the diagnostics name after it (`#line`).
+pub fn source(file: &Path) -> Result<String> {
+    let src = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let name = file.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
+    Ok(format!("#line 1 \"{name}\"\n{src}"))
+}
+
+/// `sc FILE ARG...`: runs the program, whose `main` sees the file and
+/// `args`. The exit code.
+pub fn run<P: Platform>(platform: P, lang: Option<Lang>, safety: Safety, file: &Path, args: Vec<String>) -> Result<i32> {
+    let src = source(file)?;
+    let argv = std::iter::once(file.display().to_string()).chain(args).collect();
+    let mut machine = Machine::new(platform, lang_of(lang, Some(file)), safety, argv, false)?;
+    match machine.cell(&src)? {
+        Outcome::Ok => {}
+        Outcome::Error => return Ok(1),
+        Outcome::Exit(code) => return Ok(machine.exit(code)),
+    }
+    Ok(match machine.main() {
+        Outcome::Ok => machine.exit(0),
+        Outcome::Error => 134,
+        Outcome::Exit(code) => machine.exit(code),
+    })
+}
+
+/// `sc check FILE`: 0 if the program compiles.
+pub fn check<P: Platform>(platform: P, lang: Option<Lang>, safety: Safety, file: &Path) -> Result<i32> {
+    let src = source(file)?;
+    let mut machine = Machine::new(platform, lang_of(lang, Some(file)), safety, vec!["sc".into()], false)?;
+    Ok(if machine.compile(&src)? { 0 } else { 1 })
 }
 
 /// The name of the command at the head of the input and what follows it, or
