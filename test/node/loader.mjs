@@ -1,10 +1,12 @@
 // The REPL's loader in JS (PLANO-REPL.md §5.5): src/loader.rs over the JS
 // API of WebAssembly, for Node and, later, a browser's worker. It loads
 // wasm shared objects the same way: one memory, one table and the stack
-// pointer for all modules, dylink.0 read from the bytes, GOT imports as
-// mutable globals set once the group is loaded, a stub that calls through
-// the table for a function not defined yet, and one exception tag for all
-// modules. See the comment at the top of src/loader.rs.
+// pointer for all modules, dylink.0 read from the bytes, a stub that calls
+// through the table for a function not defined yet, and one exception tag
+// for all modules. See the comment at the top of src/loader.rs. Unlike it,
+// each module is instantiated once with its GOT imports at their values,
+// which the bytes give (Loader.loadBytes), as a host that only instantiates
+// would need (ANALISE.md §60).
 //
 // What the JS API does not give, the bytes do: the type of an import (no
 // type reflection), and whether an exported global is a constant. A
@@ -55,6 +57,15 @@ class Reader {
   vec(f) {
     return Array.from({ length: this.u32() }, () => f());
   }
+  s32() {
+    let r = 0, s = 0, x;
+    do {
+      x = this.byte();
+      r |= (x & 0x7f) << s;
+      s += 7;
+    } while (x & 0x80);
+    return s < 32 && x & 0x40 ? r | (-1 << s) : r;
+  }
   /// skips a constant expression
   expr() {
     for (let op; (op = this.byte()) !== 0x0b;) {
@@ -73,10 +84,11 @@ class Reader {
 }
 
 /// What the loader needs of a module: the types of its function and tag
-/// imports, the mutability of its globals, and its dylink.0.
+/// imports, the mutability of its globals, the value of the constant ones
+/// (a data symbol's offset), and its dylink.0.
 function parse(bytes) {
   const r = new Reader(bytes, 8);
-  const m = { types: [], imports: [], globals: [], exports: new Map(), dylink: null };
+  const m = { types: [], imports: [], globals: [], consts: [], exports: new Map(), dylink: null };
   while (r.at < r.end) {
     const id = r.byte(), size = r.u32(), end = r.at + size;
     const s = new Reader(bytes, r.at, end);
@@ -93,7 +105,7 @@ function parse(bytes) {
         if (i.kind === 0) i.type = m.types[s.u32()];
         else if (i.kind === 1) s.byte(), s.limits();
         else if (i.kind === 2) s.limits();
-        else if (i.kind === 3) s.val(), m.globals.push(s.byte() === 1);
+        else if (i.kind === 3) s.val(), m.globals.push(s.byte() === 1), m.consts.push(null);
         else if (i.kind === 4) s.byte(), (i.type = m.types[s.u32()]);
         return i;
       });
@@ -101,6 +113,10 @@ function parse(bytes) {
       for (let n = s.u32(); n--;) {
         s.val();
         m.globals.push(s.byte() === 1);
+        const at = s.at;
+        m.consts.push(s.byte() === 0x41 ? s.s32() : null);
+        if (s.b[s.at] !== 0x0b) m.consts[m.consts.length - 1] = null;
+        s.at = at;
         s.expr();
       }
     } else if (id === 7) {
@@ -215,12 +231,12 @@ export class Loader {
     this.define('__stack_high', { kind: 'data', v: stack }, false);
   }
 
+  /// the symbol defined, or null when an older definition stays
   define(name, sym, shadow) {
-    if (shadow || !this.syms.has(name)) this.syms.set(name, { ...sym, slot: undefined });
-  }
-
-  defines(name) {
-    return this.syms.get(name)?.kind === 'func';
+    if (!shadow && this.syms.has(name)) return null;
+    const s = { ...sym, slot: undefined };
+    this.syms.set(name, s);
+    return s;
   }
 
   /// `__wrap_name` when a module defines it, `name` for `__real_name`
@@ -303,13 +319,15 @@ export class Loader {
     return k;
   }
 
-  /// stubs for the function imports of p with no definition yet: each
-  /// calls through the symbol's table slot
+  /// stubs for the function imports of p with no function yet: each calls
+  /// through the symbol's table slot, which a module of the group fills
+  /// once instantiated, or a later one
   stubs(p) {
-    const need = p.info.imports.filter((i) => i.module === 'env' && i.kind === 0 && !this.defines(this.target(i.name)));
+    const need = p.info.imports.filter((i) => i.module === 'env' && i.kind === 0 && !this.syms.get(this.target(i.name))?.v);
     if (!need.length) return new Map();
     const funcs = need.map((i, k) => {
-      const slot = this.reserveSlot(this.target(i.name), i.type);
+      const n = this.target(i.name);
+      const slot = this.syms.get(n)?.kind === 'func' ? this.slot(n) : this.reserveSlot(n, i.type);
       return [k, [...params(i.type), 0x41, ...sleb(slot), 0x11, ...leb(k), 0]];
     });
     const m = module({ types: need.map((i) => i.type), imports: [['env', 't', TABLE]], funcs });
@@ -326,12 +344,12 @@ export class Loader {
     return s.slot;
   }
 
-  /// what the modules before referred to and the group just loaded defines
+  /// what the modules before referred to and the group defines: a
+  /// function's slot is filled once its module is instantiated
   forward() {
     for (const [n, s] of this.slots) {
       const sym = this.syms.get(n);
       if (sym?.kind === 'func' && sym.slot === undefined) {
-        this.table.set(s, sym.v);
         sym.slot = s;
         this.slots.delete(n);
       }
@@ -349,21 +367,49 @@ export class Loader {
   }
 
   /// the module `name` and what it needs, with their constructors run.
-  /// shadow: its definitions replace the older ones (a REPL entry)
+  /// shadow: its definitions replace the older ones (a REPL entry).
+  /// Each module is instantiated once, with every import at its value:
+  /// the bytes give the layout, the data symbols and the functions the
+  /// group defines, whose slots are filled once their module is
+  /// instantiated. Only the GOT.mem of a variable not defined yet is set
+  /// later, when a module defines it.
   loadBytes(name, bytes, shadow) {
     const group = [];
     this.collect(name, bytes, new Set(), group);
     if (group.some((p) => p.info.exports.has('__asan_init'))) throw new Error("ASan's runtime: not in the JS loader yet");
-    const got = []; // name, global, func?, weak?
-    const insts = [];
-    const konst = (v) => new WebAssembly.Global({ value: 'i32', mutable: false }, v);
-    for (const p of group) {
-      const sh = shadow && p.name === name;
+    const fresh = group.map(() => []); // the functions each module defines: [name, symbol]
+    group.forEach((p, k) => {
       const d = p.info.dylink;
-      const memBase = this.alloc(d.memSize, 2 ** d.memAlign);
+      p.memBase = this.alloc(d.memSize, 2 ** d.memAlign);
       const size = this.table.length;
-      const tableBase = alignUp(size, 2 ** d.tableAlign);
-      this.table.grow(tableBase + d.tableSize - size);
+      p.tableBase = alignUp(size, 2 ** d.tableAlign);
+      this.table.grow(p.tableBase + d.tableSize - size);
+      for (const [n, e] of p.info.exports) {
+        if (INTERNAL.has(n)) continue;
+        // an inline function, a vtable or a typeinfo is one for all modules
+        const sh = shadow && p.name === name && !d.weakDef.has(n);
+        if (e.kind === 0) {
+          const s = this.define(n, { kind: 'func', v: null }, sh);
+          if (s) fresh[k].push([n, s]);
+        } else if (e.kind === 3 && !p.info.globals[e.index]) {
+          const off = p.info.consts[e.index];
+          if (off === null) throw new Error(`${p.name}: ${n}, a global that is not a constant`);
+          this.define(n, { kind: 'data', v: (p.memBase + off) >>> 0 }, sh);
+        }
+      }
+    });
+    if (this.bump !== null) {
+      // the heap starts after the first group and has the rest of its page
+      const base = alignUp(this.bump, 16);
+      this.reserve(base + 1);
+      this.define('__heap_base', { kind: 'data', v: base }, false);
+      this.define('__heap_end', { kind: 'data', v: this.memory.buffer.byteLength }, false);
+      this.bump = null;
+    }
+    this.forward();
+    const konst = (v) => new WebAssembly.Global({ value: 'i32', mutable: false }, v);
+    const insts = group.map((p, k) => {
+      const d = p.info.dylink;
       const stubs = this.stubs(p);
       const imports = {};
       for (const i of p.info.imports) {
@@ -372,16 +418,12 @@ export class Loader {
         if (m === 'env' && n === 'memory') v = this.memory;
         else if (m === 'env' && n === '__indirect_function_table') v = this.table;
         else if (m === 'env' && n === '__stack_pointer') v = this.sp;
-        else if (m === 'env' && n === '__memory_base') v = konst(memBase);
-        else if (m === 'env' && n === '__table_base') v = konst(tableBase);
-        else if ((m === 'GOT.mem' || m === 'GOT.func') && i.kind === 3) {
-          v = new WebAssembly.Global({ value: 'i32', mutable: true }, 0);
-          got.push([this.target(n), v, m === 'GOT.func', d.weak.has(n)]);
-        } else if (m === 'wasi_snapshot_preview1' && this.wasi[n]) v = this.wasi[n];
-        else if (m === 'env' && i.kind === 0) {
-          const s = this.syms.get(this.target(n));
-          v = s?.kind === 'func' ? s.v : stubs.get(n);
-        } else if (m === 'env' && i.kind === 4) {
+        else if (m === 'env' && n === '__memory_base') v = konst(p.memBase);
+        else if (m === 'env' && n === '__table_base') v = konst(p.tableBase);
+        else if ((m === 'GOT.mem' || m === 'GOT.func') && i.kind === 3) v = this.got(this.target(n), m === 'GOT.func', d.weak.has(n));
+        else if (m === 'wasi_snapshot_preview1' && this.wasi[n]) v = this.wasi[n];
+        else if (m === 'env' && i.kind === 0) v = this.syms.get(this.target(n))?.v ?? stubs.get(n);
+        else if (m === 'env' && i.kind === 4) {
           const s = this.syms.get(n);
           if (s?.kind === 'tag') v = s.v;
           else {
@@ -397,47 +439,36 @@ export class Loader {
       } catch (e) {
         throw new Error(`${p.name}: ${e.message}`);
       }
+      for (const [n, s] of fresh[k]) {
+        s.v = inst.exports[n];
+        if (s.slot !== undefined) this.table.set(s.slot, s.v);
+      }
       for (const [n, e] of Object.entries(inst.exports)) {
-        if (INTERNAL.has(n)) continue;
-        // an inline function, a vtable or a typeinfo is one for all modules
-        const s = sh && !d.weakDef.has(n);
-        if (typeof e === 'function') this.define(n, { kind: 'func', v: e }, s);
-        else if (e instanceof WebAssembly.Tag) this.define(n, { kind: 'tag', v: e }, false);
-        else if (e instanceof WebAssembly.Global && !p.info.globals[p.info.exports.get(n).index]) {
-          this.define(n, { kind: 'data', v: (memBase + e.value) >>> 0 }, s);
-        }
+        if (e instanceof WebAssembly.Tag) this.define(n, { kind: 'tag', v: e }, false);
       }
-      insts.push(inst);
-    }
-    this.forward();
-    if (this.bump !== null) {
-      // the heap starts after the first group and has the rest of its page
-      const base = alignUp(this.bump, 16);
-      this.reserve(base + 1);
-      this.define('__heap_base', { kind: 'data', v: base }, false);
-      this.define('__heap_end', { kind: 'data', v: this.memory.buffer.byteLength }, false);
-      this.bump = null;
-    }
-    for (const [n, g, func, weak] of got) {
-      const s = this.syms.get(n);
-      let v;
-      if (s?.kind === 'data' && !func) v = s.v;
-      else if (s?.kind === 'func' && func) v = this.slot(n);
-      else if (s) throw new Error(`${n}: GOT.${func ? 'func' : 'mem'} of a ${func ? 'data' : 'function'}`);
-      else if (weak) v = 0;
-      else if (func) v = this.reserveSlot(n, null);
-      else {
-        this.later.push([n, g]);
-        v = this.undefinedAddress(n);
-      }
-      g.value = v | 0;
-    }
+      return inst;
+    });
     group.forEach((p, k) => {
       this.loaded.add(p.name);
       const x = insts[k].exports;
       x.__wasm_apply_data_relocs?.();
       (x._initialize ?? x.__wasm_call_ctors)?.();
     });
+  }
+
+  /// a GOT entry at its value: an address or a table slot
+  got(n, func, weak) {
+    const s = this.syms.get(n);
+    let v;
+    if (s?.kind === 'data' && !func) v = s.v;
+    else if (s?.kind === 'func' && func) v = this.slot(n);
+    else if (s) throw new Error(`${n}: GOT.${func ? 'func' : 'mem'} of a ${func ? 'data' : 'function'}`);
+    else if (weak) v = 0;
+    else if (func) v = this.reserveSlot(n, null);
+    else v = this.undefinedAddress(n);
+    const g = new WebAssembly.Global({ value: 'i32', mutable: true }, v | 0);
+    if (!s && !weak && !func) this.later.push([n, g]);
+    return g;
   }
 
   /// main, then libc's exit

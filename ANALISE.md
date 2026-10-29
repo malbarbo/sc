@@ -4528,3 +4528,60 @@ que a deixa de fora custa o que custava.
 test-session-wasm`: 11.926 resultados, 0 ruins (40 conhecidos). `make
 test-session-node`: 11.926, 0 ruins (42). `make test-split-node`: 0
 diferenças (8). O motor nativo não mudou.
+
+## 60. Uma instanciação por módulo: o GOT calculado dos bytes
+
+**Por quê.** Para rodar o REPL no simplecode, a proposta é que o host dê à
+engine só primitivas genéricas para executar wasm, sem um JS próprio do
+sc. Um host assim instancia um módulo com os imports que recebe, e não
+deve precisar de mais nada. O loader escrevia os `GOT.mem` e `GOT.func`
+depois de instanciar o grupo (§57). A pergunta era se os valores podem
+ser conhecidos antes.
+
+**Sem PIC não dá.** Testei ligar uma célula estática com o `wasm-ld` do
+pin, com endereços fixos (`--import-memory --import-table --global-base
+--table-base --allow-undefined`). Três coisas impedem:
+- o endereço de um dado de outro módulo vira 0, sem aviso, e não há
+  `--defsym`; um símbolo absoluto em assembly (`.set x, 0x12340`) dá
+  `absolute addressing not supported!`;
+- o módulo define o próprio `__stack_pointer` em vez de importá-lo;
+- `&f` de uma função de outro módulo ganha uma posição na tabela da
+  própria célula, diferente da do módulo que a define.
+
+Seria preciso um patch no lld. O PIC fica.
+
+**Com PIC dá.** Num `.so`, os dados entram por segmentos ativos em
+`__memory_base`, e a tabela por um `elem` ativo em `__table_base`. Um
+símbolo de dado exportado é um global imutável `i32.const offset`. O
+`loadBytes` do `test/node/loader.mjs` agora tem duas fases:
+1. Só com os bytes: reserva a memória e a tabela de cada módulo do
+   grupo, define os dados (`__memory_base` + o `i32.const`) e o
+   `__heap_base`, e as funções ficam pendentes. A posição de uma função
+   na tabela pode ser dada antes da função existir.
+2. Instancia cada módulo uma vez, com cada entrada do GOT no valor
+   final, e enche as posições das suas funções na tabela.
+
+Só o `GOT.mem` de uma variável ainda não definida é escrito depois,
+quando um módulo a define, como antes.
+
+**Os stubs.** Uma importação de função que ainda não existe passa por um
+módulo de stubs, que chama pela tabela. Na bateria do `test-split-node`:
+
+| | carregados | com módulo de stubs |
+| --- | ---: | ---: |
+| células | 9.743 | 107 (1,1%) |
+| libc, libc++abi, libc++ | | todas |
+
+A libc importa as próprias funções exportadas (`clock_gettime`, `lseek`,
+`isalpha_l`...), a interposição de um `.so`. Antes de ela ser
+instanciada, só um stub serve. Isso é uma vez por sessão. Das 107
+células, 26 importam só funções delas mesmas, e as outras chamam uma
+função declarada e ainda não definida. O loader antigo fazia os mesmos
+stubs.
+
+**As baterias.** `make test-split-node`: 1.947 programas, 10.541 células,
+0 diferenças (8 conhecidos), em 39,0 s, contra 38,9 s do loader antigo,
+com a máquina carregada.
+`make test-session-node`: 11.926 resultados, 0 ruins (42 conhecidos),
+afora o `limits-externdecl`, que passou dos 120 s com a máquina cheia,
+como no §59, e passa sozinho em 61 s.
