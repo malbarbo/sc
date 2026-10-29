@@ -359,7 +359,7 @@ dist: $(SC_ENGINE_ARGS) $(PACK)
 # what the batteries do not reach: Ctrl-C, many exceptions (tests/), without
 # the engine
 test-loader:
-	cargo test --release $(CARGO) --no-default-features --lib --test signal --test exceptions
+	cargo test --release $(CARGO) --no-default-features --lib --test signal --test exceptions --test undo
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc
 # FILE`, in the pack's view. build.rs puts them in the pack sc embeds

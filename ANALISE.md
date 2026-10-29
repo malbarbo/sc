@@ -4585,3 +4585,54 @@ com a máquina carregada.
 `make test-session-node`: 11.926 resultados, 0 ruins (42 conhecidos),
 afora o `limits-externdecl`, que passou dos 120 s com a máquina cheia,
 como no §59, e passa sozinho em 61 s.
+
+## 61. O loader dentro do `sc.wasm` em Rust: o custo de ligar a std
+
+**A decisão.** No simplecode, o loader, a `Machine` e o `Repl` ficam
+dentro do `sc.wasm` e chamam só as primitivas genéricas do host (§60).
+Escolhemos Rust, não C++. O `sc` nativo já tem esse código em Rust sobre
+o wasmtime (`src/loader.rs`, `src/bin/sc/machine.rs`: cerca de 1.500
+linhas da frente do REPL), e poucos pontos tocam o wasmtime. Com um trait
+de runtime, o mesmo código serve aos dois hosts, e o sgleam, que é Rust,
+reaproveita os bindings da API. Em C++, o REPL teria duas
+implementações.
+
+**O risco medido.** Uma staticlib Rust (`wasm32-wasip1`, rustc 1.98.1,
+`opt-level="z"`, LTO, `panic="abort"`) com um leitor de seções wasm, que
+usa `Vec`, `String`, `HashMap`, `format!` e `eprintln!`, ligada ao
+engine pelo `SC_EXTRA` do `scripts/link.py`, com um export a mais:
+- liga sem conflito com a wasi-libc do wasi-sdk, e os imports do
+  `sc.wasm` não mudam;
+- a função lê o `libc++.so` dentro do `sc.wasm` no Node e conta 3.319
+  imports e exports, como o `wasm-tools`; o `eprintln!` sai pelo WASI do
+  engine.
+
+| | `sc.wasm` | zstd -19 |
+| --- | ---: | ---: |
+| sem Rust | 38.913.173 | 7.548.235 |
+| com a staticlib | 38.952.148 (+39 KB) | 7.564.854 (+17 KB) |
+
+A std do Rust não pesa. O loader de verdade vai somar o código dele, não
+uma std inteira.
+
+## 62. O loader nativo no modelo do §60
+
+Primeiro passo para pôr o loader atrás de um trait de runtime (§61): o
+`src/loader.rs` agora também instancia cada módulo uma vez, com o GOT nos
+valores finais, como o `test/node/loader.mjs`. O `dylink` lê dos bytes o
+`i32.const` dos globals imutáveis exportados. Uma função do grupo fica
+pendente (`Sym::Func(None)`) até o seu módulo ser instanciado, e então
+enche a sua posição na tabela. O `GOT.mem` de uma variável que só um
+módulo posterior define continua sendo escrito depois, quando ela vem.
+
+**A diferença do JS.** Se um módulo não instancia (uma importação com
+outro tipo), o que o grupo definiu a partir dos bytes é desfeito, e as
+posições reservadas que ele tomou voltam a ser reservadas. Sem isso, uma
+célula recusada deixaria funções pendentes no lugar das antigas. O
+`tests/undo.rs` cobre esse caso (no `make test-loader`) e falha sem o
+desfazer. O `loader.mjs` não desfaz.
+
+**As baterias.** `make test-split`: 1.947 programas, 10.541 células, 0
+diferenças (6 conhecidos). `make test-session`: 11.918 resultados, 0 ruins
+(38 conhecidos). `make test-aluno`, `make test-checks` (os níveis com o
+ASan) e `make test-loader` passam.
