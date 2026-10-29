@@ -7,15 +7,21 @@ use sc::engine::sys::sc_show as kind;
 /// The longest string shown.
 const MAX: usize = 1000;
 
+/// The program's memory: at most this many bytes from an address, none if
+/// it is outside.
+pub type Mem<'a> = dyn FnMut(u32, usize) -> Option<Vec<u8>> + 'a;
+
 /// The bytes of the C string at `addr`, at most `max`, and whether it goes
 /// on; none if `addr` is outside the memory.
-fn cstr(mem: &[u8], addr: u32, max: usize) -> Option<(&[u8], bool)> {
-    let s = mem.get(addr as usize..)?;
-    let end = s.iter().take(max).position(|&b| b == 0);
-    Some(match end {
-        Some(n) => (&s[..n], false),
-        None => (&s[..max.min(s.len())], true),
-    })
+fn cstr(mem: &mut Mem, addr: u32, max: usize) -> Option<(Vec<u8>, bool)> {
+    let mut s = mem(addr, max)?;
+    match s.iter().position(|&b| b == 0) {
+        Some(n) => {
+            s.truncate(n);
+            Some((s, false))
+        }
+        None => Some((s, true)),
+    }
 }
 
 /// `c` escaped as in a C literal delimited by `quote`.
@@ -58,13 +64,13 @@ fn string_literal(bytes: &[u8], cut: bool) -> String {
     s
 }
 
-fn type_name(mem: &[u8], ty: u32) -> String {
-    cstr(mem, ty, 256).map(|(t, _)| String::from_utf8_lossy(t).into_owned()).unwrap_or_default()
+fn type_name(mem: &mut Mem, ty: u32) -> String {
+    cstr(mem, ty, 256).map(|(t, _)| String::from_utf8_lossy(&t).into_owned()).unwrap_or_default()
 }
 
 /// `__sc_show_int(type, kind, value)`; `null` is how a null pointer is
 /// written.
-pub fn int(mem: &[u8], ty: u32, k: u32, v: i64, null: &str) -> String {
+pub fn int(mem: &mut Mem, ty: u32, k: u32, v: i64, null: &str) -> String {
     let value = match k {
         kind::SC_SHOW_UNSIGNED => (v as u64).to_string(),
         kind::SC_SHOW_BOOL => (v != 0).to_string(),
@@ -72,7 +78,7 @@ pub fn int(mem: &[u8], ty: u32, k: u32, v: i64, null: &str) -> String {
         kind::SC_SHOW_NULLPTR => "nullptr".into(),
         kind::SC_SHOW_POINTER | kind::SC_SHOW_STRING if v == 0 => null.into(),
         kind::SC_SHOW_STRING => match cstr(mem, v as u32, MAX) {
-            Some((s, cut)) => string_literal(s, cut),
+            Some((s, cut)) => string_literal(&s, cut),
             None => format!("0x{:x}", v as u32),
         },
         kind::SC_SHOW_POINTER => format!("0x{:x}", v as u32),
@@ -83,7 +89,7 @@ pub fn int(mem: &[u8], ty: u32, k: u32, v: i64, null: &str) -> String {
 
 /// `__sc_show_float(type, kind, value)`: the shortest digits that read back
 /// as the same number.
-pub fn float(mem: &[u8], ty: u32, k: u32, v: f64) -> String {
+pub fn float(mem: &mut Mem, ty: u32, k: u32, v: f64) -> String {
     let value = if k == kind::SC_SHOW_FLOAT { format!("{:?}", v as f32) } else { format!("{v:?}") };
     format!("({}) {}", type_name(mem, ty), if v.is_nan() { "nan" } else { &value })
 }
@@ -94,18 +100,19 @@ mod tests {
 
     #[test]
     fn values() {
-        let mut mem = b"\0int\0char *\0ol\xc3\xa1\n\"\0".to_vec();
-        mem.extend([b'x'; 3]);
-        assert_eq!(int(&mem, 1, kind::SC_SHOW_SIGNED, -3, "NULL"), "(int) -3");
-        assert_eq!(int(&mem, 1, kind::SC_SHOW_UNSIGNED, -1, "NULL"), "(int) 18446744073709551615");
-        assert_eq!(int(&mem, 1, kind::SC_SHOW_CHAR, b'\'' as i64, "NULL"), "(int) '\\''");
-        assert_eq!(int(&mem, 1, kind::SC_SHOW_CHAR, -61, "NULL"), "(int) '\\xc3'");
-        assert_eq!(int(&mem, 5, kind::SC_SHOW_STRING, 12, "NULL"), "(char *) \"olá\\n\\\"\"");
-        assert_eq!(int(&mem, 5, kind::SC_SHOW_STRING, 0, "NULL"), "(char *) NULL");
-        assert_eq!(int(&mem, 5, kind::SC_SHOW_STRING, 19, "NULL"), "(char *) \"xxx\"...");
-        assert_eq!(int(&mem, 5, kind::SC_SHOW_POINTER, 16, "nullptr"), "(char *) 0x10");
-        assert_eq!(float(&mem, 1, kind::SC_SHOW_DOUBLE, 0.1 + 0.2), "(int) 0.30000000000000004");
-        assert_eq!(float(&mem, 1, kind::SC_SHOW_FLOAT, 0.1f32 as f64), "(int) 0.1");
-        assert_eq!(float(&mem, 1, kind::SC_SHOW_DOUBLE, 2.0), "(int) 2.0");
+        let mut bytes = b"\0int\0char *\0ol\xc3\xa1\n\"\0".to_vec();
+        bytes.extend([b'x'; 3]);
+        let mem = &mut |a: u32, n: usize| bytes.get(a as usize..).map(|s| s[..n.min(s.len())].to_vec());
+        assert_eq!(int(mem, 1, kind::SC_SHOW_SIGNED, -3, "NULL"), "(int) -3");
+        assert_eq!(int(mem, 1, kind::SC_SHOW_UNSIGNED, -1, "NULL"), "(int) 18446744073709551615");
+        assert_eq!(int(mem, 1, kind::SC_SHOW_CHAR, b'\'' as i64, "NULL"), "(int) '\\''");
+        assert_eq!(int(mem, 1, kind::SC_SHOW_CHAR, -61, "NULL"), "(int) '\\xc3'");
+        assert_eq!(int(mem, 5, kind::SC_SHOW_STRING, 12, "NULL"), "(char *) \"olá\\n\\\"\"");
+        assert_eq!(int(mem, 5, kind::SC_SHOW_STRING, 0, "NULL"), "(char *) NULL");
+        assert_eq!(int(mem, 5, kind::SC_SHOW_STRING, 19, "NULL"), "(char *) \"xxx\"...");
+        assert_eq!(int(mem, 5, kind::SC_SHOW_POINTER, 16, "nullptr"), "(char *) 0x10");
+        assert_eq!(float(mem, 1, kind::SC_SHOW_DOUBLE, 0.1 + 0.2), "(int) 0.30000000000000004");
+        assert_eq!(float(mem, 1, kind::SC_SHOW_FLOAT, 0.1f32 as f64), "(int) 0.1");
+        assert_eq!(float(mem, 1, kind::SC_SHOW_DOUBLE, 2.0), "(int) 2.0");
     }
 }

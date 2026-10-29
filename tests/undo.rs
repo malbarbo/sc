@@ -1,8 +1,8 @@
 //! A cell that fails to instantiate leaves nothing defined: what it
 //! defined from its bytes before is undone (ANALISE.md §60).
 
-use sc::loader::{libdirs, Loader, STACK};
-use wasmtime::Val;
+use sc::loader::native::Wasmtime;
+use sc::loader::{libdirs, Loader, Val, STACK};
 use wasmtime_wasi::WasiCtxBuilder;
 
 /// `add`, and the allocator a cell after the first takes its memory from:
@@ -43,7 +43,7 @@ const SUB: &str = r#"
 
 #[test]
 fn failed_cell_is_undone() {
-    let mut l = Loader::new(WasiCtxBuilder::new().build_p1(), libdirs(Vec::new()), STACK).unwrap();
+    let mut l = Loader::new(Wasmtime::new(WasiCtxBuilder::new().build_p1()).unwrap(), libdirs(Vec::new()), STACK).unwrap();
     l.load_bytes("base", &wat::parse_str(BASE).unwrap(), true).unwrap();
     let sub = |l: &mut Loader, f| l.call(f, &[Val::I32(7), Val::I32(2)]).map(|v| v.unwrap().unwrap_i32());
     l.load_bytes("caller", &wat::parse_str(CALLER).unwrap(), true).unwrap();

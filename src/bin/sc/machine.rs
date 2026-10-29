@@ -4,12 +4,11 @@
 //! statements at the top level, which the session's incremental mode accepts.
 use sc::engine::{Answer, Repl, Status};
 use crate::{pack, show};
-use sc::loader::{source_name, Lib, Loader, STACK};
+use sc::loader::native::Wasmtime;
+use sc::loader::{source_name, Error, Frame, Lib, Loader, TrapKind, Val, STACK};
 use std::io::IsTerminal;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use wasmtime::{Error, ThrownException, Trap, Val, ValType};
-use wasmtime_wasi::{I32Exit, WasiCtxBuilder};
+use wasmtime_wasi::WasiCtxBuilder;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lang {
@@ -81,9 +80,6 @@ pub struct Machine {
     /// The input Enter compiled to know it whole, and the answer, which the
     /// cell takes.
     pending: Option<(String, Answer)>,
-    /// The value the last cell shows, if it ends in an expression without
-    /// its `;`.
-    shown: Arc<Mutex<Option<String>>>,
 }
 
 /// How long a cell may take to compile, and how much memory the compiler
@@ -119,21 +115,13 @@ impl Machine {
             let path = format!("sysroot/lib/wasm32-wasip1/{lib}");
             Some(Lib { wasm: pack::read(&path)?.into(), cwasm: pack::read(&format!("{path}.cwasm")) })
         });
-        let mut loader = Loader::new(wasi.build_p1(), libs, STACK)?;
+        let mut loader = Loader::new(Wasmtime::new(wasi.build_p1())?, libs, STACK)?;
         loader.keep_stacks();
-        let shown = Arc::new(Mutex::new(None));
-        let (s, null) = (Arc::clone(&shown), if lang == Lang::C { "NULL" } else { "nullptr" });
-        loader.host("__sc_show_int", &[ValType::I32, ValType::I32, ValType::I64], move |mem, a| {
-            *s.lock().unwrap() = Some(show::int(mem, a[0].unwrap_i32() as u32, a[1].unwrap_i32() as u32, a[2].unwrap_i64(), null));
-        });
-        let s = Arc::clone(&shown);
-        loader.host("__sc_show_float", &[ValType::I32, ValType::I32, ValType::F64], move |mem, a| {
-            *s.lock().unwrap() = Some(show::float(mem, a[0].unwrap_i32() as u32, a[1].unwrap_i32() as u32, a[2].unwrap_f64()));
-        });
+        loader.show();
         if interactive {
-            loader.on_ctrl_c(sc::engine::interrupt);
+            loader.runtime().on_ctrl_c(sc::engine::interrupt);
         }
-        Ok(Machine { lang, safety, argv, repl, loader, loaded: 0, pending: None, shown })
+        Ok(Machine { lang, safety, argv, repl, loader, loaded: 0, pending: None })
     }
 
     pub fn safety(&self) -> Safety {
@@ -248,7 +236,6 @@ impl Machine {
     /// by where they were allocated.
     pub fn leaks(&mut self) -> usize {
         const MOST: usize = 10;
-        self.loader.arm();
         let leaks = match self.loader.leaks() {
             Ok(l) => l,
             Err(e) => {
@@ -259,7 +246,7 @@ impl Machine {
         let plural = |n: u32, what: &str| if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") };
         for l in leaks.iter().take(MOST) {
             eprintln!("error: memory leak: {} in {}, never freed", plural(l.bytes, "byte"), plural(l.blocks, "block"));
-            let fs = l.allocated.as_ref().map(|bt| frames(bt, &self.loader, false)).unwrap_or_default();
+            let fs = l.allocated.as_ref().map(|fs| frames(fs, &self.loader, false)).unwrap_or_default();
             if l.allocated.is_none() {
                 eprintln!("sc keeps where only the first blocks of a program were allocated");
             } else if !fs.is_empty() {
@@ -281,23 +268,32 @@ impl Machine {
         self.repl.names()
     }
 
+    /// The value the last cell shows, if it ends in an expression without
+    /// its `;`. Read before any other code runs: it may be a string on the
+    /// stack.
+    fn shown(&mut self) -> Option<String> {
+        let s = self.loader.shown()?;
+        let null = if self.lang == Lang::C { "NULL" } else { "nullptr" };
+        let mut read = |a: u32, n: usize| self.loader.read(a, n);
+        Some(if s.float {
+            show::float(&mut read, s.ty, s.kind, f64::from_bits(s.bits))
+        } else {
+            show::int(&mut read, s.ty, s.kind, s.bits as i64, null)
+        })
+    }
+
     /// Runs `f` on the loader: what it printed is flushed, and a trap is
     /// told and leaves the loader ready for the next cell.
-    fn exec(&mut self, f: impl FnOnce(&mut Loader) -> wasmtime::Result<()>) -> Outcome {
+    fn exec(&mut self, f: impl FnOnce(&mut Loader) -> sc::loader::Result<()>) -> Outcome {
         let sp = self.loader.stack_pointer();
-        self.loader.arm();
-        let r = match f(&mut self.loader) {
-            Err(e) if e.is::<ThrownException>() => self.loader.uncaught(e).map(drop),
-            r => r,
-        };
-        if let Some(x) = r.as_ref().err().and_then(|e| e.downcast_ref::<I32Exit>()) {
-            return Outcome::Exit(x.0);
+        let r = f(&mut self.loader);
+        if let Err(Error::Exit(c)) = r {
+            return Outcome::Exit(c);
         }
+        let shown = self.shown();
         if self.loader.defines("fflush") {
-            self.loader.arm(); // after Ctrl-C, the deadline has passed
             let _ = self.loader.call("fflush", &[Val::I32(0)]);
         }
-        let shown = self.shown.lock().unwrap().take();
         match r {
             Ok(()) => {
                 if let Some(v) = shown {
@@ -309,9 +305,8 @@ impl Machine {
                 eprintln!("{}", runtime_error(&e, &mut self.loader));
                 let _ = self.loader.set_stack_pointer(sp);
                 // the frames the trap left below sp keep their shadow (ASan)
-                if let (true, Some(top)) = (self.loader.defines("__asan_unpoison_memory_region"), sp.i32()) {
-                    self.loader.arm();
-                    let _ = self.loader.call("__asan_unpoison_memory_region", &[Val::I32(16), Val::I32(top - 16)]);
+                if self.loader.defines("__asan_unpoison_memory_region") {
+                    let _ = self.loader.call("__asan_unpoison_memory_region", &[Val::I32(16), Val::I32(sp - 16)]);
                 }
                 Outcome::Error
             }
@@ -324,13 +319,14 @@ fn runtime_error(e: &Error, loader: &mut Loader) -> String {
     let msg = message(e, loader);
     let library = !msg.is_empty() && msg != "aborted";
     let mut out: Vec<String> = Some(msg).filter(|m| !m.is_empty()).into_iter().collect();
-    let bt = e.downcast_ref::<wasmtime::WasmBacktrace>();
-    out.extend(bt.map(|bt| frames(bt, loader, library)).unwrap_or_default().iter().map(|f| format!("    {f}")));
+    if let Error::Trap(t) = e {
+        out.extend(frames(&t.frames, loader, library).iter().map(|f| format!("    {f}")));
+    }
     // the block of a report of ASan's: where it was freed and allocated
     let (allocated, freed) = loader.blamed();
     let and = if freed.is_some() { "and allocated" } else { "the block was allocated" };
     for (what, bt) in [("the block was freed", freed), (and, allocated)] {
-        let fs = bt.map(|bt| frames(&bt, loader, false)).unwrap_or_default();
+        let fs = bt.map(|fs| frames(&fs, loader, false)).unwrap_or_default();
         if !fs.is_empty() {
             out.push(what.into());
             out.extend(fs.iter().map(|f| format!("    {f}")));
@@ -342,50 +338,55 @@ fn runtime_error(e: &Error, loader: &mut Loader) -> String {
 /// What stopped the code; empty when libsc_rt has said it (a check of
 /// UBSan or of libc++'s hardening, rt/sc_rt.c).
 fn message(e: &Error, loader: &mut Loader) -> String {
-    let bt = e.downcast_ref::<wasmtime::WasmBacktrace>();
-    if bt.is_some_and(|bt| bt.frames().iter().any(|f| f.func_name() == Some("__sc_rt_report"))) {
+    let t = match e {
+        Error::Trap(t) => t,
+        Error::Fail(m) => return format!("error: {m}"),
+        Error::Exit(c) => return format!("exit({c})"),
+    };
+    if t.frames.iter().any(|f| f.func.as_deref() == Some("__sc_rt_report")) {
         return String::new();
     }
-    let fault = fault_address(e);
-    if let Some(n) = fault.and_then(|a| loader.undefined_at(a)) {
+    if let Some(n) = loader.missing() {
+        return format!("error: undefined symbol: {n}");
+    }
+    if let Some(n) = t.fault.and_then(|a| loader.undefined_at(a)) {
         return format!("error: undefined symbol: {n}");
     }
     // the stack grows down from STACK: below 0 it wraps around
-    let below = loader.stack_pointer().i32().is_some_and(|sp| sp as u32 > STACK);
+    let below = loader.stack_pointer() as u32 > STACK;
     // -ftrivial-auto-var-init=pattern's pointer, plus an offset: a local
     // the code never set (--safety=on)
-    let uninit = fault.is_some_and(|a| (0xffff_ffff..0x1_0000_ffff).contains(&a));
-    match e.downcast_ref::<Trap>() {
-        Some(Trap::Interrupt) => "interrupted".into(),
-        Some(Trap::StackOverflow) => "error: stack overflow (infinite recursion?)".into(),
-        Some(Trap::MemoryOutOfBounds) if below => "error: stack overflow (infinite recursion?)".into(),
-        Some(Trap::MemoryOutOfBounds) if uninit => "error: invalid memory access through an uninitialized pointer".into(),
-        Some(Trap::MemoryOutOfBounds) => "error: invalid memory access".into(),
-        Some(Trap::IntegerDivisionByZero) => "error: division by zero".into(),
-        Some(Trap::IntegerOverflow) => "error: integer overflow in a division (INT_MIN / -1)".into(),
-        Some(Trap::BadSignature) => "error: call through a function pointer of the wrong type".into(),
-        Some(Trap::IndirectCallToNull) => "error: call through a null function pointer".into(),
-        Some(Trap::TableOutOfBounds) => "error: call through an invalid function pointer".into(),
-        Some(Trap::UnreachableCodeReached) => "aborted".into(),
-        Some(t) => format!("error: {t}"),
-        None => format!("error: {}", e.root_cause()),
+    let uninit = t.fault.is_some_and(|a| (0xffff_ffff..0x1_0000_ffff).contains(&a));
+    match t.kind {
+        TrapKind::Interrupt => "interrupted".into(),
+        TrapKind::StackOverflow => "error: stack overflow (infinite recursion?)".into(),
+        TrapKind::MemoryOutOfBounds if below => "error: stack overflow (infinite recursion?)".into(),
+        TrapKind::MemoryOutOfBounds if uninit => "error: invalid memory access through an uninitialized pointer".into(),
+        TrapKind::MemoryOutOfBounds => "error: invalid memory access".into(),
+        TrapKind::IntegerDivisionByZero => "error: division by zero".into(),
+        TrapKind::IntegerOverflow => "error: integer overflow in a division (INT_MIN / -1)".into(),
+        TrapKind::BadSignature => "error: call through a function pointer of the wrong type".into(),
+        TrapKind::IndirectCallToNull => "error: call through a null function pointer".into(),
+        TrapKind::TableOutOfBounds => "error: call through an invalid function pointer".into(),
+        TrapKind::Unreachable => "aborted".into(),
+        TrapKind::Other => format!("error: {}", t.message),
     }
 }
 
-/// The frames of `bt`, innermost first, as `at f (file:line:column)`: those
+/// The frames of `fs`, innermost first, as `at f (file:line:column)`: those
 /// of the student's code, after the innermost frame if it is not (a
 /// function of the libraries, where the code stopped; not when `abort`
 /// stopped it, which says it was called). A frame repeated in a row, as in
 /// a recursion, comes once, with how many times; a cycle of 2 to 4 frames
 /// too. A long list keeps its start and its end.
-fn frames(bt: &wasmtime::WasmBacktrace, loader: &Loader, library: bool) -> Vec<String> {
+fn frames(fs: &[Frame], loader: &Loader, library: bool) -> Vec<String> {
     // the headers' code, compiled in the cell, is from the pack; the
     // compiler-rt in libc++.so from wasi-sdk's build, without -ffile-prefix-map
     let pack = format!("{}/", pack::ROOT);
     let theirs = [pack.as_str(), "/src/src/llvm-project/", "/src/build/"];
     // (function, where in the student's code), inlined functions first
-    let entries = bt.frames().iter().flat_map(|f| {
-        let name = f.func_name().map(source_name).unwrap_or_default();
+    let entries = fs.iter().flat_map(|f| {
+        let name = f.func.as_deref().map(source_name).unwrap_or_default();
         let syms: Vec<_> = loader.symbols(f).into_iter().map(|s| {
             // the libraries' own sources are wasi-sdk's (wasisdk://...)
             let file = s.file.unwrap_or_default();
@@ -451,14 +452,4 @@ fn frames(bt: &wasmtime::WasmBacktrace, loader: &Loader, library: bool) -> Vec<S
         out.splice(HEAD..out.len() - TAIL, [format!("... {more} more")]);
     }
     out
-}
-
-/// The address of an access out of the memory, from wasmtime's description
-/// of the fault, which it keeps to itself as a type.
-fn fault_address(e: &Error) -> Option<u64> {
-    e.chain().find_map(|c| {
-        let s = c.to_string();
-        let hex = s.strip_prefix("memory fault at wasm address 0x")?.split(' ').next()?;
-        u64::from_str_radix(hex, 16).ok()
-    })
 }

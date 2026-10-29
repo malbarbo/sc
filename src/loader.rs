@@ -13,7 +13,13 @@
 //! when it is loaded; at the end the last `main` defined runs and the
 //! program exits through libc's `exit`.
 //!
-//! All modules share one memory, one function table and the stack pointer.
+//! The loader asks the wasm runtime for little ([`Runtime`]: instantiate a
+//! module, an export, a call, the memory; ANALISE.md §63), so that it runs
+//! on wasmtime ([`native::Wasmtime`]) and inside sc.wasm. The rest comes
+//! from modules it makes ([`gen`]): the world has the memory, the function
+//! table and the stack pointer that all modules share, and the functions
+//! that grow and set them.
+//!
 //! Memory for the first group comes from a bump allocator below the heap;
 //! for the entries, from libc's `aligned_alloc`. A function import is bound
 //! to the definition visible when its group is loaded, or, when there is
@@ -23,8 +29,7 @@
 //! its GOT imports at the values the bytes give ([`Loader::load_bytes`],
 //! ANALISE.md §60). An exception tag is one for all
 //! modules: the first module that defines it, or the loader when a module
-//! imports it first, so a C++ exception or a longjmp crosses modules. WASI calls go through a shim module
-//! that exports the memory, because wasmtime-wasi reads it from the caller.
+//! imports it first, so a C++ exception or a longjmp crosses modules.
 //!
 //! With ASan's runtime (libsc_rt, at the levels of `--safety` with checks),
 //! the memory has its shadow after the stack, and the modules after it: see
@@ -39,21 +44,22 @@
 //! and a GOT.func import or a stub gets a table slot at once, which the
 //! function fills when it comes (the same slot for all modules). Until then
 //! a GOT.mem import is an address past the memory, so a read or a write
-//! traps, and a call through the slot traps.
+//! traps, and a call through the slot traps ([`Loader::missing`]).
 
-use wasmtime::error::Context;
-use wasmtime::{bail, format_err, Result};
 use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::path::{Path, PathBuf};
-use wasm_encoder as we;
-use wasmparser::{Dylink0Subsection, KnownCustom, Parser, Payload, SymbolFlags};
-use wasmtime::*;
-use wasmtime_wasi::p1::{self, WasiP1Ctx};
+use std::sync::Arc;
+use wasmparser::{Dylink0Subsection, KnownCustom, Parser, Payload, SymbolFlags, TypeRef};
 
 pub mod config;
+pub mod gen;
+pub mod native;
+pub mod runtime;
+
+use runtime::{fail, FuncType, Import, Runtime, H};
+pub use runtime::{Error, Frame, Result, Trap, TrapKind, ValType};
 
 pub const STACK: u32 = 1 << 20; // the default; the stack is first, so an overflow traps below 0
 const PAGE: u32 = 1 << 16;
@@ -67,20 +73,54 @@ const SHADOW_END: u32 = SHADOW + (1 << 29);
 // [`Loader::undefined_at`] names it.
 const UNDEFINED: u32 = 0xC000_0000;
 const UNDEFINED_SIZE: u32 = 1 << 20;
+/// The most groups of lost blocks [`Loader::leaks`] tells.
+const LEAKS: u32 = 1 << 14;
+
+/// A value of a call ([`Loader::call`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Val {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+}
+
+impl Val {
+    pub fn i32(self) -> Option<i32> {
+        match self {
+            Val::I32(x) => Some(x),
+            _ => None,
+        }
+    }
+
+    pub fn unwrap_i32(self) -> i32 {
+        self.i32().expect("an i32")
+    }
+
+    fn bits(self) -> u64 {
+        match self {
+            Val::I32(x) => x as u32 as u64,
+            Val::I64(x) => x as u64,
+            Val::F32(x) => x.to_bits() as u64,
+            Val::F64(x) => x.to_bits(),
+        }
+    }
+
+    fn of(t: ValType, v: u64) -> Val {
+        match t {
+            ValType::I64 => Val::I64(v as i64),
+            ValType::F32 => Val::F32(f32::from_bits(v as u32)),
+            ValType::F64 => Val::F64(f64::from_bits(v)),
+            _ => Val::I32(v as i32),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Sym {
-    Func(Option<Func>), // None until its module is instantiated
+    Func(Option<H>, u32), // the function, None until its module is instantiated, and its type
     Data(u32), // an absolute address
-    Tag(Tag),  // an exception tag: __cpp_exception (libc++abi), __c_longjmp (libsetjmp)
-}
-
-struct Host {
-    wasi: WasiP1Ctx,
-    syms: HashMap<String, (Sym, Option<u32>)>, // the symbol and its table slot
-    stacks: Stacks,
-    data: Vec<Data>,
-    roots: Vec<(u32, u32)>, // the words of data written since, for libsc_rt's leaks
+    Tag(H),    // an exception tag: __cpp_exception (libc++abi), __c_longjmp (libsetjmp)
 }
 
 /// The data of a module, at an ASan level: where, and what was there
@@ -91,27 +131,37 @@ struct Data {
     image: Vec<u8>,
 }
 
-/// The stacks that libsc_rt asks the loader to keep ([`Loader::keep_stacks`]):
-/// where each block of its allocator was allocated and freed. Each is kept
-/// once, under a number from 1.
-#[derive(Default)]
-struct Stacks {
-    ids: HashMap<Vec<(usize, usize)>, u32>, // (module, offset in it) of each frame
-    traces: Vec<Arc<WasmBacktrace>>,
-    blamed: Option<(u32, u32)>, // the stacks of the block of a report: allocated, freed
-    leaks: Vec<(u32, u32, u32)>, // lost blocks: the stack they were allocated at, bytes, blocks
-}
-
 /// Blocks of libsc_rt's allocator that the program lost ([`Loader::leaks`]).
 pub struct Leak {
-    pub allocated: Option<Arc<WasmBacktrace>>,
+    /// Where they were allocated; none if libsc_rt did not keep it.
+    pub allocated: Option<Vec<Frame>>,
     pub bytes: u32,
     pub blocks: u32,
 }
 
-/// What the `dylink.0` section says.
+/// The value a REPL cell shows ([`Loader::show`]): the arguments of the
+/// last `__sc_show_int` or `__sc_show_float`.
+pub struct Shown {
+    pub float: bool,
+    pub ty: u32,
+    pub kind: u32,
+    /// The value: the i64 or the f64's bits.
+    pub bits: u64,
+}
+
+#[derive(Clone)]
+enum Kind {
+    Func(FuncType),
+    Global,
+    Memory,
+    Table,
+    Tag(FuncType),
+}
+
+/// What a module says of itself: its `dylink.0` section, its imports and
+/// its exports.
 #[derive(Default)]
-struct Dylink {
+struct Info {
     mem_size: u32,
     mem_align: u32,
     table_size: u32,
@@ -120,39 +170,53 @@ struct Dylink {
     weak: HashSet<String>, // weak undefined symbols (the section names GOT imports by env)
     weak_def: HashSet<String>, // weak definitions (llvm/dylink-weak.patch)
     consts: HashMap<String, Option<i32>>, // exported immutable i32 globals: the i32.const of their init
+    imports: Vec<(String, String, Kind)>,
+    exports: Vec<(String, Kind)>,
 }
 
-struct Pending {
+struct Pending<'a> {
     name: String,
-    module: Module,
-    info: Dylink,
+    bytes: Cow<'a, [u8]>,
+    compiled: Option<&'static [u8]>,
+    info: Info,
     debug: Option<Debug>,
 }
 
-pub struct Loader {
-    engine: Engine,
-    store: Store<Host>,
-    linker: Linker<Host>,
-    memory: Memory,
-    table: Table,
-    sp: Global,
-    wasi: HashMap<String, Func>,
+/// The world's handles ([`gen::world`]).
+struct World {
+    memory: H,
+    table: H,
+    sp: H,
+    missing: H,
+    funcs: HashMap<&'static str, (H, FuncType)>,
+}
+
+pub struct Loader<R: Runtime = native::Wasmtime> {
+    rt: R,
+    world: World,
+    syms: HashMap<String, (Sym, Option<u32>)>, // the symbol and its table slot
+    types: Vec<FuncType>,                      // of the function symbols
     libs: Libs,
     loaded: HashSet<String>,
-    bump: Option<u32>, // the next free address, until the heap is set up
-    later: Vec<(String, Global)>, // GOT.mem imports of symbols not defined yet
+    bump: Option<u32>,            // the next free address, until the heap is set up
+    table_size: u32,
+    later: Vec<(String, H)>,      // GOT.mem imports of symbols not defined yet
     undefined: Vec<String>,       // what the addresses from UNDEFINED stand for
-    slots: HashMap<String, u32>,  // table slots of functions not defined yet
+    missing: Vec<String>,         // the functions not defined yet that a call may reach, from 1
+    slots: HashMap<String, (u32, bool)>, // table slots of functions not defined yet: whether filled
     asan: bool,                   // the memory has ASan's shadow
     debug: Vec<Debug>,            // of the modules with DWARF
+    data: Vec<Data>,
     journal: Option<Vec<(String, Option<(Sym, Option<u32>)>)>>, // what a group being defined replaced
+    catchers: HashMap<(String, H), H>, // gen::catcher's try, by signature and tag
+    scratch: Option<u32>,         // the table slot of the function a catcher calls
 }
 
 /// Where the loader finds the libraries a module needs: by name.
 pub type Libs = Box<dyn Fn(&str) -> Option<Lib> + Send + Sync>;
 
 /// A library: its module and, if there is one, the module compiled for
-/// this loader ([`config::config`]), which saves compiling it.
+/// this loader's runtime ([`config::config`]), which saves compiling it.
 pub struct Lib {
     pub wasm: Cow<'static, [u8]>,
     pub cwasm: Option<&'static [u8]>,
@@ -173,7 +237,7 @@ type Dwarf = gimli::EndianArcSlice<gimli::LittleEndian>;
 /// again at each frame of each backtrace, which made keeping the stacks of
 /// ASan's blocks hundreds of times slower.
 struct Debug {
-    module: Module,
+    instance: H,
     code: u64, // where the code section's contents start, which DWARF's addresses count from
     sections: HashMap<String, Arc<[u8]>>,
     cx: OnceCell<Option<addr2line::Context<Dwarf>>>, // made at the first frame
@@ -187,7 +251,7 @@ pub struct Symbol {
     pub column: Option<u32>,
 }
 
-fn debug(module: &Module, bytes: &[u8]) -> Result<Option<Debug>> {
+fn debug(bytes: &[u8]) -> Result<Option<Debug>> {
     let (mut code, mut sections) = (0, HashMap::new());
     for p in Parser::new(0).parse_all(bytes) {
         match p? {
@@ -198,20 +262,80 @@ fn debug(module: &Module, bytes: &[u8]) -> Result<Option<Debug>> {
             _ => {}
         }
     }
-    Ok((!sections.is_empty()).then(|| Debug { module: module.clone(), code, sections, cx: OnceCell::new() }))
+    Ok((!sections.is_empty()).then(|| Debug { instance: 0, code, sections, cx: OnceCell::new() }))
 }
 
-fn dylink(bytes: &[u8]) -> Result<Dylink> {
-    let mut d = Dylink::default();
+impl From<wasmparser::BinaryReaderError> for Error {
+    fn from(e: wasmparser::BinaryReaderError) -> Error {
+        Error::Fail(e.message().to_string())
+    }
+}
+
+fn val_type(t: wasmparser::ValType) -> Result<ValType> {
+    use wasmparser::ValType as V;
+    Ok(match t {
+        V::I32 => ValType::I32,
+        V::I64 => ValType::I64,
+        V::F32 => ValType::F32,
+        V::F64 => ValType::F64,
+        V::Ref(r) if r.is_func_ref() => ValType::FuncRef,
+        _ => fail!("a value of type {t}"),
+    })
+}
+
+fn info(bytes: &[u8]) -> Result<Info> {
+    let mut d = Info::default();
     let mut found = false;
+    let mut types: Vec<Option<FuncType>> = Vec::new(); // None: of a value the loader does not pass (exnref)
+    let mut funcs: Vec<u32> = Vec::new(); // the type of each function
+    let mut tags: Vec<u32> = Vec::new();
     let mut globals: Vec<Option<Option<i32>>> = Vec::new(); // by index: None if imported or mutable
+    let ty = |types: &[Option<FuncType>], k: u32| types.get(k as usize).cloned().flatten()
+        .ok_or_else(|| Error::Fail("an import or export of a type the loader does not pass".into()));
     for p in Parser::new(0).parse_all(bytes) {
         let c = match p? {
+            Payload::TypeSection(r) => {
+                for t in r.into_iter_err_on_gc_types() {
+                    let t = t?;
+                    let params = t.params().iter().map(|&p| val_type(p)).collect::<Result<Vec<_>>>();
+                    let results = t.results().iter().map(|&p| val_type(p)).collect::<Result<Vec<_>>>();
+                    types.push(params.and_then(|p| Ok(FuncType::new(p, results?))).ok());
+                }
+                continue;
+            }
             Payload::ImportSection(r) => {
                 for i in r.into_imports() {
-                    if let wasmparser::TypeRef::Global(_) = i?.ty {
-                        globals.push(None);
-                    }
+                    let i = i?;
+                    let kind = match i.ty {
+                        TypeRef::Func(k) => {
+                            funcs.push(k);
+                            Kind::Func(ty(&types, k)?)
+                        }
+                        TypeRef::Global(_) => {
+                            globals.push(None);
+                            Kind::Global
+                        }
+                        TypeRef::Memory(_) => Kind::Memory,
+                        TypeRef::Table(_) => Kind::Table,
+                        TypeRef::Tag(t) => {
+                            tags.push(t.func_type_idx);
+                            Kind::Tag(ty(&types, t.func_type_idx)?)
+                        }
+                        _ => fail!("an import {}.{}", i.module, i.name),
+                    };
+                    d.imports.push((i.module.to_string(), i.name.to_string(), kind));
+                }
+                continue;
+            }
+            Payload::FunctionSection(r) => {
+                for f in r {
+                    funcs.push(f?);
+                }
+                continue;
+            }
+            Payload::TagSection(r) => {
+                for t in r {
+                    tags.push(t?.func_type_idx);
                 }
                 continue;
             }
@@ -231,11 +355,19 @@ fn dylink(bytes: &[u8]) -> Result<Dylink> {
             Payload::ExportSection(r) => {
                 for e in r {
                     let e = e?;
-                    if e.kind == wasmparser::ExternalKind::Global {
-                        if let Some(Some(v)) = globals.get(e.index as usize) {
-                            d.consts.insert(e.name.to_string(), *v);
+                    let kind = match e.kind {
+                        wasmparser::ExternalKind::Func => Kind::Func(ty(&types, funcs[e.index as usize])?),
+                        wasmparser::ExternalKind::Global => {
+                            if let Some(Some(v)) = globals.get(e.index as usize) {
+                                d.consts.insert(e.name.to_string(), *v);
+                            }
+                            Kind::Global
                         }
-                    }
+                        wasmparser::ExternalKind::Tag => Kind::Tag(ty(&types, tags[e.index as usize])?),
+                        wasmparser::ExternalKind::Memory => Kind::Memory,
+                        _ => Kind::Table,
+                    };
+                    d.exports.push((e.name.to_string(), kind));
                 }
                 continue;
             }
@@ -266,7 +398,7 @@ fn dylink(bytes: &[u8]) -> Result<Dylink> {
         }
     }
     if !found {
-        bail!("no dylink.0 section: not a shared object")
+        fail!("no dylink.0 section: not a shared object");
     }
     Ok(d)
 }
@@ -301,102 +433,163 @@ fn align(x: u32, a: u32) -> u32 {
     (x + a - 1) & !(a - 1)
 }
 
-/// A module of functions that each pass their parameters on.
-#[derive(Default)]
-struct Shim {
-    types: we::TypeSection,
-    imports: we::ImportSection,
-    funcs: we::FunctionSection,
-    exports: we::ExportSection,
-    code: we::CodeSection,
-}
-
-impl Shim {
-    /// Adds function `k` of type `ft`, with type `k`: its parameters, then
-    /// `call`.
-    fn func(&mut self, k: u32, ft: &FuncType, call: impl FnOnce(&mut we::InstructionSink)) {
-        let ty = |t: ValType| match t {
-            ValType::I32 => we::ValType::I32, ValType::I64 => we::ValType::I64,
-            ValType::F32 => we::ValType::F32, ValType::F64 => we::ValType::F64, _ => we::ValType::EXTERNREF,
-        };
-        self.types.ty().function(ft.params().map(ty), ft.results().map(ty));
-        self.funcs.function(k);
-        let mut f = we::Function::new([]);
-        let mut sink = f.instructions();
-        for i in 0..ft.params().len() as u32 {
-            sink.local_get(i);
-        }
-        call(&mut sink);
-        sink.end();
-        self.code.function(&f);
-    }
-
-    fn finish(&self) -> Vec<u8> {
-        let mut m = we::Module::new();
-        m.section(&self.types).section(&self.imports).section(&self.funcs).section(&self.exports).section(&self.code);
-        m.finish()
-    }
-}
-
 // symbols of the loading protocol, which stay out of the symbol table
 const INTERNAL: &[&str] = &["__wasm_call_ctors", "__wasm_apply_data_relocs", "_initialize", "__wasm_init_memory"];
 
-impl Loader {
-    pub fn new(wasi: WasiP1Ctx, libs: Libs, stack: u32) -> Result<Loader> {
-        let engine = Engine::new(&config::config())?;
-        let mut store = Store::new(&engine, Host { wasi, syms: HashMap::new(), stacks: Stacks::default(), data: Vec::new(), roots: Vec::new() });
-        // the epoch does not move until a Ctrl-C ([`Loader::arm`])
-        store.set_epoch_deadline(1);
-        let memory = Memory::new(&mut store, MemoryType::new(stack.div_ceil(PAGE), Some(UNDEFINED / PAGE)))?;
-        let table = Table::new(&mut store, TableType::new(RefType::FUNCREF, 1, None), Ref::Func(None))?;
-        let sp = Global::new(&mut store, GlobalType::new(ValType::I32, Mutability::Var), Val::I32(stack as i32))?;
-        let mut linker = Linker::new(&engine);
-        p1::add_to_linker_sync(&mut linker, |h: &mut Host| &mut h.wasi)?;
-        linker.define(&mut store, "env", "memory", memory)?;
-        let mut l = Loader { engine, store, linker, memory, table, sp, wasi: HashMap::new(), libs,
-                             loaded: HashSet::new(), bump: Some(stack), later: Vec::new(), undefined: Vec::new(),
-                             slots: HashMap::new(), asan: false, debug: Vec::new(), journal: None };
+/// The world's functions, with their types ([`gen::world`]).
+fn world_funcs() -> Vec<(&'static str, FuncType)> {
+    use ValType::*;
+    let f = |p: &[ValType], r: &[ValType]| FuncType::new(p.iter().copied(), r.iter().copied());
+    vec![
+        ("grow", f(&[I32], &[I32])), ("size", f(&[], &[I32])), ("table_grow", f(&[I32], &[I32])),
+        ("table_set", f(&[I32, FuncRef], &[])), ("get_sp", f(&[], &[I32])), ("set_sp", f(&[I32], &[])),
+        ("take_missing", f(&[], &[I32])), ("take_blamed", f(&[], &[I32, I32])), ("take_shown", f(&[], &[I32, I32, I32, I64])),
+        ("set_data", f(&[I32, I32], &[])), ("set_leaks", f(&[I32, I32], &[])), ("leak_count", f(&[], &[I32])),
+        ("__sc_rt_stack", f(&[], &[I32])), ("__sc_rt_blame", f(&[I32, I32], &[])), ("__sc_rt_data", f(&[I32], &[I64])),
+        ("__sc_rt_leak", f(&[I32, I32, I32], &[])), ("__sc_show_int", f(&[I32, I32, I64], &[])),
+        ("__sc_show_float", f(&[I32, I32, F64], &[])),
+    ]
+}
+
+impl<R: Runtime> Loader<R> {
+    pub fn new(mut rt: R, libs: Libs, stack: u32) -> Result<Loader<R>> {
+        let bytes = gen::world(stack.div_ceil(PAGE) as u64, (UNDEFINED / PAGE) as u64, stack);
+        let inst = rt.instantiate(&bytes, None, &mut [Import::Default])?;
+        let mut funcs = HashMap::new();
+        for (n, t) in world_funcs() {
+            funcs.insert(n, (rt.export(inst, n), t));
+        }
+        let world = World {
+            memory: rt.export(inst, "memory"),
+            table: rt.export(inst, "table"),
+            sp: rt.export(inst, "__stack_pointer"),
+            missing: rt.export(inst, "missing"),
+            funcs,
+        };
+        let mut l = Loader { rt, world, syms: HashMap::new(), types: Vec::new(), libs, loaded: HashSet::new(),
+                             bump: Some(stack), table_size: 1, later: Vec::new(), undefined: Vec::new(),
+                             missing: Vec::new(), slots: HashMap::new(), asan: false, debug: Vec::new(),
+                             data: Vec::new(), journal: None, catchers: HashMap::new(), scratch: None };
         l.define("__stack_low", Sym::Data(16), false);
         l.define("__stack_high", Sym::Data(stack), false);
         Ok(l)
     }
 
+    /// The runtime the loader runs on.
+    pub fn runtime(&mut self) -> &mut R {
+        &mut self.rt
+    }
+
+    fn ty(&mut self, ft: &FuncType) -> u32 {
+        match self.types.iter().position(|t| t == ft) {
+            Some(k) => k as u32,
+            None => {
+                self.types.push(ft.clone());
+                self.types.len() as u32 - 1
+            }
+        }
+    }
+
     /// Whether `name` is now `sym`: not if an older definition stays.
     fn define(&mut self, name: &str, sym: Sym, shadow: bool) -> bool {
-        let syms = &mut self.store.data_mut().syms;
-        if !shadow && syms.contains_key(name) {
+        if !shadow && self.syms.contains_key(name) {
             return false;
         }
-        let old = syms.insert(name.to_string(), (sym, None));
+        let old = self.syms.insert(name.to_string(), (sym, None));
         if let Some(j) = &mut self.journal {
             j.push((name.to_string(), old));
         }
         true
     }
 
+    /// Calls `f`, of type `ty`, with `args`: its results.
+    fn invoke(&mut self, f: H, ty: &FuncType, args: &[u64]) -> Result<Vec<u64>> {
+        let mut vals = args.to_vec();
+        vals.resize(ty.params.len().max(ty.results.len()), 0);
+        self.rt.call(f, &ty.sig(), &mut vals)?;
+        vals.truncate(ty.results.len());
+        Ok(vals)
+    }
+
+    /// Calls the world's function `name`.
+    fn world(&mut self, name: &str, args: &[u64]) -> Result<Vec<u64>> {
+        let (f, ty) = self.world.funcs[name].clone();
+        self.invoke(f, &ty, args)
+    }
+
+    /// The function `name` the modules define, and its type.
+    fn func(&self, name: &str) -> Result<(H, FuncType)> {
+        match self.syms.get(name) {
+            Some((Sym::Func(Some(f), t), _)) => Ok((*f, self.types[*t as usize].clone())),
+            _ => fail!("undefined symbol: {}", source_name(name)),
+        }
+    }
+
+    /// Calls the function `name` the modules define.
+    pub fn call(&mut self, name: &str, args: &[Val]) -> Result<Option<Val>> {
+        let (f, ty) = self.func(name)?;
+        let r = self.invoke(f, &ty, &args.iter().map(|a| a.bits()).collect::<Vec<_>>())?;
+        Ok(ty.results.first().map(|&t| Val::of(t, r[0])))
+    }
+
+    /// Calls `f` as [`Loader::invoke`] does, but a C++ exception that no one
+    /// catches does what libc++abi does on a native target: wasm has no
+    /// search phase, so it never calls `std::terminate`. It is caught and
+    /// terminates, which prints its type and `what()` and aborts.
+    fn guarded(&mut self, f: H, ty: &FuncType, args: &[u64]) -> Result<Vec<u64>> {
+        let Some((Sym::Tag(tag), _)) = self.syms.get("__cpp_exception").copied() else { return self.invoke(f, ty, args) };
+        let key = (ty.sig(), tag);
+        let catcher = match self.catchers.get(&key) {
+            Some(&c) => c,
+            None => {
+                let mut imports = [Import::Handle(self.world.table), Import::Handle(tag)];
+                let inst = self.rt.instantiate(&gen::catcher(ty), None, &mut imports)?;
+                let c = self.rt.export(inst, "try");
+                self.catchers.insert(key, c);
+                c
+            }
+        };
+        let scratch = match self.scratch {
+            Some(s) => s,
+            None => {
+                let s = self.table_grow(1)?;
+                self.scratch = Some(s);
+                s
+            }
+        };
+        self.world("table_set", &[scratch as u64, f as u64])?;
+        let mut params = ty.params.clone();
+        params.push(ValType::I32);
+        let mut results = vec![ValType::I32];
+        results.extend(&ty.results);
+        let mut vals = args.to_vec();
+        vals.push(scratch as u64);
+        let r = self.invoke(catcher, &FuncType::new(params, results), &vals)?;
+        if r[0] != 0 {
+            self.call("__cxa_begin_catch", &[Val::I32(r[0] as i32)])?;
+            self.call("_ZSt9terminatev", &[])?;
+            fail!("std::terminate returned");
+        }
+        Ok(r[1..].to_vec())
+    }
+
     /// The module `name` and the libraries it needs, not loaded yet,
     /// dependencies first.
-    fn collect(&self, name: &str, bytes: &[u8], cwasm: Option<&[u8]>, seen: &mut HashSet<String>, out: &mut Vec<Pending>) -> Result<()> {
+    fn collect<'a>(&self, name: &str, bytes: Cow<'a, [u8]>, compiled: Option<&'static [u8]>, seen: &mut HashSet<String>,
+                   out: &mut Vec<Pending<'a>>) -> Result<()> {
         if self.loaded.contains(name) || !seen.insert(name.to_string()) {
             return Ok(());
         }
-        let info = dylink(bytes).with_context(|| name.to_string())?;
+        let info = info(&bytes)?;
         for n in &info.needed {
             if self.loaded.contains(n) || seen.contains(n) {
                 continue;
             }
-            let lib = (self.libs)(n).ok_or_else(|| format_err!("{n}: not found (use -L)"))?;
-            self.collect(n, &lib.wasm, lib.cwasm, seen, out)?;
+            let Some(lib) = (self.libs)(n) else { fail!("{n}: not found (use -L)") };
+            self.collect(n, lib.wasm, lib.cwasm, seen, out)?;
         }
-        // SAFETY: a .cwasm comes from the binary, which build.rs made with
-        // the same wasmtime; one that does not fit this Engine fails
-        let compiled = cwasm.and_then(|c| unsafe { Module::deserialize(&self.engine, c) }.ok());
-        let module = match compiled {
-            Some(m) => m,
-            None => Module::new(&self.engine, bytes).with_context(|| name.to_string())?,
-        };
-        let debug = debug(&module, bytes).with_context(|| name.to_string())?;
-        out.push(Pending { name: name.to_string(), module, info, debug });
+        let debug = debug(&bytes)?;
+        out.push(Pending { name: name.to_string(), bytes, compiled, info, debug });
         Ok(())
     }
 
@@ -407,17 +600,12 @@ impl Loader {
             return n.to_string();
         }
         let wrap = format!("__wrap_{name}");
-        if self.store.data().syms.contains_key(&wrap) { wrap } else { name.to_string() }
+        if self.syms.contains_key(&wrap) { wrap } else { name.to_string() }
     }
 
-    /// Calls the function `name` the modules define.
-    pub fn call(&mut self, name: &str, args: &[Val]) -> Result<Option<Val>> {
-        let Some((Sym::Func(Some(f)), _)) = self.store.data().syms.get(name).copied() else {
-            bail!("undefined symbol: {}", source_name(name))
-        };
-        let mut res = vec![Val::I32(0); f.ty(&self.store).results().len()];
-        f.call(&mut self.store, args, &mut res)?;
-        Ok(res.into_iter().next())
+    /// The size of the memory, in bytes.
+    fn memory_size(&mut self) -> Result<u64> {
+        Ok(self.world("size", &[])?[0] * PAGE as u64)
     }
 
     /// `size` bytes of memory aligned to `align`.
@@ -426,10 +614,10 @@ impl Loader {
             let r = self.call("aligned_alloc", &[Val::I32(align_ as i32), Val::I32(align(size.max(1), align_) as i32)])?;
             let p = r.and_then(|v| v.i32()).unwrap_or(0) as u32;
             if p == 0 {
-                bail!("out of memory loading a module");
+                fail!("out of memory loading a module");
             }
             // the memory of a module starts zeroed (.bss)
-            self.memory.data_mut(&mut self.store)[p as usize..(p + size) as usize].fill(0);
+            self.rt.write(self.world.memory, p, &vec![0; size as usize]);
             return Ok(p);
         };
         let p = align(b, align_);
@@ -439,47 +627,24 @@ impl Loader {
     }
 
     fn reserve(&mut self, end: u32) -> Result<()> {
-        let have = self.memory.data_size(&self.store) as u64;
+        let have = self.memory_size()?;
         if (end as u64) > have {
-            self.memory.grow(&mut self.store, (end as u64 - have).div_ceil(PAGE as u64))?;
+            let r = self.world("grow", &[(end as u64 - have).div_ceil(PAGE as u64)])?;
+            if r[0] as u32 == u32::MAX {
+                fail!("out of memory loading a module");
+            }
         }
         Ok(())
     }
 
-    /// The WASI functions the modules import, through a shim that exports
-    /// the memory.
-    fn wasi_shim(&mut self, group: &[Pending]) -> Result<()> {
-        let mut need: Vec<(String, FuncType)> = Vec::new();
-        for p in group {
-            for i in p.module.imports() {
-                if let (true, ExternType::Func(ft)) = (i.module() == "wasi_snapshot_preview1", i.ty()) {
-                    if !self.wasi.contains_key(i.name()) && !need.iter().any(|(n, _)| n == i.name()) {
-                        need.push((i.name().to_string(), ft));
-                    }
-                }
-            }
+    /// Grows the table by `n` null slots: the first of them.
+    fn table_grow(&mut self, n: u32) -> Result<u32> {
+        let r = self.world("table_grow", &[n as u64])?[0] as u32;
+        if r == u32::MAX {
+            fail!("the function table cannot grow");
         }
-        if need.is_empty() {
-            return Ok(());
-        }
-        // function k calls import k
-        let mut shim = Shim::default();
-        let memory = we::MemoryType { minimum: 0, maximum: None, memory64: false, shared: false, page_size_log2: None };
-        shim.imports.import("env", "memory", memory);
-        shim.exports.export("memory", we::ExportKind::Memory, 0);
-        for (k, (n, ft)) in need.iter().enumerate() {
-            let k = k as u32;
-            shim.imports.import("wasi_snapshot_preview1", n, we::EntityType::Function(k));
-            shim.exports.export(n, we::ExportKind::Func, need.len() as u32 + k);
-            shim.func(k, ft, |s| { s.call(k); });
-        }
-        let m = Module::new(&self.engine, shim.finish())?;
-        let inst = self.linker.instantiate(&mut self.store, &m)?;
-        for (n, _) in need {
-            let f = inst.get_func(&mut self.store, &n).unwrap();
-            self.wasi.insert(n, f);
-        }
-        Ok(())
+        self.table_size = r + n;
+        Ok(r)
     }
 
     /// The address of the variable `name` until it is defined: 0 once the
@@ -504,87 +669,106 @@ impl Loader {
         self.later.iter().any(|(l, _)| l == n).then(|| source_name(n))
     }
 
-    /// The table slot reserved for a function not defined yet. Its type,
-    /// if known (a call, not only an address), fills it.
-    fn reserve_slot(&mut self, name: &str, ft: Option<&FuncType>) -> Result<u32> {
-        // until the function comes, a call says which one is missing
-        let init = |store: &mut Store<Host>| ft.map(|ft| {
-            let n = source_name(name);
-            Func::new(store, ft.clone(), move |_, _, _| bail!("undefined symbol: {n}"))
-        });
-        if let Some(&s) = self.slots.get(name) {
-            // reserved by an address (GOT.func), which left it null
-            if ft.is_some() && matches!(self.table.get(&mut self.store, s as u64), Some(Ref::Func(None))) {
-                let f = init(&mut self.store);
-                self.table.set(&mut self.store, s as u64, Ref::Func(f))?;
-            }
-            return Ok(s);
-        }
-        let f = init(&mut self.store);
-        let s = self.table.grow(&mut self.store, 1, Ref::Func(f))? as u32;
-        self.slots.insert(name.to_string(), s);
-        Ok(s)
+    /// The function not defined yet whose call stopped the code, as the
+    /// source names it, if one did since the last time.
+    pub fn missing(&mut self) -> Option<String> {
+        let id = self.world("take_missing", &[]).ok()?[0] as usize;
+        id.checked_sub(1).and_then(|k| self.missing.get(k)).cloned()
     }
 
-    /// Stubs for the function imports of `module` with no function yet:
+    /// The table slot reserved for a function not defined yet, and whether
+    /// it is to be filled now: with its type, if known (a call, not only an
+    /// address), a function that says which one is missing.
+    fn reserve_slot(&mut self, name: &str, ft: bool) -> Result<(u32, bool)> {
+        if let Some(&(s, filled)) = self.slots.get(name) {
+            // reserved by an address (GOT.func), which left it null
+            if ft && !filled {
+                self.slots.insert(name.to_string(), (s, true));
+                return Ok((s, true));
+            }
+            return Ok((s, false));
+        }
+        let s = self.table_grow(1)?;
+        self.slots.insert(name.to_string(), (s, ft));
+        Ok((s, ft))
+    }
+
+    /// Stubs for the function imports of a module with no function yet:
     /// each calls through the symbol's table slot, which a module of the
     /// group fills once instantiated, or a later one.
-    fn stubs(&mut self, module: &Module) -> Result<HashMap<String, Func>> {
-        let need: Vec<(String, FuncType)> = module.imports()
-            .filter_map(|i| match (i.module(), i.ty()) {
-                ("env", ExternType::Func(ft)) if !self.defines(&self.target(i.name())) =>
-                    Some((i.name().to_string(), ft)),
-                _ => None,
-            })
-            .collect();
+    fn stubs(&mut self, imports: &[(String, String, Kind)]) -> Result<HashMap<String, H>> {
+        let mut need: Vec<(String, FuncType, u32)> = Vec::new();
+        let mut undefined: Vec<(FuncType, u32, u32)> = Vec::new(); // the function's slot and number
+        for (m, n, k) in imports {
+            let Kind::Func(ft) = k else { continue };
+            let t = self.target(n);
+            if m != "env" || self.defines(&t) {
+                continue;
+            }
+            let slot = if matches!(self.syms.get(&t), Some((Sym::Func(None, _), _))) {
+                self.slot(&t)?
+            } else {
+                let (s, fill) = self.reserve_slot(&t, true)?;
+                if fill {
+                    let id = match self.missing.iter().position(|x| *x == source_name(&t)) {
+                        Some(k) => k,
+                        None => {
+                            self.missing.push(source_name(&t));
+                            self.missing.len() - 1
+                        }
+                    };
+                    undefined.push((ft.clone(), s, id as u32 + 1));
+                }
+                s
+            };
+            need.push((n.clone(), ft.clone(), slot));
+        }
         if need.is_empty() {
             return Ok(HashMap::new());
         }
-        let mut shim = Shim::default();
-        let table = we::TableType { element_type: we::RefType::FUNCREF, table64: false, minimum: 0, maximum: None, shared: false };
-        shim.imports.import("env", "__indirect_function_table", table);
-        for (k, (n, ft)) in need.iter().enumerate() {
-            let t = self.target(n);
-            let pending = matches!(self.store.data().syms.get(&t), Some((Sym::Func(None), _)));
-            let (k, slot) = (k as u32, if pending { self.slot(&t)? } else { self.reserve_slot(&t, Some(ft))? });
-            shim.exports.export(&format!("s{k}"), we::ExportKind::Func, k);
-            shim.func(k, ft, |s| { s.i32_const(slot as i32).call_indirect(0, k); });
+        let s: Vec<_> = need.iter().map(|(_, t, s)| (t, *s)).collect();
+        let u: Vec<_> = undefined.iter().map(|(t, _, id)| (t, *id)).collect();
+        let mut imports = [Import::Handle(self.world.table), Import::Handle(self.world.missing)];
+        let inst = self.rt.instantiate(&gen::stubs(&s, &u), None, &mut imports)?;
+        for (k, (_, slot, _)) in undefined.iter().enumerate() {
+            let f = self.rt.export(inst, &format!("u{k}"));
+            self.world("table_set", &[*slot as u64, f as u64])?;
         }
-        let m = Module::new(&self.engine, shim.finish())?;
-        let inst = Instance::new(&mut self.store, &m, &[self.table.into()])?;
         let mut out = HashMap::new();
-        for (k, (n, _)) in need.into_iter().enumerate() {
-            out.insert(n, inst.get_func(&mut self.store, &format!("s{k}")).unwrap());
+        for (k, (n, _, _)) in need.into_iter().enumerate() {
+            out.insert(n, self.rt.export(inst, &format!("s{k}")));
         }
         Ok(out)
     }
 
     /// The table slot of a function symbol, the same for every module.
     fn slot(&mut self, name: &str) -> Result<u32> {
-        let (sym, slot) = self.store.data().syms[name];
+        let (sym, slot) = self.syms[name];
         if let Some(s) = slot {
             return Ok(s);
         }
-        let Sym::Func(f) = sym else { bail!("{name}: GOT.func of data") };
-        let s = self.table.grow(&mut self.store, 1, Ref::Func(f))? as u32;
-        self.store.data_mut().syms.get_mut(name).unwrap().1 = Some(s);
+        let Sym::Func(f, _) = sym else { fail!("{name}: GOT.func of data") };
+        let s = self.table_grow(1)?;
+        if let Some(f) = f {
+            self.world("table_set", &[s as u64, f as u64])?;
+        }
+        self.syms.get_mut(name).unwrap().1 = Some(s);
         Ok(s)
     }
 
     /// The slots reserved for functions now defined become theirs: a
     /// function of a group being loaded fills its slot once its module is
     /// instantiated. Returns the slots taken.
-    fn forward(&mut self) -> Result<Vec<(String, u32)>> {
-        let syms = &self.store.data().syms;
-        let slots: Vec<(String, u32, Option<Func>)> = self.slots.iter()
-            .filter_map(|(n, &s)| match syms.get(n) { Some((Sym::Func(f), None)) => Some((n.clone(), s, *f)), _ => None })
+    fn forward(&mut self) -> Result<Vec<(String, (u32, bool))>> {
+        let slots: Vec<(String, (u32, bool), Option<H>)> = self.slots.iter()
+            .filter_map(|(n, &s)| match self.syms.get(n) { Some((Sym::Func(f, _), None)) => Some((n.clone(), s, *f)), _ => None })
             .collect();
         let mut taken = Vec::new();
         for (n, s, f) in slots {
-            if f.is_some() {
-                self.table.set(&mut self.store, s as u64, Ref::Func(f))?;
+            if let Some(f) = f {
+                self.world("table_set", &[s.0 as u64, f as u64])?;
             }
-            self.store.data_mut().syms.get_mut(&n).unwrap().1 = Some(s);
+            self.syms.get_mut(&n).unwrap().1 = Some(s.0);
             self.slots.remove(&n);
             taken.push((n, s));
         }
@@ -593,18 +777,27 @@ impl Loader {
 
     /// The GOT.mem imports of variables the group just loaded defines.
     fn resolve_later(&mut self) -> Result<()> {
+        let mut set = Vec::new();
         for (n, g) in std::mem::take(&mut self.later) {
-            match self.store.data().syms.get(&n).copied() {
-                Some((Sym::Data(a), _)) => g.set(&mut self.store, Val::I32(a as i32))?,
+            match self.syms.get(&n).copied() {
+                Some((Sym::Data(a), _)) => set.push((g, a as i32)),
                 _ => self.later.push((n, g)),
             }
         }
+        if set.is_empty() {
+            return Ok(());
+        }
+        let values: Vec<i32> = set.iter().map(|s| s.1).collect();
+        let mut imports: Vec<Import> = set.iter().map(|s| Import::Handle(s.0)).collect();
+        let inst = self.rt.instantiate(&gen::setter(&values), None, &mut imports)?;
+        let f = self.rt.export(inst, "set");
+        self.invoke(f, &FuncType::new([], []), &[])?;
         Ok(())
     }
 
     /// Loads `path` and what it needs: see [`Loader::load_bytes`].
     pub fn load(&mut self, path: &Path, shadow: bool) -> Result<()> {
-        let bytes = std::fs::read(path).with_context(|| format!("{}", path.display()))?;
+        let bytes = std::fs::read(path).map_err(|e| Error::Fail(format!("{}: {e}", path.display())))?;
         // entries are told apart by path, libraries by name
         self.load_bytes(&path.to_string_lossy(), &bytes, shadow)
     }
@@ -621,31 +814,28 @@ impl Loader {
     /// instantiate, what the group defined is undone.
     pub fn load_bytes(&mut self, name: &str, bytes: &[u8], shadow: bool) -> Result<()> {
         let mut group = Vec::new();
-        self.collect(name, bytes, None, &mut HashSet::new(), &mut group)?;
-        self.debug.extend(group.iter_mut().filter_map(|p| p.debug.take()));
-        if group.iter().any(|p| p.module.get_export("__asan_init").is_some()) && !self.asan {
+        self.collect(name, Cow::Borrowed(bytes), None, &mut HashSet::new(), &mut group)?;
+        if group.iter().any(|p| p.info.exports.iter().any(|(n, _)| n == "__asan_init")) && !self.asan {
             // the shadow, after the stack: the first group has the memory to itself
             match self.bump {
                 Some(b) if b <= SHADOW => self.bump = Some(SHADOW_END),
-                _ => bail!("ASan's runtime comes after the first modules, or the stack is over {SHADOW} bytes"),
+                _ => fail!("ASan's runtime comes after the first modules, or the stack is over {SHADOW} bytes"),
             }
             self.reserve(SHADOW_END)?;
             self.asan = true;
         }
-        self.wasi_shim(&group)?;
         self.journal = Some(Vec::new());
         let mut taken = Vec::new();
-        let r = self.instantiate(name, &group, shadow, &mut taken);
+        let r = self.instantiate(name, &mut group, shadow, &mut taken);
         let journal = self.journal.take().unwrap_or_default();
         let insts = match r {
             Ok(insts) => insts,
             Err(e) => {
                 // the slots the group took are reserved again, for whatever defines them
                 for (n, old) in journal.into_iter().rev() {
-                    let syms = &mut self.store.data_mut().syms;
                     match old {
-                        Some(o) => syms.insert(n, o),
-                        None => syms.remove(&n),
+                        Some(o) => self.syms.insert(n, o),
+                        None => self.syms.remove(&n),
                     };
                 }
                 self.slots.extend(taken);
@@ -655,14 +845,17 @@ impl Loader {
         self.resolve_later()?;
         for (p, (inst, base)) in group.iter().zip(insts) {
             self.loaded.insert(p.name.clone());
-            for f in ["__wasm_apply_data_relocs", if inst.get_func(&mut self.store, "_initialize").is_some() {
-                "_initialize" } else { "__wasm_call_ctors" }] {
-                if f != "__wasm_apply_data_relocs" {
-                    self.image(base);
-                }
-                if let Some(f) = inst.get_func(&mut self.store, f) {
-                    f.call(&mut self.store, &[], &mut [])?;
-                }
+            let relocs = self.rt.export(inst, "__wasm_apply_data_relocs");
+            if relocs != 0 {
+                self.invoke(relocs, &FuncType::new([], []), &[])?;
+            }
+            self.image(base)?;
+            let init = match self.rt.export(inst, "_initialize") {
+                0 => self.rt.export(inst, "__wasm_call_ctors"),
+                f => f,
+            };
+            if init != 0 {
+                self.guarded(init, &FuncType::new([], []), &[])?;
             }
         }
         Ok(())
@@ -671,36 +864,38 @@ impl Loader {
     /// The group's symbols from the bytes, then each module instantiated:
     /// the instances and their memory bases. `taken`: the reserved slots
     /// the group's functions took.
-    fn instantiate(&mut self, name: &str, group: &[Pending], shadow: bool, taken: &mut Vec<(String, u32)>)
-                   -> Result<Vec<(Instance, u32)>> {
+    fn instantiate(&mut self, name: &str, group: &mut [Pending], shadow: bool, taken: &mut Vec<(String, (u32, bool))>)
+                   -> Result<Vec<(H, u32)>> {
         let mut bases = Vec::new();
         let mut owner: HashMap<String, usize> = HashMap::new(); // the module of each function defined
         for (k, p) in group.iter().enumerate() {
             let shadow = shadow && p.name == name;
             let mem_base = self.alloc(p.info.mem_size, 1 << p.info.mem_align)?;
             if p.info.mem_size > 0 && self.asan {
-                self.store.data_mut().data.push(Data { start: mem_base, end: mem_base + p.info.mem_size, image: Vec::new() });
+                self.data.push(Data { start: mem_base, end: mem_base + p.info.mem_size, image: Vec::new() });
             }
-            let size = self.table.size(&self.store) as u32;
-            let table_base = align(size, 1 << p.info.table_align);
-            self.table.grow(&mut self.store, (table_base + p.info.table_size - size) as u64, Ref::Func(None))?;
+            let table_base = align(self.table_size, 1 << p.info.table_align);
+            let grow = table_base + p.info.table_size - self.table_size;
+            if grow > 0 {
+                self.table_grow(grow)?;
+            }
             bases.push((mem_base, table_base));
-            for e in p.module.exports() {
-                let n = e.name();
-                if INTERNAL.contains(&n) {
+            for (n, kind) in &p.info.exports {
+                if INTERNAL.contains(&n.as_str()) {
                     continue;
                 }
                 // an inline function, a vtable or a typeinfo is one for all modules
                 let shadow = shadow && !p.info.weak_def.contains(n);
-                match e.ty() {
-                    ExternType::Func(_) => {
-                        if self.define(n, Sym::Func(None), shadow) {
+                match kind {
+                    Kind::Func(ft) => {
+                        let t = self.ty(ft);
+                        if self.define(n, Sym::Func(None, t), shadow) {
                             owner.insert(n.to_string(), k);
                         }
                     }
-                    ExternType::Global(g) if g.mutability() == Mutability::Const => match p.info.consts.get(n) {
+                    Kind::Global => match p.info.consts.get(n) {
                         Some(Some(v)) => { self.define(n, Sym::Data(mem_base.wrapping_add(*v as u32)), shadow); }
-                        Some(None) => bail!("{}: {n}, a global that is not a constant", p.name),
+                        Some(None) => fail!("{}: {n}, a global that is not a constant", p.name),
                         None => {}
                     },
                     _ => {}
@@ -711,140 +906,154 @@ impl Loader {
             // the heap starts after the first group and has the rest of its page
             let base = align(b, 16);
             self.reserve(base + 1)?;
-            let end = self.memory.data_size(&self.store) as u32;
+            let end = self.memory_size()? as u32;
             self.define("__heap_base", Sym::Data(base), false);
             self.define("__heap_end", Sym::Data(end), false);
         }
         *taken = self.forward()?;
         let mut insts = Vec::new();
-        for (k, (p, (mem_base, table_base))) in group.iter().zip(bases).enumerate() {
-            let konst = GlobalType::new(ValType::I32, Mutability::Const);
-            let stubs = self.stubs(&p.module)?;
-            let mut imports: Vec<Extern> = Vec::new();
-            for i in p.module.imports() {
-                let (m, n) = (i.module(), i.name());
+        for (k, (p, (mem_base, table_base))) in group.iter_mut().zip(bases).enumerate() {
+            let stubs = self.stubs(&p.info.imports)?;
+            let mut imports = Vec::new();
+            let mut later = Vec::new(); // the GOT.mem imports to set later
+            for (m, n, kind) in &p.info.imports {
                 let weak = p.info.weak.contains(n);
-                imports.push(match (m, n, i.ty()) {
-                    ("env", "memory", _) => self.memory.into(),
-                    ("env", "__indirect_function_table", _) => self.table.into(),
-                    ("env", "__stack_pointer", _) => self.sp.into(),
-                    ("env", "__memory_base", _) => Global::new(&mut self.store, konst.clone(), Val::I32(mem_base as i32))?.into(),
-                    ("env", "__table_base", _) => Global::new(&mut self.store, konst.clone(), Val::I32(table_base as i32))?.into(),
-                    ("GOT.mem" | "GOT.func", _, ExternType::Global(_)) => self.got(&self.target(n), m == "GOT.func", weak)?.into(),
-                    ("wasi_snapshot_preview1", _, _) => self.wasi[n].into(),
-                    ("env", _, ExternType::Func(_)) => match self.store.data().syms.get(&self.target(n)) {
-                        Some((Sym::Func(Some(f)), _)) => (*f).into(),
-                        _ => stubs[n].into(),
+                imports.push(match (m.as_str(), n.as_str(), kind) {
+                    ("env", "memory", _) => Import::Handle(self.world.memory),
+                    ("env", "__indirect_function_table", _) => Import::Handle(self.world.table),
+                    ("env", "__stack_pointer", _) => Import::Handle(self.world.sp),
+                    ("env", "__memory_base", _) => Import::I32 { value: mem_base as i32, mutable: false },
+                    ("env", "__table_base", _) => Import::I32 { value: table_base as i32, mutable: false },
+                    ("GOT.mem" | "GOT.func", _, Kind::Global) => {
+                        let t = self.target(n);
+                        let (v, l) = self.got(&t, m == "GOT.func", weak)?;
+                        if l {
+                            later.push((imports.len(), t));
+                        }
+                        Import::I32 { value: v as i32, mutable: true }
+                    }
+                    ("wasi_snapshot_preview1", _, _) => Import::Default,
+                    ("env", _, Kind::Func(_)) => match self.syms.get(&self.target(n)) {
+                        Some((Sym::Func(Some(f), _), _)) => Import::Handle(*f),
+                        _ => Import::Handle(stubs[n]),
                     },
-                    ("env", _, ExternType::Tag(tt)) => match self.store.data().syms.get(n) {
-                        Some((Sym::Tag(t), _)) => (*t).into(),
+                    ("env", _, Kind::Tag(ft)) => match self.syms.get(n) {
+                        Some((Sym::Tag(t), _)) => Import::Handle(*t),
                         _ => {
-                            let t = Tag::new(&mut self.store, &tt)?;
+                            let inst = self.rt.instantiate(&gen::tag(ft), None, &mut [])?;
+                            let t = self.rt.export(inst, "t");
                             self.define(n, Sym::Tag(t), false);
-                            t.into()
+                            Import::Handle(t)
                         }
                     },
-                    _ => bail!("{}: unsupported import {m}.{n}", p.name),
+                    _ => fail!("{}: unsupported import {m}.{n}", p.name),
                 });
             }
-            let inst = Instance::new(&mut self.store, &p.module, &imports).with_context(|| p.name.clone())?;
-            let exports: Vec<(String, Extern)> = inst.exports(&mut self.store)
-                .map(|e| (e.name().to_string(), e.into_extern())).collect();
-            for (n, e) in exports {
-                match e {
-                    Extern::Func(f) if owner.get(&n) == Some(&k) => {
-                        let s = self.store.data_mut().syms.get_mut(&n).unwrap();
-                        s.0 = Sym::Func(Some(f));
+            let inst = self.rt.instantiate(&p.bytes, p.compiled, &mut imports)?;
+            for (i, n) in later {
+                if let Import::Handle(g) = imports[i] {
+                    self.later.push((n, g));
+                }
+            }
+            for (n, kind) in &p.info.exports {
+                match kind {
+                    Kind::Func(_) if owner.get(n) == Some(&k) => {
+                        let f = self.rt.export(inst, n);
+                        let s = self.syms.get_mut(n).unwrap();
+                        if let Sym::Func(_, t) = s.0 {
+                            s.0 = Sym::Func(Some(f), t);
+                        }
                         if let Some(slot) = s.1 {
-                            self.table.set(&mut self.store, slot as u64, Ref::Func(Some(f)))?;
+                            self.world("table_set", &[slot as u64, f as u64])?;
                         }
                     }
-                    Extern::Tag(t) if !INTERNAL.contains(&n.as_str()) => { self.define(&n, Sym::Tag(t), false); }
+                    Kind::Tag(_) if !INTERNAL.contains(&n.as_str()) => {
+                        let t = self.rt.export(inst, n);
+                        self.define(n, Sym::Tag(t), false);
+                    }
                     _ => {}
                 }
+            }
+            if let Some(mut d) = p.debug.take() {
+                d.instance = inst;
+                self.debug.push(d);
             }
             insts.push((inst, mem_base));
         }
         Ok(insts)
     }
 
-    /// A GOT entry at its value: an address or a table slot.
-    fn got(&mut self, n: &str, func: bool, weak: bool) -> Result<Global> {
-        let mut later = false;
-        let v = match self.store.data().syms.get(n).copied() {
-            Some((Sym::Data(a), _)) if !func => a,
-            Some((Sym::Func(_), _)) if func => self.slot(n)?,
-            Some(_) => bail!("{n}: GOT.{} of a {}", if func { "func" } else { "mem" }, if func { "data" } else { "function" }),
-            None if weak => 0,
-            None if func => self.reserve_slot(n, None)?,
-            None => {
-                later = true;
-                self.undefined_address(n)
-            }
-        };
-        let g = Global::new(&mut self.store, GlobalType::new(ValType::I32, Mutability::Var), Val::I32(v as i32))?;
-        if later {
-            self.later.push((n.to_string(), g));
-        }
-        Ok(g)
+    /// The value of a GOT entry, an address or a table slot, and whether
+    /// it is to be set when the variable comes.
+    fn got(&mut self, n: &str, func: bool, weak: bool) -> Result<(u32, bool)> {
+        Ok(match self.syms.get(n).copied() {
+            Some((Sym::Data(a), _)) if !func => (a, false),
+            Some((Sym::Func(..), _)) if func => (self.slot(n)?, false),
+            Some(_) => fail!("{n}: GOT.{} of a {}", if func { "func" } else { "mem" }, if func { "data" } else { "function" }),
+            None if weak => (0, false),
+            None if func => (self.reserve_slot(n, false)?.0, false),
+            None => (self.undefined_address(n), true),
+        })
     }
 
     /// Runs `main` and exits through libc's `exit`.
     pub fn run(&mut self) -> Result<i32> {
-        let syms = &self.store.data().syms;
-        let ret = if syms.contains_key("__main_argc_argv") {
-            self.call("__main_void", &[])?
-        } else if syms.contains_key("__original_main") {
-            self.call("__original_main", &[])?
-        } else if syms.contains_key("main") {
-            self.call("main", &[Val::I32(0), Val::I32(0)])?
-        } else {
-            None
+        let main = ["__main_argc_argv", "__original_main", "main"].into_iter().find(|n| self.syms.contains_key(*n));
+        let ret = match main {
+            Some("__main_argc_argv") => self.guarded_call("__main_void", &[])?,
+            Some("__original_main") => self.guarded_call("__original_main", &[])?,
+            Some(_) => self.guarded_call("main", &[0, 0])?,
+            None => Vec::new(),
         };
-        let code = ret.and_then(|v| v.i32()).unwrap_or(0);
-        self.call("exit", &[Val::I32(code)])?;
+        let code = ret.first().map_or(0, |&v| v as i32);
+        self.guarded_call("exit", &[code as u32 as u64])?;
         Ok(code)
     }
 
-    /// A C++ exception no one caught reaches the host: wasm has no search
-    /// phase, so libc++abi never calls `std::terminate`. Do what it does on
-    /// a native target: catch it and terminate, which prints its type and
-    /// `what()` and aborts.
-    pub fn uncaught(&mut self, e: Error) -> Result<i32> {
-        let Some(exn) = self.store.take_pending_exception() else { return Err(e) };
-        let tag = exn.tag(&mut self.store)?;
-        if let Some((Sym::Tag(cpp), _)) = self.store.data().syms.get("__cpp_exception").copied() {
-            if Tag::eq(&cpp, &tag, &self.store) {
-                if let Val::I32(p) = exn.field(&mut self.store, 0)? {
-                    self.call("__cxa_begin_catch", &[Val::I32(p)])?;
-                    self.call("_ZSt9terminatev", &[])?;
-                }
-            }
-        }
-        Err(e)
+    fn guarded_call(&mut self, name: &str, args: &[u64]) -> Result<Vec<u64>> {
+        let (f, ty) = self.func(name)?;
+        self.guarded(f, &ty, args)
     }
 
-    /// Defines the function `name`, which the modules loaded after may call,
-    /// in the host: `f` takes the memory and the arguments, and returns
-    /// nothing.
-    pub fn host(&mut self, name: &str, params: &[ValType], f: impl Fn(&[u8], &[Val]) + Send + Sync + 'static) {
-        let ty = FuncType::new(&self.engine, params.iter().cloned(), []);
-        let memory = self.memory;
-        let func = Func::new(&mut self.store, ty, move |caller, args, _| {
-            f(memory.data(&caller), args);
-            Ok(())
-        });
-        self.define(name, Sym::Func(Some(func)), true);
+    /// Defines `__sc_show_int` and `__sc_show_float`, which a REPL cell
+    /// that ends in an expression calls: [`Loader::shown`] says with what.
+    pub fn show(&mut self) {
+        for n in ["__sc_show_int", "__sc_show_float"] {
+            self.define_world(n);
+        }
+    }
+
+    fn define_world(&mut self, n: &'static str) {
+        let (f, ty) = self.world.funcs[n].clone();
+        let t = self.ty(&ty);
+        self.define(n, Sym::Func(Some(f), t), true);
+    }
+
+    /// What the last call to `__sc_show_*` was given since the last time.
+    pub fn shown(&mut self) -> Option<Shown> {
+        let r = self.world("take_shown", &[]).ok()?;
+        (r[0] != 0).then(|| Shown { float: r[0] == 2, ty: r[1] as u32, kind: r[2] as u32, bits: r[3] })
+    }
+
+    /// The memory from `addr`, at most `max` bytes; none if `addr` is
+    /// outside it.
+    pub fn read(&mut self, addr: u32, max: usize) -> Option<Vec<u8>> {
+        let size = self.memory_size().ok()?;
+        let n = (size.checked_sub(addr as u64)? as usize).min(max);
+        let mut buf = vec![0; n];
+        self.rt.read(self.world.memory, addr, &mut buf).then_some(buf)
     }
 
     /// What the data of the module at `base` is now, before its
     /// constructors: words that change after it may point to the heap.
-    fn image(&mut self, base: u32) {
-        let (mem, host) = self.memory.data_and_store_mut(&mut self.store);
-        if let Some(d) = host.data.iter_mut().rev().find(|d| d.start == base) {
-            let all = &mem[d.start as usize..d.end as usize];
-            d.image = all[..all.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1)].to_vec();
-        }
+    fn image(&mut self, base: u32) -> Result<()> {
+        let Some(k) = self.data.iter().rposition(|d| d.start == base) else { return Ok(()) };
+        let (start, end) = (self.data[k].start, self.data[k].end);
+        let mut all = vec![0; (end - start) as usize];
+        self.rt.read(self.world.memory, start, &mut all);
+        all.truncate(all.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1));
+        self.data[k].image = all;
+        Ok(())
     }
 
     /// libsc_rt's imports for the stacks of its blocks:
@@ -854,43 +1063,12 @@ impl Loader {
     /// follows ([`Loader::blamed`]); 0 is none. And those for its leaks
     /// ([`Loader::leaks`]): `uint64_t __sc_rt_data(uint32_t i)`, where the
     /// data of the i-th module is, and `void __sc_rt_leak(uint32_t
-    /// allocated, uint32_t bytes, uint32_t blocks)`.
+    /// allocated, uint32_t bytes, uint32_t blocks)`. They are the world's,
+    /// and `__sc_rt_stack` the runtime's `env.wasm_stack`.
     pub fn keep_stacks(&mut self) {
-        let ty = FuncType::new(&self.engine, [], [ValType::I32]);
-        let f = Func::new(&mut self.store, ty, |mut caller: Caller<'_, Host>, _, r| {
-            let bt = WasmBacktrace::capture(&caller);
-            let key: Vec<(usize, usize)> = bt.frames().iter()
-                .map(|f| (f.module().image_range().start as usize, f.module_offset().unwrap_or(0))).collect();
-            let st = &mut caller.data_mut().stacks;
-            let n = st.traces.len() as u32 + 1;
-            let id = *st.ids.entry(key).or_insert(n);
-            if id == n {
-                st.traces.push(Arc::new(bt));
-            }
-            r[0] = Val::I32(id as i32);
-            Ok(())
-        });
-        self.define("__sc_rt_stack", Sym::Func(Some(f)), true);
-        let ty = FuncType::new(&self.engine, [ValType::I32, ValType::I32], []);
-        let f = Func::new(&mut self.store, ty, |mut caller: Caller<'_, Host>, a, _| {
-            caller.data_mut().stacks.blamed = Some((a[0].unwrap_i32() as u32, a[1].unwrap_i32() as u32));
-            Ok(())
-        });
-        self.define("__sc_rt_blame", Sym::Func(Some(f)), true);
-        let ty = FuncType::new(&self.engine, [ValType::I32], [ValType::I64]);
-        let f = Func::new(&mut self.store, ty, |caller: Caller<'_, Host>, a, r| {
-            let d = caller.data().roots.get(a[0].unwrap_i32() as usize).copied();
-            r[0] = Val::I64(d.map_or(0, |(start, end)| ((end as u64) << 32 | start as u64) as i64));
-            Ok(())
-        });
-        self.define("__sc_rt_data", Sym::Func(Some(f)), true);
-        let ty = FuncType::new(&self.engine, [ValType::I32, ValType::I32, ValType::I32], []);
-        let f = Func::new(&mut self.store, ty, |mut caller: Caller<'_, Host>, a, _| {
-            let [x, y, z] = [0, 1, 2].map(|i| a[i].unwrap_i32() as u32);
-            caller.data_mut().stacks.leaks.push((x, y, z));
-            Ok(())
-        });
-        self.define("__sc_rt_leak", Sym::Func(Some(f)), true);
+        for n in ["__sc_rt_stack", "__sc_rt_blame", "__sc_rt_data", "__sc_rt_leak"] {
+            self.define_world(n);
+        }
     }
 
     /// The blocks of libsc_rt's allocator that nothing reaches from the
@@ -900,12 +1078,16 @@ impl Loader {
         if !self.defines("__sc_rt_leaks") {
             return Ok(Vec::new());
         }
-        let mem = self.memory.data(&self.store);
         let mut roots = Vec::new();
-        for d in &self.store.data().data {
+        for k in 0..self.data.len() {
+            let (start, end) = (self.data[k].start, self.data[k].end);
+            let from = start & !3;
+            let mut mem = vec![0; (end - from) as usize + 3];
+            self.rt.read(self.world.memory, from, &mut mem);
+            let d = &self.data[k];
             let mut run = None;
-            for a in (d.start & !3..d.end).step_by(4) {
-                let i = a as usize;
+            for a in (from..end).step_by(4) {
+                let i = (a - from) as usize;
                 let then = |k: usize| a.checked_sub(d.start).and_then(|o| d.image.get(o as usize + k)).copied().unwrap_or(0);
                 if (0..4).any(|k| mem[i + k] != then(k)) {
                     run.get_or_insert(a);
@@ -915,14 +1097,31 @@ impl Loader {
             }
             roots.extend(run.map(|s| (s, d.end)));
         }
-        self.store.data_mut().roots = roots;
+        // the data's ranges and the leaks go in memory of libc's allocator,
+        // which libsc_rt does not see
+        let bytes: Vec<u8> = roots.iter().flat_map(|&(s, e)| ((e as u64) << 32 | s as u64).to_le_bytes()).collect();
+        let size = bytes.len() as u32 + LEAKS * 12;
+        let buf = self.call("aligned_alloc", &[Val::I32(8), Val::I32(align(size.max(8), 8) as i32)])?
+            .and_then(|v| v.i32()).unwrap_or(0) as u32;
+        if buf == 0 {
+            fail!("out of memory looking for leaks");
+        }
+        let at = buf + bytes.len() as u32;
+        self.rt.write(self.world.memory, buf, &bytes);
+        self.world("set_data", &[buf as u64, roots.len() as u64])?;
+        self.world("set_leaks", &[at as u64, LEAKS as u64])?;
         let sp = self.stack_pointer();
-        self.call("__sc_rt_leaks", &[sp])?;
-        let st = &mut self.store.data_mut().stacks;
-        let mut out: Vec<Leak> = st.leaks.drain(..).map(|(a, bytes, blocks)| Leak {
-            allocated: a.checked_sub(1).and_then(|i| st.traces.get(i as usize)).cloned(),
-            bytes,
-            blocks,
+        let r = self.call("__sc_rt_leaks", &[Val::I32(sp)]);
+        self.world("set_data", &[0, 0])?;
+        let n = (self.world("leak_count", &[])?[0] as u32).min(LEAKS);
+        let mut leaks = vec![0; n as usize * 12];
+        self.rt.read(self.world.memory, at, &mut leaks);
+        self.call("free", &[Val::I32(buf as i32)])?;
+        r?;
+        let word = |b: &[u8]| u32::from_le_bytes(b.try_into().unwrap());
+        let mut out: Vec<Leak> = leaks.chunks(12).map(|l| {
+            let a = word(&l[0..4]);
+            Leak { allocated: (a != 0).then(|| self.rt.stack(a)), bytes: word(&l[4..8]), blocks: word(&l[8..12]) }
         }).collect();
         out.sort_by_key(|l| std::cmp::Reverse(l.bytes));
         Ok(out)
@@ -930,26 +1129,25 @@ impl Loader {
 
     /// The stacks where the block of libsc_rt's last report was allocated
     /// and freed, if it named them ([`Loader::keep_stacks`]).
-    pub fn blamed(&mut self) -> (Option<Arc<WasmBacktrace>>, Option<Arc<WasmBacktrace>>) {
-        let st = &mut self.store.data_mut().stacks;
-        let (a, f) = st.blamed.take().unwrap_or((0, 0));
-        let get = |id: u32| id.checked_sub(1).and_then(|i| st.traces.get(i as usize)).cloned();
-        (get(a), get(f))
+    pub fn blamed(&mut self) -> (Option<Vec<Frame>>, Option<Vec<Frame>>) {
+        let r = self.world("take_blamed", &[]).unwrap_or_else(|_| vec![0, 0]);
+        let get = |id: u64| (id != 0).then(|| self.rt.stack(id as u32));
+        (get(r[0]), get(r[1]))
     }
 
     /// The function, file and line of `frame`, inlined functions first,
     /// from its module's DWARF; none without it.
-    pub fn symbols(&self, frame: &FrameInfo) -> Vec<Symbol> {
-        let Some(d) = self.debug.iter().find(|d| Module::same(&d.module, frame.module())) else { return Vec::new() };
+    pub fn symbols(&self, frame: &Frame) -> Vec<Symbol> {
+        let Some(d) = self.debug.iter().find(|d| Some(d.instance) == frame.instance) else { return Vec::new() };
         let cx = d.cx.get_or_init(|| {
             let empty: Arc<[u8]> = Arc::from([]);
-            let dwarf = gimli::Dwarf::load(|id| -> Result<Dwarf, gimli::Error> {
+            let dwarf = gimli::Dwarf::load(|id| -> std::result::Result<Dwarf, gimli::Error> {
                 let data = d.sections.get(id.name()).unwrap_or(&empty);
                 Ok(Dwarf::new(Arc::clone(data), gimli::LittleEndian))
             }).ok()?;
             addr2line::Context::from_dwarf(dwarf).ok()
         });
-        let (Some(cx), Some(at)) = (cx, frame.module_offset()) else { return Vec::new() };
+        let (Some(cx), Some(at)) = (cx, frame.offset) else { return Vec::new() };
         let mut out = Vec::new();
         if let Ok(mut fs) = cx.find_frames(at as u64 - d.code).skip_all_loads() {
             while let Ok(Some(f)) = fs.next() {
@@ -973,50 +1171,16 @@ impl Loader {
 
     /// Whether the modules define the function `name`.
     pub fn defines(&self, name: &str) -> bool {
-        matches!(self.store.data().syms.get(name), Some((Sym::Func(Some(_)), _)))
+        matches!(self.syms.get(name), Some((Sym::Func(Some(_), _), _)))
     }
 
     /// The stack pointer, which a trap leaves where the code that trapped
     /// had it.
-    pub fn stack_pointer(&mut self) -> Val {
-        self.sp.get(&mut self.store)
+    pub fn stack_pointer(&mut self) -> i32 {
+        self.world("get_sp", &[]).map_or(0, |r| r[0] as i32)
     }
 
-    pub fn set_stack_pointer(&mut self, v: Val) -> Result<()> {
-        self.sp.set(&mut self.store, v)
-    }
-
-    /// From now on, a Ctrl-C ([`Loader::on_ctrl_c`]) stops the code running
-    /// with a trap.
-    pub fn arm(&mut self) {
-        self.store.set_epoch_deadline(1);
-    }
-
-    /// From now on, Ctrl-C stops the code this loader runs (armed), in place
-    /// of the loader's before, and calls `also`, which must be safe in a
-    /// signal handler (`sc::engine::interrupt`: the compile). The first call
-    /// installs the SIGINT handler.
-    pub fn on_ctrl_c(&self, also: fn()) {
-        let _ = CTRL_C_ALSO.set(also);
-        if CTRL_C.lock().unwrap().replace(self.engine.clone()).is_none() {
-            // SAFETY: the handler only increments the epoch and calls `also`
-            unsafe { libc::signal(libc::SIGINT, on_sigint as *const () as libc::sighandler_t) };
-        }
-    }
-}
-
-/// The engine Ctrl-C interrupts: the last loader's ([`Loader::on_ctrl_c`]).
-static CTRL_C: std::sync::Mutex<Option<Engine>> = std::sync::Mutex::new(None);
-static CTRL_C_ALSO: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
-
-extern "C" fn on_sigint(_: libc::c_int) {
-    if let Some(also) = CTRL_C_ALSO.get() {
-        also();
-    }
-    // the main thread holds the lock only to put a new engine there
-    if let Ok(e) = CTRL_C.try_lock() {
-        if let Some(e) = e.as_ref() {
-            e.increment_epoch();
-        }
+    pub fn set_stack_pointer(&mut self, sp: i32) -> Result<()> {
+        self.world("set_sp", &[sp as u32 as u64]).map(drop)
     }
 }

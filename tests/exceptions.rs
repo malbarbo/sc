@@ -3,8 +3,7 @@
 
 mod common;
 
-use sc::loader::Loader;
-use wasmtime::Val;
+use sc::loader::{Loader, Val};
 
 /// The resident memory of this process, in bytes.
 fn rss() -> u64 {

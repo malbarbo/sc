@@ -4636,3 +4636,73 @@ desfazer. O `loader.mjs` não desfaz.
 diferenças (6 conhecidos). `make test-session`: 11.918 resultados, 0 ruins
 (38 conhecidos). `make test-aluno`, `make test-checks` (os níveis com o
 ASan) e `make test-loader` passam.
+
+## 63. O loader sobre um trait de runtime: as primitivas do Rascunho 4
+
+Segundo passo (§61, §62): o núcleo do `src/loader.rs` não usa mais o
+wasmtime. Ele pede ao runtime só o que o host dará ao `sc.wasm` como
+`env.wasm_*` (`src/loader/runtime.rs`, o trait `Runtime`):
+
+| primitiva | o que faz |
+| --- | --- |
+| `instantiate(bytes, compilado, imports)` | compila e instancia; um import é um handle, o padrão do runtime (WASI, `env.wasm_stack`) ou um i32 que vira um global novo, cujo handle volta na lista |
+| `export(inst, nome)` | o handle do que a instância exporta |
+| `call(f, assinatura, vals)` | chama; o erro é `Exit`, `Trap` (tipo, mensagem, endereço da falha, quadros) ou `Fail` |
+| `read`, `write` | a memória |
+| `stack(id)` | os quadros de uma pilha que `env.wasm_stack` guardou |
+
+`src/loader/native.rs` implementa o trait sobre o wasmtime: os handles são
+um vetor de `Extern` e de instâncias, o WASI passa pelo mesmo shim que
+exporta a memória (um por memória e por instanciação que pede funções
+novas), e cada `call` arma o epoch, então o Ctrl-C para a chamada em que
+cai sem o `arm()` de antes. O `Machine` pega o trap, a saída e as pilhas
+pelos tipos do loader (`loader::Error`, `Trap`, `Frame`), e o DWARF é
+achado pela instância do quadro.
+
+**O que o loader gera** (`src/loader/gen.rs`, com o `wasm-encoder`):
+- **o mundo**, instanciado uma vez: a memória, a tabela, o
+  `__stack_pointer` e funções para crescer a memória e a tabela, pôr uma
+  função na tabela e ler e escrever o stack pointer;
+- **os stubs**, como antes, e no mesmo módulo as funções que ainda não
+  existem: em vez de uma função do host que falha com o nome, uma que
+  grava o número dela no global `missing` do mundo e executa
+  `unreachable`; o `Machine` lê o nome depois do trap (`Loader::missing`);
+- **uma tag**, quando um módulo importa uma que ninguém definiu;
+- **um módulo que acerta globals** para os `GOT.mem` de variáveis que
+  chegam depois (um por grupo que tem algum);
+- **o `try`**, por assinatura: chama pela tabela a função dada num
+  `try_table` com a tag `__cpp_exception`. Os construtores, o `main` e o
+  `exit` passam por ele; uma exceção C++ que ninguém pega volta como
+  número, e o loader chama `__cxa_begin_catch` e `std::terminate`, como o
+  `uncaught()` fazia com o `take_pending_exception`. Ele só existe depois
+  que um módulo define a tag (a do libc++abi), então um programa C não o
+  usa.
+
+**As funções do host viraram funções do mundo**, sem callbacks (decisão
+do usuário: o Rascunho 4 continua sem `wasm_func_new`; ele volta à mesa
+com o sgleam):
+- `__sc_show_int` e `__sc_show_float` gravam os argumentos em globals; o
+  `Machine` os lê logo depois da célula, antes do `fflush`, e lê da
+  memória o nome do tipo e a string;
+- `__sc_rt_blame` grava os dois números;
+- `__sc_rt_data` lê as faixas de dados de uma tabela que o loader escreve
+  na memória antes do `__sc_rt_leaks`, e `__sc_rt_leak` escreve cada grupo
+  de blocos perdidos noutra (até 16.384 grupos); as duas ficam num bloco do
+  `aligned_alloc` da libc, que o libsc_rt não vê, e o loader o libera
+  depois. O protocolo do libsc_rt não mudou;
+- `__sc_rt_stack` é o `env.wasm_stack` do runtime, que o mundo importa e
+  reexporta: só capturar a pilha precisa do host.
+
+**As baterias.** `make test-split`: 1.947 programas, 10.541 células, 0
+diferenças (6 conhecidos), 5m10s (5m05s antes). `make test-session`:
+11.918 resultados, 0 ruins (38 conhecidos), 4m45s (4m41s antes). `make
+test-aluno`, `make test-checks`, `make test-loader`, `make test-proto` e
+`make test-session-wasm` (11.926 resultados, 0 ruins, 40 conhecidos)
+passam. As chamadas a mais (o mundo, o `try`) não aparecem no tempo.
+
+**Visto no caminho.** O `libc++.so` e o `libc++abi.so` definem, cada um,
+a sua tag `__cpp_exception`; o loader dá a todos a primeira, a do
+libc++abi, que é a do `__cxa_throw`. Um `catch (...)` dentro do
+`libc++.so` funciona (cai no `catch_all`: um `streambuf` que lança deixa o
+`badbit`), mas um `catch` tipado compilado no `libc++.so` não pegaria a
+exceção. Já era assim antes deste passo.

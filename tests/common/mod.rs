@@ -1,6 +1,7 @@
 //! The module of the tests: one per file, so each runs in its own process
 //! (the signal handler, the resident memory).
 
+use sc::loader::native::Wasmtime;
 use sc::loader::{libdirs, Loader, STACK};
 use wasmtime_wasi::WasiCtxBuilder;
 
@@ -28,7 +29,7 @@ pub const MODULE: &str = r#"
 "#;
 
 pub fn loader() -> Loader {
-    let mut l = Loader::new(WasiCtxBuilder::new().build_p1(), libdirs(Vec::new()), STACK).unwrap();
+    let mut l = Loader::new(Wasmtime::new(WasiCtxBuilder::new().build_p1()).unwrap(), libdirs(Vec::new()), STACK).unwrap();
     l.load_bytes("cell", &wat::parse_str(MODULE).unwrap(), true).unwrap();
     l
 }
