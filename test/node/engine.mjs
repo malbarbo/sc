@@ -11,7 +11,10 @@
 // SC_MEMORY_SIZE writes
 // the memory's size after each cell, as wasm.rs does; SC_SNAPSHOT_LOG
 // appends to that file, for each snapshot, the memory's size and the ms to
-// copy and to restore it (or -).
+// copy and to restore it (or -). SC_SNAPSHOT=engine: the session takes the
+// snapshot itself (engine/sc_api.cpp) and the host none; after a trap or an
+// exit, sc_session_recover puts it back, or the session is lost and the Repl
+// replays it in a new guest.
 import fs from 'node:fs';
 import path from 'node:path';
 import { WASI } from 'node:wasi';
@@ -25,6 +28,7 @@ const [NEW, CELL, UNDO, REPLY, DEPTH] = [1, 2, 3, 4, 5];
 const [SO, REPLAY, WHOLE, TYPE] = [0, 1, 2, 3];
 const CRASHED = 'sc: the engine crashed on this cell; the session is as it was before it\n';
 const enc = new TextEncoder();
+const INNER = process.env.SC_SNAPSHOT === 'engine';
 
 const module = await WebAssembly.compile(fs.readFileSync(WASM));
 
@@ -86,7 +90,8 @@ class Exit extends Error {
 class Guest {
   constructor() {
     const wasi = new WASI({
-      version: 'preview1', args: ['sc'], env: {}, stdout: 2,
+      version: 'preview1', args: ['sc'], stdout: 2,
+      env: INNER ? { SC_SNAPSHOT: '1', ...(process.env.SC_SNAPSHOT_LOG ? { SC_SNAPSHOT_LOG: process.env.SC_SNAPSHOT_LOG } : {}) } : {},
       preopens: { [ROOT]: ROOT },
     });
     // an exit of the guest (a fatal error) unwinds to the cell, as a trap
@@ -220,13 +225,23 @@ for (let m; (m = readMsg());) {
       continue;
     }
     // a replayed cell is one that was accepted
-    const snap = mode === REPLAY ? null : guest.snapshot();
+    const snap = mode === REPLAY || INNER ? null : guest.snapshot();
     let st, parts;
     try {
       st = guest.with(m.parts[0], (p, n) => guest.x.sc_session_cell(session, p, n, mode));
       parts = guest.parts(session);
     } catch (e) {
       report(e);
+      if (INNER && mode !== REPLAY) {
+        // the session puts the memory back itself, if it took the copy
+        if (guest.x.sc_session_recover(session) === ERROR) {
+          reply(ERROR, [Buffer.from(CRASHED)]);
+          continue;
+        }
+        session = null;
+        reply(LOST, [Buffer.from(`sc: ${e?.message ?? e}\n`)]);
+        continue;
+      }
       if (!snap) process.exit(134);
       log(snap, guest.restore(snap));
       reply(ERROR, [Buffer.from(CRASHED)]);

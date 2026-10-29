@@ -4789,3 +4789,65 @@ os quadros wasm de um `new Error().stack`, um id por pilha diferente.
   vinda do JS: um `main(int argc)` (`alias-4`) falhava. Agora ele passa
   só os argumentos que o `main` recebe.
 
+
+## 65. A célula que falha sem `fork` e sem o host: o snapshot dentro da sessão
+
+**A questão.** Com a `Machine` e o loader dentro do `sc.wasm`, um
+snapshot da memória feito pelo host (`engine.mjs`, §56) também desfaria o
+estado deles, e não queremos no `env` nada específico do sc. Fazer o
+clang desfazer tudo o que a célula deixou não termina (§25). Decidido:
+a cópia fica dentro do `sc.wasm`.
+
+**Como é.** O próprio `sc_session_cell` (`engine/sc_api.cpp`, só no
+wasm, com `SC_SNAPSHOT` no ambiente) copia a memória linear antes de
+cada célula que não é repasse e a põe de volta antes de retornar se a
+célula falha ou é um tipo, guardando só os diagnósticos e os nomes.
+Durante a chamada só o engine roda, e o resto do que vive na memória
+volta aos mesmos valores. Ficam de fora a pilha (os quadros da célula já
+acabaram no retorno) e a imagem do pacote, que só é lida.
+
+A cópia fica no topo da memória, acima do heap: o `sbrk` do
+`sc_api.cpp` substitui o da wasi-libc, dá ao `malloc` a memória abaixo
+dela e a sobe quando o heap cresce. O heap vê o que veria sem a cópia
+(e com o snapshot do host): os mesmos endereços. A cópia tem o tamanho
+exato do que copia, e o que a célula disse vai logo depois dela, com a
+memória crescida para caber (antes, um buffer do `malloc` com 1 MiB de
+folga cortava os 66 MB de diagnósticos de `limits-fndefn`).
+
+Um trap ou um `exit` do clang interrompe a chamada, mas a cópia
+sobrevive: o host chama `sc_session_recover`, que põe o
+`__stack_pointer` no topo da pilha (um `global.set` em asm, antes de
+qualquer quadro) e a memória de volta, e responde `SC_ERROR`; sem cópia,
+`SC_LOST`, e o `Repl` repassa o log. `engine.mjs` com
+`SC_SNAPSHOT=engine` não tira snapshot e faz isso.
+
+**A bateria.** `test-session-node` nesse modo dá o mesmo resultado da
+rodada com o snapshot do host (11926 resultados; o único ruim é
+`limits-externdecl`, que já estourava o tempo). Comparando os arquivos
+brutos, diferem só:
+- 2 `mem-`: o `memory.size`, com a cópia;
+- 2 `ses-` com `/tmp/<nome>-<aleatório>.pcm` na mensagem;
+- 3 `ses-` (`fallthrough`, `noderef`) com os diagnósticos em outra
+  ordem. A bateria compara as linhas ordenadas, e a ordem já difere
+  entre o `sc.wasm` cortado e o completo (`session-wasm` ×
+  `session-wasm-base`): depende do leiaute, não da cópia.
+
+O primeiro protótipo perdia a sessão nos 131 casos com trap ou `exit`
+(47 `crash-`, 84 `ses-`); com `sc_session_recover` eles saem iguais,
+byte a byte, ao snapshot do host.
+
+**O tempo e a memória** (Node padrão, 100 células do `mem-`, depois 20
+pares de célula com erro e célula boa; a máquina carregada, load
+35–66, os números variam até 2× entre rodadas):
+
+| | memória | célula aceita | célula com erro | copiar | restaurar |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| C, host | 33 MB | 10–23 ms | 6–14 ms | 2,8–6,4 ms | 2,8–6,0 ms |
+| C, engine | 40 MB | 11 ms | 3–3,5 ms | 1,3 ms | 1,4 ms |
+| C++, host | 55 MB | 18–52 ms | 13–48 ms | 6–22 ms | 6–22 ms |
+| C++, engine | 85 MB | 23–26 ms | 9–20 ms | 4,5–8 ms | 4,1–8,3 ms |
+
+Copia-se só o heap acima da imagem do pacote: +7 MB no C, +30 MB no
+C++ (o protótipo, com o buffer no heap e 25% de folga, chegava a +37
+MB). A cópia dentro do wasm (`memcpy`) custa menos que a do JS. O
+nativo segue com o `fork`.

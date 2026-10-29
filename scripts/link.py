@@ -93,7 +93,7 @@ ENGINE += os.environ.get('SC_EXTRA', '').split()  # more engine objects, for exp
 toks = shlex.split(ninja_cmd('bin/clang-23').split(': && ', 1)[1].removesuffix(' && :'))
 flags = [t for t in toks if not t.endswith(('.a', '.obj', '.o')) and t not in ('-o', 'bin/clang-23', '-Os', '-Xlinker')
          and not t.startswith(('--dependency-file', '-Wl,--color-diagnostics', '-fdiagnostics-color'))]
-EXPORTS = ('sc_session_new', 'sc_session_free', 'sc_session_cell', 'sc_session_undo', 'sc_session_depth',
+EXPORTS = ('sc_session_new', 'sc_session_free', 'sc_session_cell', 'sc_session_undo', 'sc_session_recover', 'sc_session_depth',
            'sc_result_ptr', 'sc_result_len', 'malloc', 'free', 'chdir',
            # a host without fork restores it with the memory (PLANO-REPL.md §5.5)
            '__stack_pointer')
