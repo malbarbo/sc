@@ -1,0 +1,20 @@
+[package]
+name = "sc-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# what of the Rust crate sc.wasm links (scripts/link.py): the loader's core
+# on the host's primitives (src/loader/host.rs), for wasm32-wasip1
+[lib]
+crate-type = ["staticlib"]
+path = "lib.rs"
+
+[dependencies]
+sc = { path = "..", default-features = false }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

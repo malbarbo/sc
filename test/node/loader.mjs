@@ -476,7 +476,7 @@ export class Loader {
     let ret;
     if (this.syms.has('__main_argc_argv')) ret = this.call('__main_void');
     else if (this.syms.has('__original_main')) ret = this.call('__original_main');
-    else if (this.syms.has('main')) ret = this.call('main', 0, 0);
+    else if (this.syms.has('main')) ret = this.call('main', ...[0, 0].slice(0, this.syms.get('main').v.length)); // main(int argc) too
     this.call('exit', ret ?? 0);
     return ret ?? 0;
   }

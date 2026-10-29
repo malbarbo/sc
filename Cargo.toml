@@ -13,8 +13,9 @@ cpp_demangle = "0.5"
 # the minimal set (PLANO-REPL.md §5.3). gc turns on the exceptions; gc-drc
 # is the one collector. wasmtime-wasi's p1 brings p2, so async and
 # component-model come back with it
-wasmtime = { version = "48.0.3", default-features = false, features = ["runtime", "std", "cranelift", "gc", "gc-drc", "parallel-compilation"] }
-wasmtime-wasi = { version = "48.0.3", default-features = false, features = ["p1"] }
+# (the native feature: the loader's runtime in sc and scload)
+wasmtime = { version = "48.0.3", default-features = false, features = ["runtime", "std", "cranelift", "gc", "gc-drc", "parallel-compilation"], optional = true }
+wasmtime-wasi = { version = "48.0.3", default-features = false, features = ["p1"], optional = true }
 # a frame's file and line ([loader::Loader::symbols]), the versions wasmtime
 # uses
 addr2line = { version = "0.26", default-features = false, features = ["std"] }
@@ -43,10 +44,13 @@ wat = "=1.254.0"
 
 [features]
 default = ["engine"]
+# the loader on wasmtime (src/loader/native.rs): scload, and sc with the
+# engine. Without it the loader is its core, which sc.wasm links (wasm/)
+native = ["dep:wasmtime", "dep:wasmtime-wasi"]
 # sc, with the engine linked in (PLANO-REPL.md §1.1): build.rs links the
 # arguments of SC_LINK_ARGS, by default build/link-session-cut/engine.args,
 # which it asks make for
-engine = ["dep:bindgen", "dep:backhand", "dep:wasmtime", "dep:bpaf", "dep:rustyline", "dep:dirs"]
+engine = ["native", "dep:bindgen", "dep:backhand", "dep:wasmtime", "dep:bpaf", "dep:rustyline", "dep:dirs"]
 # the same API over sc.wasm's exports through wasmtime (src/engine/wasm.rs),
 # in place of the linked engine: build/sc-wasm (PLANO-REPL.md §5.2)
 wasm = ["engine", "dep:tokio"]
@@ -56,9 +60,26 @@ name = "sc"
 path = "src/bin/sc/main.rs"
 required-features = ["engine"]
 
+[[bin]]
+name = "scload"
+path = "src/bin/scload.rs"
+required-features = ["native"]
+
 [[test]]
 name = "session"
 required-features = ["engine"]
+
+[[test]]
+name = "signal"
+required-features = ["native"]
+
+[[test]]
+name = "exceptions"
+required-features = ["native"]
+
+[[test]]
+name = "undo"
+required-features = ["native"]
 
 
 # make loader and repl, for the batteries: quick to build

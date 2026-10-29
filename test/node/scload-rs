@@ -1,0 +1,4 @@
+#!/bin/sh
+# scload inside sc.wasm (scload-rs.mjs): SCLOAD=test/node/scload-rs for
+# test/split.py; SC_NODE_FLAGS are node's
+exec node --no-warnings $SC_NODE_FLAGS "$(dirname "$(realpath "$0")")/scload-rs.mjs" "$@"

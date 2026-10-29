@@ -47,8 +47,11 @@ fn run(libdirs: Vec<PathBuf>, mods: Vec<PathBuf>, dirs: Vec<String>, args: Vec<S
         b.preopened_dir(h, g, FsPerms::ReadWrite)?;
     }
     let mut l = Loader::new(Wasmtime::new(b.build_p1())?, sc::loader::libdirs(libdirs), stack)?;
-    for (i, m) in mods.iter().enumerate() {
-        l.load(m, i > 0)?;
-    }
-    Ok(l.run()?)
+    let mut go = || -> sc::loader::Result<i32> {
+        for (i, m) in mods.iter().enumerate() {
+            l.load(m, i > 0)?;
+        }
+        l.run()
+    };
+    Ok(go().map_err(|e| l.why(e))?)
 }

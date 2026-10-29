@@ -17,16 +17,16 @@ from flags import CXXFLAGS, iface, pic, real  # the engine's flags
 B = f'{R}/build'
 SR = f'{B}/sysroot'
 LIB = f'{SR}/lib/wasm32-wasip1'
-SCLOAD = os.environ.get('SCLOAD', f'{B}/cargo/release/scload')  # test/node/scload: the JS loader
+SCLOAD = os.environ.get('SCLOAD', f'{B}/cargo/release/scload')  # test/node/scload: the JS loader; scload-rs, sc.wasm's
 BASE = f'{B}/res/native-base'
-# with the JS loader (test/node/scload, PLANO-REPL.md §5.5), the programs
-# whose trap V8 says less of than wasmtime
+# on V8, with the JS loader (test/node/scload, PLANO-REPL.md §5.5) or sc.wasm's
+# (test/node/scload-rs), the programs whose trap V8 says less of than wasmtime
 JS = {
     'ct-00187': 'a call through a null slot: V8 says "null function or function signature mismatch",'
                 ' wasmtime "uninitialized element"',
     'gcc-ts_gcc_testsuite_gcc.c-torture_execute_pr23135': 'out of bounds: wasmtime says the address and the size'
                                                          ' of the memory too',
-} if SCLOAD.endswith('/node/scload') else {}
+} if SCLOAD.endswith(('/node/scload', '/node/scload-rs')) else {}
 
 
 def std_pcm(eng, out):

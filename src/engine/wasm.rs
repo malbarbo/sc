@@ -77,6 +77,9 @@ fn shared() -> &'static Shared {
             .unwrap_or_else(|e| fail(&format!("{}: {e} (run {} --precompile)", cwasm.display(), exe().display())));
         let mut linker = Linker::new(&engine);
         p1::add_to_linker_sync(&mut linker, |c| c).unwrap();
+        // the loader's primitives (src/loader/host.rs): the sessions do not
+        // use them
+        linker.define_unknown_imports_as_traps(&module).unwrap();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").canonicalize().unwrap();
         Shared { engine, module, linker, rt, root }

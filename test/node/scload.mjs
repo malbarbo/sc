@@ -37,15 +37,13 @@ const TRAPS = [
   [/^Maximum call stack size exceeded/, 'call stack exhausted'],
 ];
 
-/// as wasmtime prints a trap: the frames, then the cause
+/// as scload says what stopped the code: wasmtime's words for a trap
 function trap(e, cause) {
-  const frames = [...(e.stack ?? '').matchAll(/^\s*at (?:(\S+) )?\(?wasm:\/\/wasm\/[^:]*:wasm-function\[(\d+)\]:(0x[0-9a-f]+)/gm)];
-  const bt = frames.map((f, k) => `${String(k).padStart(5)}: ${f[3].padStart(8)} - ${f[1] ?? `<wasm function ${f[2]}>`}`);
   if (!cause) {
     const t = TRAPS.find(([re]) => re.test(e.message));
     cause = t ? `wasm trap: ${t[1]}` : e.message;
   }
-  console.error(`scload: error while executing at wasm backtrace:\n${bt.join('\n')}\n\nCaused by:\n    ${cause}\n`);
+  console.error(`scload: ${cause}`);
   return 134;
 }
 

@@ -53,7 +53,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-split-node test-session-node test-aluno test-checks test-dist repl sc-deps test-loader dist clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-split-node test-split-node-rs test-session-node test-aluno test-checks test-dist repl sc-deps test-loader dist clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -215,10 +215,16 @@ $(B)/trim/Intrinsics.cpp.obj: scripts/trim.py scripts/trim_intrinsics.py | $(B)/
 
 trim: $(B)/trim/Intrinsics.cpp.obj
 
-$(B)/sc-full.wasm: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) scripts/link.py
+# the loader inside sc.wasm, on the host's primitives (wasm/): the Rust
+# crate's core as a staticlib
+RS_WASM := $(B)/cargo-wasm32/wasm32-wasip1/release/libsc_wasm.a
+$(RS_WASM): $(RUST) wasm/Cargo.toml wasm/Cargo.lock wasm/lib.rs
+	cargo build --release $(CARGO) --manifest-path wasm/Cargo.toml --target wasm32-wasip1 --target-dir $(B)/cargo-wasm32
+
+$(B)/sc-full.wasm: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) $(RS_WASM) scripts/link.py
 	scripts/link.py --full $@
 
-$(B)/sc-cut.wasm: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) $(B)/trim/Intrinsics.cpp.obj scripts/link.py \
+$(B)/sc-cut.wasm: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) $(RS_WASM) $(B)/trim/Intrinsics.cpp.obj scripts/link.py \
     cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/symbols.session.used cuts/o0init.txt
 	scripts/link.py $@
 
@@ -329,6 +335,11 @@ test-split-wasm: $(B)/sc-wasm $(SCLOAD) $(B)/res/native-base/summary.json
 test-split-node: $(B)/sc $(SCLOAD) $(B)/res/native-base/summary.json
 	SCLOAD=test/node/scload test/split.py $(B)/sc $(B)/res/split-node
 
+# the same with sc.wasm's loader (src/loader.rs inside sc.wasm), on Node
+# with only the host's primitives (test/node/wasm.mjs)
+test-split-node-rs: $(B)/sc $(B)/sc.wasm $(SCLOAD) $(B)/res/native-base/summary.json
+	SCLOAD=test/node/scload-rs test/split.py $(B)/sc $(B)/res/split-node-rs
+
 # the same slices with the child on Node (test/node, PLANO-REPL.md §5.5): a
 # snapshot of the memory in place of the fork, and the JS loader. With 300
 # KB of stack V8 exhausts it where wasmtime does; its default, as a
@@ -344,7 +355,7 @@ test-session-node: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-base/summary.jso
 # and what a session reads in the pack it embeds. Without SC_LINK_ARGS, build.rs links
 # $(SC_ENGINE_ARGS), as in a cargo build of its own
 $(SCLOAD): $(RUST)
-	cargo build --release $(CARGO) --no-default-features --bin scload
+	cargo build --release $(CARGO) --no-default-features --features native --bin scload
 SC_ENGINE_ARGS := $(B)/link-session-cut/engine.args
 $(SC_REPL): $(RUST) $(SC_ENGINE_ARGS) $(PACK)
 	cargo build --release $(CARGO) --bin sc
@@ -359,7 +370,7 @@ dist: $(SC_ENGINE_ARGS) $(PACK)
 # what the batteries do not reach: Ctrl-C, many exceptions (tests/), without
 # the engine
 test-loader:
-	cargo test --release $(CARGO) --no-default-features --lib --test signal --test exceptions --test undo
+	cargo test --release $(CARGO) --no-default-features --features native --lib --test signal --test exceptions --test undo
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc
 # FILE`, in the pack's view. build.rs puts them in the pack sc embeds

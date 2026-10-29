@@ -15,7 +15,7 @@
 //!
 //! The loader asks the wasm runtime for little ([`Runtime`]: instantiate a
 //! module, an export, a call, the memory; ANALISE.md §63), so that it runs
-//! on wasmtime ([`native::Wasmtime`]) and inside sc.wasm. The rest comes
+//! on wasmtime (`native::Wasmtime`) and inside sc.wasm (`host::Host`). The rest comes
 //! from modules it makes ([`gen`]): the world has the memory, the function
 //! table and the stack pointer that all modules share, and the functions
 //! that grow and set them.
@@ -53,13 +53,23 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use wasmparser::{Dylink0Subsection, KnownCustom, Parser, Payload, SymbolFlags, TypeRef};
 
+#[cfg(feature = "native")]
 pub mod config;
 pub mod gen;
+pub mod host;
+#[cfg(feature = "native")]
 pub mod native;
 pub mod runtime;
 
 use runtime::{fail, FuncType, Import, Runtime, H};
 pub use runtime::{Error, Frame, Result, Trap, TrapKind, ValType};
+
+/// The runtime of a [`Loader`] when it does not say: wasmtime with the
+/// native feature, else the host's primitives, as inside sc.wasm.
+#[cfg(feature = "native")]
+pub type Native = native::Wasmtime;
+#[cfg(not(feature = "native"))]
+pub type Native = host::Host;
 
 pub const STACK: u32 = 1 << 20; // the default; the stack is first, so an overflow traps below 0
 const PAGE: u32 = 1 << 16;
@@ -191,7 +201,7 @@ struct World {
     funcs: HashMap<&'static str, (H, FuncType)>,
 }
 
-pub struct Loader<R: Runtime = native::Wasmtime> {
+pub struct Loader<R: Runtime = Native> {
     rt: R,
     world: World,
     syms: HashMap<String, (Sym, Option<u32>)>, // the symbol and its table slot
@@ -674,6 +684,15 @@ impl<R: Runtime> Loader<R> {
     pub fn missing(&mut self) -> Option<String> {
         let id = self.world("take_missing", &[]).ok()?[0] as usize;
         id.checked_sub(1).and_then(|k| self.missing.get(k)).cloned()
+    }
+
+    /// `e`, or, for a trap of a call to a function not defined yet, the
+    /// failure that names it, as `scload` says it.
+    pub fn why(&mut self, e: Error) -> Error {
+        match (&e, self.missing()) {
+            (Error::Trap(_), Some(n)) => Error::Fail(format!("undefined symbol: {n}")),
+            _ => e,
+        }
     }
 
     /// The table slot reserved for a function not defined yet, and whether

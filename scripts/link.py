@@ -87,6 +87,8 @@ ENGINE = [f"{os.environ.get('SC_ENGINE', f'{B}/engine{H}')}/{f}.o" for f in ('sc
                                                                          'sc_session', 'sc_api', 'sc_files') + (() if NATIVE else ('sc_start', 'sc_pack'))]
 # sc_pack's reader of the pack (Makefile, SQFS_LIB)
 ENGINE += [] if NATIVE else [f'{B}/squashfuse-wasm/libsquashfuse.a']
+# the loader inside sc.wasm, on the host's primitives (wasm/, Makefile RS_WASM)
+ENGINE += [] if NATIVE else [f'{B}/cargo-wasm32/wasm32-wasip1/release/libsc_wasm.a']
 ENGINE += os.environ.get('SC_EXTRA', '').split()  # more engine objects, for experiments
 toks = shlex.split(ninja_cmd('bin/clang-23').split(': && ', 1)[1].removesuffix(' && :'))
 flags = [t for t in toks if not t.endswith(('.a', '.obj', '.o')) and t not in ('-o', 'bin/clang-23', '-Os', '-Xlinker')
@@ -96,7 +98,7 @@ EXPORTS = ('sc_session_new', 'sc_session_free', 'sc_session_cell', 'sc_session_u
            # a host without fork restores it with the memory (PLANO-REPL.md §5.5)
            '__stack_pointer')
 if not NATIVE:  # _start is sc_start.cpp's; the host calls chdir after _initialize
-    flags += ['-mexec-model=reactor', '-lc-printscan-long-double'] + [f'-Wl,--export={f}' for f in EXPORTS]
+    flags += ['-mexec-model=reactor', '-lc-printscan-long-double'] + [f'-Wl,--export={f}' for f in EXPORTS + ('sc_scload',)]
 archives = [t for t in shlex.split(ninja_cmd('bin/lld')) if t.startswith('lib/liblld') and t.endswith('.a')]
 archives = list(dict.fromkeys(archives + [t for t in toks if t.endswith('.a')]))
 
@@ -140,8 +142,14 @@ def removed():
             if any(r.search(rpath(o)) for r in rm) and not any(k.search(rpath(o)) for k in keep)}
 
 
+# the host's primitives, which sc.wasm's loader imports (src/loader/host.rs): no stubs
+HOST = {'wasm_instantiate', 'wasm_export', 'wasm_call', 'wasm_error', 'wasm_frames', 'wasm_memory_read',
+        'wasm_memory_write'}
+
+
 def import_sigs(wasm, prefix=''):
-    """(name, (params, results)) of the functions a module imports from env"""
+    """(name, (params, results)) of the functions a module imports from env,
+    but the host's"""
     txt = subprocess.check_output(['wasm-tools', 'print', '--skeleton', wasm], text=True)
     types = {}
     for m in re.finditer(r'\(type \(;(\d+);\) \(func([^\n]*)\)\)\n', txt):
@@ -149,7 +157,8 @@ def import_sigs(wasm, prefix=''):
         rs = re.findall(r'\(result ([^)]*)\)', m.group(2))
         types[m.group(1)] = (' '.join(ps).split(), ' '.join(rs).split())
     return [(m.group(1), types[m.group(2)]) for m in re.finditer(
-        r'\(import "env" "(' + prefix + r'[^"]+)" \(func (?:\$(?:"[^"]*"|\S+) )?\(;\d+;\) \(type (\d+)\)\)\)', txt)]
+        r'\(import "env" "(' + prefix + r'[^"]+)" \(func (?:\$(?:"[^"]*"|\S+) )?\(;\d+;\) \(type (\d+)\)\)\)', txt)
+        if m.group(1) not in HOST]
 
 
 def assemble(name, body):

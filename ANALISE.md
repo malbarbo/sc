@@ -4706,3 +4706,86 @@ libc++abi, que é a do `__cxa_throw`. Um `catch (...)` dentro do
 `libc++.so` funciona (cai no `catch_all`: um `streambuf` que lança deixa o
 `badbit`), mas um `catch` tipado compilado no `libc++.so` não pegaria a
 exceção. Já era assim antes deste passo.
+
+## 64. O loader dentro do `sc.wasm`: as primitivas como imports do host
+
+Terceiro passo (§61 a §63): o mesmo `src/loader.rs` roda dentro do
+`sc.wasm`, sobre primitivas que o host dá como imports `env.wasm_*`, e o
+Node as dá com a API JS do WebAssembly, sem nada do sc.
+
+**O crate.** O wasmtime virou a feature `native` (o `scload` e o `sc`
+com a engine a ligam); sem ela o crate é o núcleo do loader, que compila
+para `wasm32-wasip1` (`wasmparser`, `wasm-encoder`, `cpp_demangle`,
+`gimli`, `addr2line`). `src/loader/host.rs` implementa o `Runtime` sobre
+sete imports:
+
+| import | o que faz |
+| --- | --- |
+| `wasm_instantiate(bytes, len, imports, n, out) -> status` | compila e instancia; um import é o padrão do host (0), um handle (1) ou um global i32 novo, constante (2) ou mutável (3), cujo handle o host escreve de volta |
+| `wasm_export(inst, nome, len) -> h` | 0 se não há |
+| `wasm_call(f, sig, sig_len, vals) -> status` | `vals`: 8 bytes por valor; os resultados voltam neles |
+| `wasm_error(buf, cap) -> len` | a mensagem da última falha ou trap |
+| `wasm_frames(id, buf, cap) -> len` | os quadros de uma pilha do `env.wasm_stack` (ou do último trap, com 0): uma linha cada, o offset e o nome |
+| `wasm_memory_read`, `wasm_memory_write` | a memória de um filho |
+
+O status é OK, TRAP (com um código: os tipos do `TrapKind` e a conversão
+para inteiro), EXIT (com o código), STOP ou ERROR, e o detalhe vem em
+`vals[0]`. Com o código, o `host.rs` escreve a mensagem do wasmtime
+(`wasm trap: out of bounds memory access`...): os textos do V8 mudam de
+um navegador para outro, e assim a saída do `scload` é a mesma nos dois
+hosts. O endereço de uma falha não vem (o V8 não diz), e os quadros não
+dizem a instância.
+
+`wasm/` é a staticlib que o `sc.wasm` liga (`scripts/link.py`, a
+`$(RS_WASM)` do Makefile): o loader e o export `sc_scload`, o `scload`
+com os argumentos do WASI do `sc.wasm` (`-L`, `--stack`, os módulos). Os
+argumentos do programa, os diretórios e o stdio são os do WASI padrão que
+o host dá aos filhos. O `link.py` não faz stubs para os `wasm_*`: são
+imports de verdade. O `sc-wasm` (`src/engine/wasm.rs`) e o corpus
+(`wasmtime run -W unknown-imports-trap=y`) os fazem funções que dão trap,
+porque as sessões e a engine de uma vez não os chamam.
+
+**O host no Node.** `test/node/wasm.mjs` dá as primitivas com a API JS:
+os handles são um vetor que nunca reaproveita um número, o WASI padrão é
+um `node:wasi` por memória (a que o filho importa), e o `proc_exit` anota
+o código e executa o `unreachable` de um módulo do host, que o C++ não
+pega. O código de um trap vem da mensagem do V8. O `env.wasm_stack` guarda
+os quadros wasm de um `new Error().stack`, um id por pilha diferente.
+`test/node/scload-rs` instancia o `sc.wasm` com elas e chama o
+`sc_scload`; o `engine.mjs` também as dá, para o `sc.wasm` instanciar.
+
+**As medidas.**
+- `make test-split-node-rs`: 1.947 programas, 10.541 células, 0
+  diferenças (7 conhecidos: os 6 do `test-split` e o `ct-00187`, cuja
+  mensagem de trap o V8 dá diferente). `make test-split`, `test-session`
+  (0 ruins, 38 conhecidos), `test-session-wasm` (0 ruins, 40), `test-split-node`,
+  `test-loader`, `test-aluno` e `test-checks` passam.
+- `make test-session-node`, com o `scload.mjs` ou com o `scload-rs` no
+  lugar dele: os mesmos 11.926 resultados, 2 ruins (41 conhecidos), os 2
+  que a bateria já dava antes do §61: o `limits-externdecl` passa do
+  tempo, e no `n590` a engine cai no Node onde no wasmtime não acha o
+  `#include` (está no `IGNORE` do corpus).
+- O ASan (`libsc_rt`, que chama o `env.wasm_stack`) funciona: um
+  use-after-free sai igual no `scload` nativo e no `scload-rs`.
+- Um programa leva ~0,3 s no `scload-rs`, contra 0,15 s no `scload` e
+  0,1 s no `scload.mjs`: o Node compila o `sc.wasm` inteiro (39 MB) a cada
+  vez. Um laço de 100 mil `malloc` com ASan custa 0,03 s a mais que sem.
+- O `sc.wasm` cresce 424 KB (38,91 → 39,34 MB, +1,1%); com zstd -19,
+  7,55 → 7,67 MB (+122 KB). Do que entra, `cpp_demangle` (os nomes de C++
+  nas mensagens) é 180 KB, o loader 75 KB, o `wasmparser` 74 KB e a std e
+  o `hashbrown` uns 90 KB; o `gimli` e o `addr2line` saem com o LTO,
+  porque o `sc_scload` não lê DWARF.
+
+**Visto no caminho.**
+- O §63 mudou o que o `scload` diz de um trap (`scload: wasm trap: ...`,
+  sem a backtrace do wasmtime) e, sem querer, perdeu o "undefined symbol:
+  X" de uma chamada a uma função que ainda não existe: o nome agora vem do
+  global `missing` do mundo, que só a `Machine` lia. As bases refeitas
+  hoje guardaram a saída nova, e só o `test-session-node` acusou (o
+  `scload.mjs` ainda falava como o wasmtime). Agora `Loader::why` dá o
+  nome aos dois `scload`, o `scload.mjs` diz o mesmo que eles, e as bases
+  (`native-base`, `session-base`, `session-wasm-base`) foram refeitas.
+- O `loader.mjs` chamava `main(0, 0)` e o V8 recusa a aridade errada
+  vinda do JS: um `main(int argc)` (`alias-4`) falhava. Agora ele passa
+  só os argumentos que o `main` recebe.
+

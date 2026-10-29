@@ -105,8 +105,14 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
     `libc.so` and `libc++.so` from wasi-sdk, then each input, sharing one
     memory and one function table. A definition in an input hides an
     older one for the inputs after it, and an input may use what a later
-    one defines. `ANALISE.md` §18 has the design. `src/loader/config.rs`
-    is its wasmtime `Config`, which `build.rs` compiles the `.cwasm` with.
+    one defines. `ANALISE.md` §18 has the design. It asks the wasm
+    runtime for a few primitives (`src/loader/runtime.rs`, §63):
+    `src/loader/native.rs` gives them on wasmtime (the `native` feature),
+    `src/loader/host.rs` inside `sc.wasm`, as `env.wasm_*` imports of the
+    host (§64). `src/loader/config.rs` is its wasmtime `Config`, which
+    `build.rs` compiles the `.cwasm` with. `wasm/` is the staticlib of
+    the crate that `sc.wasm` links: the loader, and its export
+    `sc_scload`.
   - `src/bin/sc/` is the REPL, `src/bin/scload.rs` the loader alone, for
     the batteries. `sc --replay` is the test of the REPL's side
     (`test/split.py`, `test/session.py`); `build/sc-full` is `sc` with the
@@ -181,7 +187,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   a snapshot of the memory in place of the fork (`make
   test-session-node`, `ANALISE.md` §56). `test/node/loader.mjs` is
   `src/loader.rs` in JS, and `test/node/scload` the `scload` over it
-  (`make test-split-node`, `ANALISE.md` §57). `test/repl/` has
+  (`make test-split-node`, `ANALISE.md` §57). `test/node/wasm.mjs` is
+  the host's primitives over the JS API, and `test/node/scload-rs` the
+  `scload` of `sc.wasm` on them (`make test-split-node-rs`, §64). `test/repl/` has
   sequences of REPL inputs (`c1.c`, `c2.c`...).
 - `rt/sc_rt.c` is `libsc_rt`, in the sysroot: the handlers of UBSan's
   checks and of libc++'s hardening for the levels `on` and `strict` of
@@ -229,6 +237,7 @@ make test-session-wasm # the same slices on sc.wasm's session (build/sc-wasm)
 make test-session-wasm-warn
 make test-split-wasm
 make test-split-node # test-split with the JS loader (test/node/scload)
+make test-split-node-rs # and with sc.wasm's loader on Node (test/node/scload-rs)
 make test-session-node # the slices with the child and the loader on Node (test/node)
 ```
 

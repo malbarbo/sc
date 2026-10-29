@@ -28,6 +28,7 @@ make test-session-warn # ses-, seq- and crash- with -Weverything
 make test-session-wasm # the same slices on sc.wasm's session (build/sc-wasm)
 make test-session-wasm-warn # and test-split-wasm
 make test-split-node # test-split with the JS loader (test/node/loader.mjs) in place of scload
+make test-split-node-rs # test-split with sc.wasm's loader on Node's primitives (test/node/wasm.mjs)
 make test-session-node # the same slices with the child and the loader on Node (test/node)
 make repl        # build/cargo/release/sc, the REPL (sc, sc FILE, sc help), unstripped
 cargo build --release # the same sc (build.rs runs make sc-deps)

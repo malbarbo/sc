@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { WASI } from 'node:wasi';
+import { wasmApi } from './wasm.mjs';
 
 const R = path.resolve(import.meta.dirname, '../..');
 const ROOT = path.dirname(R);
@@ -92,8 +93,12 @@ class Guest {
     const proc_exit = (code) => {
       throw new Exit(code);
     };
-    const imports = { wasi_snapshot_preview1: { ...wasi.wasiImport, proc_exit } };
+    // the loader's primitives (src/loader/host.rs), which the sessions do
+    // not use
+    const api = wasmApi(() => new WASI({ version: 'preview1' }));
+    const imports = { wasi_snapshot_preview1: { ...wasi.wasiImport, proc_exit }, env: api.env };
     this.inst = new WebAssembly.Instance(module, imports);
+    api.bind(this.inst);
     this.x = this.inst.exports;
     // sc.wasm exports _start too (the one-shot engine), which initialize refuses
     wasi.initialize({ exports: { memory: this.x.memory, _initialize: this.x._initialize } });
