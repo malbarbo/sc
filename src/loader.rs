@@ -56,6 +56,9 @@ use wasmparser::{Dylink0Subsection, KnownCustom, Parser, Payload, SymbolFlags, T
 #[cfg(feature = "native")]
 pub mod config;
 pub mod gen;
+// the imports of sc.wasm's host: a native build would leave them undefined,
+// which MSVC's linker refuses even unused
+#[cfg(not(feature = "native"))]
 pub mod host;
 #[cfg(feature = "native")]
 pub mod native;
