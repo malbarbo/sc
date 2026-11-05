@@ -201,10 +201,13 @@ struct World {
     funcs: HashMap<&'static str, (H, FuncType)>,
 }
 
+/// A symbol of the loader's and its table slot.
+type Entry = (Sym, Option<u32>);
+
 pub struct Loader<R: Runtime = Native> {
     rt: R,
     world: World,
-    syms: HashMap<String, (Sym, Option<u32>)>, // the symbol and its table slot
+    syms: HashMap<String, Entry>,              // the symbol and its table slot
     types: Vec<FuncType>,                      // of the function symbols
     libs: Libs,
     loaded: HashSet<String>,
@@ -217,7 +220,7 @@ pub struct Loader<R: Runtime = Native> {
     asan: bool,                   // the memory has ASan's shadow
     debug: Vec<Debug>,            // of the modules with DWARF
     data: Vec<Data>,
-    journal: Option<Vec<(String, Option<(Sym, Option<u32>)>)>>, // what a group being defined replaced
+    journal: Option<Vec<(String, Option<Entry>)>>, // what a group being defined replaced
     catchers: HashMap<(String, H), H>, // gen::catcher's try, by signature and tag
     scratch: Option<u32>,         // the table slot of the function a catcher calls
 }

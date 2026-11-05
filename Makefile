@@ -53,7 +53,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-split-node test-split-node-rs test-aluno-node-rs test-session-node test-aluno test-checks test-dist repl sc-deps test-loader dist clean
+.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-split-node test-split-node-rs test-aluno-node-rs test-session-node test-aluno test-checks test-dist repl sc-deps test-loader check rs-wasm dist clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -373,6 +373,16 @@ loader: $(SCLOAD)
 # (ANALISE.md §49): build/cargo/dist/scload and sc
 dist: $(SC_ENGINE_ARGS) $(PACK)
 	cargo build $(CARGO) --profile dist --bins
+
+# what needs no LLVM, for the CI (.github/workflows/ci.yaml): clippy on the
+# crate without the engine, which build.rs would ask make for, and on the
+# Rust of sc.wasm. The code is not in rustfmt's style
+check:
+	cargo clippy --release $(CARGO) --no-default-features --features native,machine --all-targets -- -D warnings
+	cargo clippy --release $(CARGO) --manifest-path wasm/Cargo.toml --target wasm32-wasip1 --target-dir $(B)/cargo-wasm32 -- -D warnings
+
+# the Rust of sc.wasm alone
+rs-wasm: $(RS_WASM)
 
 # what the batteries do not reach: Ctrl-C, many exceptions (tests/), without
 # the engine

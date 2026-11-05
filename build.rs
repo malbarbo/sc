@@ -202,7 +202,7 @@ fn strip_debug(wasm: &[u8]) -> Vec<u8> {
 }
 
 /// What make sc-deps builds from.
-fn watch(root: &PathBuf) {
+fn watch(root: &std::path::Path) {
     for dir in ["engine", "cuts", "llvm", "rt", "Makefile"] {
         println!("cargo:rerun-if-changed={}", root.join(dir).display());
     }

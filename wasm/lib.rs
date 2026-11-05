@@ -1,6 +1,10 @@
 //! What of the Rust crate sc.wasm links: the loader (`sc::loader`) and the
 //! machine (`sc::machine`) on the host's primitives, with the session in
 //! this module, and their exports.
+//!
+//! The exports are unsafe for the host that calls them: ENGINE.md, in
+//! simplecode, says what each one asks of its pointers.
+#![allow(clippy::missing_safety_doc)]
 
 use sc::engine::{sys, Answer, Compiler, Mode, Session, Status};
 use sc::loader::host::{self, Host};

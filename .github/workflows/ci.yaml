@@ -1,0 +1,103 @@
+name: ci
+
+# What runs without LLVM. The engine (build/sc.wasm, the sc that links it)
+# needs the LLVM pin built twice, hours on a runner: its batteries (make
+# test, test-session, test-split...) run on the developer's machine.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Check (Linux)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+          target: wasm32-wasip1
+
+      - name: Check
+        run: make check
+
+  wasm:
+    name: Build WASM
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32-wasip1
+
+      # The Rust that sc.wasm links (wasm/): the loader and the machine on
+      # the host's primitives.
+      - name: Build
+        run: make rs-wasm
+
+  test:
+    name: Test (${{ matrix.os }} / ${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            setup: sudo apt-get install musl-tools
+
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            setup: sudo apt-get install musl-tools
+            linker: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            setup: git config --global core.longpaths true
+
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            setup: ""
+
+          - os: macos-15
+            target: aarch64-apple-darwin
+            setup: ""
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Setup
+        if: matrix.setup != ''
+        run: ${{ matrix.setup }}
+
+      - name: Set linker
+        if: matrix.linker != ''
+        shell: bash
+        run: echo "${{ matrix.linker }}" >> $GITHUB_ENV
+
+      # make test-loader: the loader on wasmtime, without the engine
+      - name: Run tests
+        shell: bash
+        env:
+          RUST_BACKTRACE: "1"
+        run: >
+          cargo test --release --locked --target ${{ matrix.target }}
+          --no-default-features --features native
+          --lib --test signal --test exceptions --test undo

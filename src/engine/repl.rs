@@ -117,6 +117,11 @@ impl<C: Compiler> Repl<C> {
         self.log.len()
     }
 
+    /// No cell accepted yet.
+    pub fn is_empty(&self) -> bool {
+        self.log.is_empty()
+    }
+
     /// The names the accepted cells export.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.log.iter().flat_map(|e| &e.syms).map(String::as_str)
