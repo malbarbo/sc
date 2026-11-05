@@ -4923,3 +4923,55 @@ Cada execução do `sc-rs` compila o `sc.wasm` inteiro no Node, como o
 **O tamanho.** O `sc.wasm` vai de 39,34 MB (§64) para 39,55 MB (+202 KB);
 com zstd -19, 7,67 → 7,74 MB. O `gimli` e o `addr2line` entram agora,
 porque a `Machine` lê o DWARF.
+
+## 67. A API do simplecode para engines que fazem módulos, com o sgleam
+
+O sgleam vai trocar o QuickJS pelo backend WebAssembly do Gleam, que faz
+um módulo por entrada do REPL: a mesma necessidade do sc. Os dois agentes
+combinaram um só conjunto de primitivas genéricas no `env` do
+`ENGINE.md` do simplecode (seção "Modules"), o de `src/loader/host.rs`
+com estas mudanças:
+
+- **`wasm_drop(handle)`**, novo. O `Host` guarda cada handle que recebe
+  (instâncias, exports, globais criados) e os solta no `Drop`, junto com
+  o `Loader`. Sem isso, cada Run da página deixava no host as instâncias e
+  a memória da sessão anterior. No Node, um `repl_destroy` solta 1555
+  handles. `host::export` é o `wasm_export` sem registro, para o
+  `sc_session_cell` que fica para sempre num `OnceLock`.
+- **Os padrões (tipo 0)**: o WASI do engine sobre a memória que o módulo
+  importa, ou, se não importa nenhuma, sobre a `memory` que exporta
+  (pedido do sgleam, cujos módulos têm memória própria e tipos GC);
+  `env.check_interrupt` e `env.wasm_stack`. Uma função WASI que o
+  polyfill da página não tem responde `ENOSYS`: a libc de um programa
+  importa `clock_res_get` e outras que quase nenhum chama.
+- **Um handle de tipo 1 pode ter tipo GC**, e o host o passa sem checar
+  nada além da instanciação: é como a entrada N+1 do Gleam importa a N.
+- **O Stop**: o normal é o módulo consultar `env.check_interrupt` (o
+  Gleam terá um contador no código gerado). O sc não instrumenta o código
+  das células: isso deslocaria os offsets que o DWARF dos relatórios de
+  crash usa. Fica o plano B, na página: 1 s depois de um Stop sem
+  resposta, ela encerra o worker, sobe outro, mantém nível, painéis e
+  histórico, e diz que o REPL perdeu as entradas. Não repete nada
+  sozinha: as entradas imprimiriam e leriam de novo, e um Run que entra
+  em laço entraria de novo.
+
+**Os exports que faltavam** para o `ENGINE.md`: `format` (devolve 0, o
+sc não formata), `version`, `cstr_deallocate` e `repl_complete`. O
+complemento e as palavras-chave saíram do `src/bin/sc/reader.rs` para
+`sc::machine::shell` (`KEYWORDS`, `candidates`, `complete`), que o `sc`
+nativo e o `sc.wasm` usam.
+
+**No simplecode** (não commitado, para a revisão do usuário):
+`src/wasm_host.ts` (as primitivas sobre o WebAssembly do navegador; os
+módulos usam o mesmo objeto WASI do engine, e `host.buffer()` diz qual
+memória a chamada WASI em curso lê), as linguagens C e C++ (`lang=c` e
+`lang=c++` no novo `LangConfig.config`), `fd_pread` no polyfill, o
+`_initialize` de um engine reator e o plano B do Stop. `make test-all`
+do simplecode: 636 testes, 0 falhas, com o sc no `engine_test.ts`; o
+`check-imports` aceita as 8 importações `env` do `sc.wasm`.
+
+No sc passam `test-proto`, `test-aluno`, `test-checks`,
+`test-split-node-rs` (0 diferem), `test-aluno-node-rs` e
+`test-session-node` (11926 resultados, 0 ruins).
+
+**O tamanho**: 39,56 MB (+11 KB sobre o §66); com zstd -19, 7,75 MB.

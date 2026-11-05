@@ -3,11 +3,12 @@
 // sc.wasm's loader does (src/loader/host.rs, which says what each does).
 // Nothing here knows sc: a host such as simplecode's gives the same.
 //
-// Handles are numbers from 1, never reused; the instance 0 is the module
-// bound, the one that imports the primitives: a call of its own export
-// through wasm_call comes back with what stopped it, as any other. A
-// module's import of the default (0) is WASI on the memory it imports, or
-// `env.wasm_stack`. WASI's
+// Handles are numbers from 1, never reused, until wasm_drop; the instance 0
+// is the module bound, the one that imports the primitives: a call of its
+// own export through wasm_call comes back with what stopped it, as any
+// other. A module's import of the default (0) is WASI on the memory it
+// imports (on the `memory` it exports if it imports none, bound after the
+// instantiation), `env.check_interrupt` (0 here) or `env.wasm_stack`. WASI's
 // proc_exit and a trap the host makes stop the code with a trap of a module
 // of its own, which wasm code cannot catch (a JS exception would run the
 // C++ cleanups); the call says EXIT.
@@ -133,14 +134,17 @@ export function wasmApi(wasi) {
       }
       const v = view();
       const slot = (k) => [v.getUint32(slots + 8 * k, true), v.getInt32(slots + 8 * k + 4, true)];
-      const memory = decl.map((d, k) => d.kind === 'memory' && slot(k)[0] === 1 && get(slot(k)[1])).find((m) => m);
+      let memory = decl.map((d, k) => d.kind === 'memory' && slot(k)[0] === 1 && get(slot(k)[1])).find((m) => m);
+      let own = null; // the instance, whose memory a WASI of its own reads
+      const lazy = (name) => (...a) => wasiOn(own.exports.memory)[name](...a);
       const imports = {};
       for (const [k, d] of decl.entries()) {
         const [kind, value] = slot(k);
         let x;
         if (kind === 0) {
-          if (d.module === 'wasi_snapshot_preview1' && memory) x = wasiOn(memory)[d.name];
+          if (d.module === 'wasi_snapshot_preview1') x = memory ? wasiOn(memory)[d.name] : lazy(d.name);
           else if (d.module === 'env' && d.name === 'wasm_stack') x = wasm_stack;
+          else if (d.module === 'env' && d.name === 'check_interrupt') x = () => 0;
         } else if (kind === 1) x = get(value);
         else {
           x = new WebAssembly.Global({ value: 'i32', mutable: kind === 3 }, value);
@@ -158,7 +162,8 @@ export function wasmApi(wasi) {
         m[d.name] = x;
       }
       try {
-        view().setUint32(out, put(new WebAssembly.Instance(module, imports)), true);
+        own = new WebAssembly.Instance(module, imports);
+        view().setUint32(out, put(own), true);
         return OK;
       } catch (e) {
         const [st, d] = failure(e);
@@ -218,6 +223,10 @@ export function wasmApi(wasi) {
       if (!(m instanceof WebAssembly.Memory) || addr + len > m.buffer.byteLength) return -1;
       bytes(dst, len).set(new Uint8Array(m.buffer, addr, len));
       return 0;
+    },
+
+    wasm_drop(h) {
+      if (h > 0) handles[h] = undefined;
     },
 
     wasm_memory_write(mem, addr, src, len) {

@@ -4,7 +4,6 @@
 
 use sc::engine::{sys, Answer, Compiler, Mode, Session, Status};
 use sc::loader::host::{self, Host};
-use sc::loader::runtime::Runtime;
 use sc::loader::{libdirs, Error, Loader, STACK};
 use sc::machine::shell::{self, Step, COMMANDS};
 use sc::machine::{Enter, Lang, Machine, Outcome, Platform, Safety, INDENT, ROOT};
@@ -77,7 +76,7 @@ struct Local {
 /// `sc_session_cell` as the host calls it.
 fn cell_export() -> u32 {
     static H: OnceLock<u32> = OnceLock::new();
-    *H.get_or_init(|| Host.export(0, "sc_session_cell"))
+    *H.get_or_init(|| host::export(0, "sc_session_cell"))
 }
 
 impl Compiler for Local {
@@ -148,7 +147,7 @@ impl Platform for Inside {
 
     // the code's arguments and stdio are those the host gives a module
     fn runtime(&self, _argv: &[String], _interactive: bool) -> sc::loader::Result<Host> {
-        Ok(Host)
+        Ok(Host::default())
     }
 
     fn read(&self, path: &str) -> Option<&'static [u8]> {
@@ -325,6 +324,46 @@ pub unsafe extern "C" fn repl_ready(r: *mut Repl, p: *const u8, len: usize, curs
     match (*r).m.enter(&input, at) {
         Enter::Run => -1,
         Enter::Open(depth) => (depth * INDENT) as i32,
+    }
+}
+
+/// Tab at byte `cursor`: `c <start>` and a candidate a line, as in
+/// [`shell::complete`].
+#[no_mangle]
+pub unsafe extern "C" fn repl_complete(r: *mut Repl, p: *const u8, len: usize, cursor: usize) -> *mut c_char {
+    let input = text(p, len);
+    let mut at = cursor.min(input.len());
+    while !input.is_char_boundary(at) {
+        at -= 1;
+    }
+    let (start, words) = shell::complete(&shell::candidates((*r).m.names(), COMMANDS), &input, at);
+    let mut out = format!("c {start}");
+    for w in words {
+        out.push('\n');
+        out.push_str(&w);
+    }
+    cstr(out)
+}
+
+/// sc formats nothing: 0, and the page keeps the code as it is.
+#[no_mangle]
+pub extern "C" fn format(_p: *const u8, _len: usize) -> *mut c_char {
+    std::ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "C" fn version() -> *mut c_char {
+    cstr(format!("sc {}", env!("CARGO_PKG_VERSION")))
+}
+
+fn cstr(s: String) -> *mut c_char {
+    CString::new(s).map_or(std::ptr::null_mut(), CString::into_raw)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn cstr_deallocate(p: *mut c_char) {
+    if !p.is_null() {
+        drop(CString::from_raw(p));
     }
 }
 

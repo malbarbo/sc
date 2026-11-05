@@ -64,13 +64,7 @@ pub fn run(machine: Machine) -> Result<i32> {
     Ok(status)
 }
 
-/// The names Tab offers: the cells', the keywords and the commands.
+/// The names Tab offers.
 fn completions(machine: &Machine, commands: &[(&str, &str, &str)]) -> Vec<String> {
-    // a name that starts with `_` is the implementation's, or mangled
-    let mut names: Vec<String> = machine.names().filter(|n| !n.starts_with('_')).map(String::from).collect();
-    names.extend(crate::reader::KEYWORDS.iter().map(|k| k.to_string()));
-    names.extend(commands.iter().map(|c| if c.1.is_empty() { c.0.to_string() } else { format!("{} ", c.0) }));
-    names.sort();
-    names.dedup();
-    names
+    shell::candidates(machine.names(), commands)
 }

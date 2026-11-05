@@ -146,17 +146,7 @@ impl Completer for InputHelper {
     type Candidate = String;
 
     fn complete(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> rustyline::Result<(usize, Vec<String>)> {
-        let before = &line[..pos];
-        let start = before
-            .char_indices()
-            .rev()
-            .find(|&(_, c)| !(c.is_alphanumeric() || c == '_' || c == ':'))
-            .map_or(0, |(i, c)| i + c.len_utf8());
-        let prefix = &before[start..];
-        if prefix.is_empty() {
-            return Ok((pos, vec![]));
-        }
-        Ok((start, self.completions.iter().filter(|n| n.starts_with(prefix)).cloned().collect()))
+        Ok(sc::machine::shell::complete(&self.completions, line, pos))
     }
 }
 
@@ -288,15 +278,6 @@ const ONE_LIGHT: Palette = Palette {
 };
 
 /// C23's keywords and C++26's, which Tab also offers.
-pub const KEYWORDS: &[&str] = &[
-    "alignas", "alignof", "auto", "bool", "break", "case", "catch", "char", "class", "const", "constexpr", "continue",
-    "default", "delete", "do", "double", "else", "enum", "explicit", "extern", "false", "float", "for", "friend",
-    "goto", "if", "inline", "int", "long", "namespace", "new", "noexcept", "nullptr", "operator", "private",
-    "protected", "public", "register", "restrict", "return", "short", "signed", "sizeof", "static", "static_assert",
-    "struct", "switch", "template", "this", "throw", "true", "try", "typedef", "typename", "typeof", "union",
-    "unsigned", "using", "virtual", "void", "volatile", "while",
-];
-
 impl Highlighter for InputHelper {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
         if self.color {
@@ -379,7 +360,7 @@ fn highlight(input: &str, t: &Palette) -> String {
                 i += 1;
             }
             let word: String = chars[begin..i].iter().collect();
-            if KEYWORDS.contains(&word.as_str()) {
+            if sc::machine::shell::KEYWORDS.contains(&word.as_str()) {
                 paint(&mut out, t.keyword, &chars[begin..i]);
             } else if chars.get(i) == Some(&'(') {
                 paint(&mut out, t.function, &chars[begin..i]);

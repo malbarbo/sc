@@ -16,7 +16,8 @@
 //!   each, innermost first: the offset in the module in hex (or `-`), a
 //!   space, the function's name (or nothing);
 //! - `wasm_memory_read(mem, addr, dst, len)` and `wasm_memory_write(mem,
-//!   addr, src, len) -> 0 | -1`.
+//!   addr, src, len) -> 0 | -1`;
+//! - `wasm_drop(handle)`: the host forgets it; a number is never reused.
 //!
 //! A status is [`OK`], or else what stopped the call, with its detail in
 //! `vals[0]` (in `*out` for an instantiation): [`TRAP`] and its code
@@ -47,6 +48,7 @@ unsafe extern "C" {
     fn wasm_frames(id: u32, buf: *mut u8, cap: usize) -> usize;
     fn wasm_memory_read(mem: H, addr: u32, dst: *mut u8, len: usize) -> i32;
     fn wasm_memory_write(mem: H, addr: u32, src: *const u8, len: usize) -> i32;
+    fn wasm_drop(handle: H);
 }
 
 /// The kind of a trap's code, and wasmtime's words for it, which the
@@ -118,10 +120,28 @@ pub fn call(func: H, sig: &str, vals: &mut [u64]) -> i32 {
     unsafe { wasm_call(func, sig.as_ptr(), sig.len(), vals.as_mut_ptr()) }
 }
 
-/// The host's primitives. The host keeps what they make: there is nothing
-/// here.
+/// `wasm_export` itself: a handle that nothing drops.
+pub fn export(inst: H, name: &str) -> H {
+    // SAFETY: the host reads len bytes
+    unsafe { wasm_export(inst, name.as_ptr(), name.len()) }
+}
+
+/// The host's primitives. The host keeps what they make, until a drop: a
+/// `Host` drops every handle it got when it goes, with the loader that owns
+/// it, so a session the page runs again leaves nothing behind in the host.
 #[derive(Default)]
-pub struct Host;
+pub struct Host {
+    made: Vec<H>,
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        for &h in &self.made {
+            // SAFETY: a handle of the host's
+            unsafe { wasm_drop(h) }
+        }
+    }
+}
 
 impl Runtime for Host {
     fn instantiate(&mut self, bytes: &[u8], _compiled: Option<&[u8]>, imports: &mut [Import]) -> Result<H> {
@@ -140,14 +160,19 @@ impl Runtime for Host {
         for (i, s) in imports.iter_mut().zip(&slots) {
             if let Import::I32 { .. } = i {
                 *i = Import::Handle(s.value as H);
+                self.made.push(s.value as H);
             }
         }
+        self.made.push(out);
         Ok(out)
     }
 
     fn export(&mut self, inst: H, name: &str) -> H {
-        // SAFETY: the host reads len bytes
-        unsafe { wasm_export(inst, name.as_ptr(), name.len()) }
+        let h = export(inst, name);
+        if h != 0 {
+            self.made.push(h);
+        }
+        h
     }
 
     fn call(&mut self, func: H, sig: &str, vals: &mut [u64]) -> Result<()> {

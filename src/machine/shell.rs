@@ -100,3 +100,40 @@ pub fn line<P: Platform>(
         _ => other(name, arg),
     })
 }
+
+/// The keywords Tab offers, of C and C++.
+pub const KEYWORDS: &[&str] = &[
+    "alignas", "alignof", "auto", "bool", "break", "case", "catch", "char", "class", "const", "constexpr", "continue",
+    "default", "delete", "do", "double", "else", "enum", "explicit", "extern", "false", "float", "for", "friend",
+    "goto", "if", "inline", "int", "long", "namespace", "new", "noexcept", "nullptr", "operator", "private",
+    "protected", "public", "register", "restrict", "return", "short", "signed", "sizeof", "static", "static_assert",
+    "struct", "switch", "template", "this", "throw", "true", "try", "typedef", "typename", "typeof", "union",
+    "unsigned", "using", "virtual", "void", "volatile", "while",
+];
+
+/// The names Tab offers: the cells' but the implementation's (`_`), the
+/// keywords and the commands, sorted.
+pub fn candidates<'a>(names: impl Iterator<Item = &'a str>, commands: &[(&str, &str, &str)]) -> Vec<String> {
+    let mut c: Vec<String> = names.filter(|n| !n.starts_with('_')).map(String::from).collect();
+    c.extend(KEYWORDS.iter().map(|k| k.to_string()));
+    c.extend(commands.iter().map(|c| if c.1.is_empty() { c.0.to_string() } else { format!("{} ", c.0) }));
+    c.sort();
+    c.dedup();
+    c
+}
+
+/// Tab at byte `pos` of `line`: where the word under completion starts, and
+/// the `candidates` it can become; none without a word.
+pub fn complete(candidates: &[String], line: &str, pos: usize) -> (usize, Vec<String>) {
+    let before = &line[..pos];
+    let start = before
+        .char_indices()
+        .rev()
+        .find(|&(_, c)| !(c.is_alphanumeric() || c == '_' || c == ':'))
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    let prefix = &before[start..];
+    if prefix.is_empty() {
+        return (pos, vec![]);
+    }
+    (start, candidates.iter().filter(|n| n.starts_with(prefix)).cloned().collect())
+}

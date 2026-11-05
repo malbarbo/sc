@@ -99,7 +99,8 @@ EXPORTS = ('sc_session_new', 'sc_session_free', 'sc_session_cell', 'sc_session_u
            '__stack_pointer')
 # wasm/lib.rs's: scload and sc inside sc.wasm, and simplecode's REPL (its
 # ENGINE.md)
-RS_EXPORTS = ('sc_scload', 'sc_cli', 'repl_new', 'repl_run', 'repl_ready', 'repl_destroy', 'string_allocate', 'string_deallocate')
+RS_EXPORTS = ('sc_scload', 'sc_cli', 'repl_new', 'repl_run', 'repl_ready', 'repl_destroy', 'repl_complete', 'format',
+              'version', 'cstr_deallocate', 'string_allocate', 'string_deallocate')
 if not NATIVE:  # _start is sc_start.cpp's; the host calls chdir after _initialize
     flags += ['-mexec-model=reactor', '-lc-printscan-long-double'] + [f'-Wl,--export={f}' for f in EXPORTS + RS_EXPORTS]
 archives = [t for t in shlex.split(ninja_cmd('bin/lld')) if t.startswith('lib/liblld') and t.endswith('.a')]
@@ -147,7 +148,7 @@ def removed():
 
 # the host's primitives, which sc.wasm's loader imports (src/loader/host.rs): no stubs
 HOST = {'wasm_instantiate', 'wasm_export', 'wasm_call', 'wasm_error', 'wasm_frames', 'wasm_memory_read',
-        'wasm_memory_write'}
+        'wasm_memory_write', 'wasm_drop'}
 
 
 def import_sigs(wasm, prefix=''):
