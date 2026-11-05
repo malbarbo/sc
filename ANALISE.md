@@ -4975,3 +4975,139 @@ No sc passam `test-proto`, `test-aluno`, `test-checks`,
 `test-session-node` (11926 resultados, 0 ruins).
 
 **O tamanho**: 39,56 MB (+11 KB sobre o §66); com zstd -19, 7,75 MB.
+
+## 68. O `sc` só com o `sc.wasm`: o tamanho e o tempo
+
+**A questão.** O `sc` nativo compila com o engine num filho, com `fork`
+antes de cada célula, process group e `SIGIO`: só Unix. Rodar a sessão
+pelo `sc.wasm` no próprio processo, com o snapshot do §65, como no
+navegador, dispensaria o engine nativo e levaria o `sc` (e o Ctrl-C) ao
+Windows. Não decidido; as medidas para decidir.
+
+**O tamanho.** O `.cwasm` do `sc.wasm` (`build/sc-wasm.cwasm`):
+
+| | MB |
+| --- | ---: |
+| `.text` | 42,7 |
+| `.rodata.wasm` (os dados, com a imagem do pacote, §59) | 21,4 |
+| `.wasmtime.addrmap` | 6,9 |
+| o resto (`eh_frame`, `traps`, ...) | 4,3 |
+| total | 77,3 |
+| total, zstd -19 | 20,2 |
+
+Descomprimir os 20 MB leva 0,23–0,46 s a cada execução. Sem a imagem do
+pacote nos dados (o `sc` nativo já a tem, e a daria pelo host, §58) o
+`.cwasm` cairia para ~56 MB, estimado. Hoje: `build/sc` 46,2 MB (16,3
+com zstd), o `sc` dist 38,2 MB, o `scload` dist (wasmtime e o loader,
+sem engine) 7,5 MB.
+
+**O tempo.** Uma sessão pelo `--replay`: os `#include` numa célula e 20
+funções, com uma célula com erro a cada 4. `build/sc` (o engine nativo
+cortado) contra `build/sc-wasm` (o `sc.wasm` cortado no wasmtime, com
+`.cwasm`). Os dois com o filho e o `fork`, então a diferença é a do
+engine; o snapshot do §65 trocaria o `fork` por uma cópia de 1,3–8 ms.
+Duas rodadas de 5, alternadas, máquina com load 25–40 em 28 núcleos:
+
+| | nativo | wasm | razão |
+| --- | ---: | ---: | ---: |
+| C, sessão inteira (mínimo) | 0,23–0,25 s | 0,29–0,31 s | 1,25 |
+| C, 1ª célula com o início (mínimo) | 36–39 ms | 42–44 ms | 1,15 |
+| C, célula aceita (mediana) | 10–12 ms | 13–15 ms | 1,3 |
+| C, célula com erro (mediana) | 3,1–3,7 ms | 4,6 ms | 1,3 |
+| C++, sessão inteira (mínimo) | 3,54–3,57 s | 5,69–5,74 s | 1,6 |
+| C++, 1ª célula: 5 cabeçalhos (mínimo) | 1,92–1,94 s | 3,34–3,36 s | 1,75 |
+| C++, célula aceita (mediana) | 77–79 ms | 106–108 ms | 1,4 |
+| C++, célula com erro (mediana) | 10 ms | 10–11 ms | 1,0 |
+
+O engine no wasm é 1,3–1,75× mais lento. O que se sente é a célula dos
+cabeçalhos de C++: 1,4 s a mais. Na primeira rodada, com o `.cwasm` fora
+do cache de páginas, a primeira célula de C levou 301 ms no wasm (73 no
+nativo).
+
+## 69. O `sc` só com o `sc.wasm`: feito
+
+**A decisão** (depois do §68): uma forma só. O `sc` não tem mais engine
+nativo, filho nem `fork`. O compilador é a sessão do `sc.wasm` no próprio
+processo, no wasmtime (`src/engine/guest.rs`, o `Guest`), e a `Machine`
+segue nativa, com o leitor e o loader no wasmtime (a opção A; a B, tudo
+dentro do `sc.wasm` como no simplecode, pediria os `env.wasm_*` sobre o
+wasmtime e o leitor pelas exports). O `.cwasm` do `sc.wasm` vai no binário
+com zstd -19 (a escolha entre comprimido e não, §68).
+
+**Como é o `Guest`:**
+- a sessão com `SC_SNAPSHOT` (§65): uma célula com erro, um crash, um
+  `exit` do clang voltam ao estado de antes da célula por
+  `sc_session_recover`; sem a cópia (um repasse) a sessão se perde e o
+  `Repl` repassa o log noutra instância;
+- Ctrl-C, o timeout e a memória: o epoch e um `ResourceLimiter`. O epoch é
+  do `Engine`, que as instâncias dividem, então cada store decide no
+  callback se a chamada para: houve um Ctrl-C desde que ela começou, ou
+  passou o prazo dela. Um watchdog move o epoch a cada 100 ms só enquanto
+  há uma chamada com prazo. Parada assim, a célula é um erro e a sessão
+  segue: antes, o filho morria e o log era repassado. A memória do módulo,
+  com a cópia, vai até o dobro do limite; acima do limite, depois de uma
+  célula aceita, o `Repl` repassa o log noutra (`over`);
+- os arquivos: o `sc.wasm` lê os cabeçalhos e as bibliotecas da sessão do
+  pacote dentro dele (`sc_pack`) e vê o disco do host pelo `/` (no Windows,
+  a unidade do diretório como `/C:`), como o engine nativo via;
+- `SC_CWASM` põe outro `sc.wasm` no lugar do embutido, compilado por
+  `sc --precompile`: o sem cortes faz as bases, e o `learn-session` usa o
+  que está aprendendo. A armadilha de uma função cortada diz o nome dela no
+  stderr (o quadro 0, `__wrap_`).
+
+**O que saiu:** o filho (`child.rs`), o protocolo (`wire.rs` e o do
+`sc.h`), o `serve` com `fork` e `SIGIO`, o host de teste `build/sc-wasm`
+(`wasm.rs`, a feature `wasm`, o tokio), o engine ligado no `sc`
+(`SC_LINK_ARGS`, `sc --cc1`, `sc --ld`, `sc --engine`), o build de host do
+LLVM (`build/host`, `engine-host`, `trim-host`, `link.py --native`,
+`cuts/symbols.host.used`), `make native`, `test-native`, `learn-native`,
+`test-session-wasm*`, `test-split-wasm`, `test-session-node` e o filho em
+Node (`test/node/engine.mjs`, `sc-node`). O pacote do `sc` ficou só com os
+`.args` e as bibliotecas do loader: os cabeçalhos estão no `sc.wasm`. A
+`native-base` do corpus (o one-shot nativo) deu lugar à `base` (o
+`sc-full.wasm`) no `split-` e no `ses-`; o `std.pcm` das baterias vem do
+`sc.wasm` no `wasmtime`. 24 arquivos, +450 −916 linhas, fora os removidos.
+O `cuts/symbols.session.used` segue com o que o engine nativo chamava
+(`unll` casa os nomes); aprendê-lo do zero só no wasm o encolheria.
+
+**As baterias** (máquina com load 20–240 em 28 núcleos, de outras sessões
+e das próprias baterias):
+- `make test`: 17.715 arquivos, 0 diferenças;
+- `test-session`: 11.926 resultados, 0 diferenças da nova base (feita com
+  o `sc-full.cwasm`); `test-session-warn`: idem;
+- `test-split`: 1.947 programas, 10.541 células, 0 diferenças do `pic-`;
+- `test-aluno` (66 execuções) e `test-checks` (165) iguais ao esperado;
+- `test-proto` (`tests/session.rs` portado para o `Guest`: células,
+  crash, desfazer, limites, Enter, valores, `:type`) e `test-loader`
+  passam; o clippy com e sem a feature `engine` também.
+
+A nova base difere da do `sc-wasm` antigo (filho e `fork`, com só a raiz do
+repositório aberta) em 5 resultados: o `limits-externdecl`, que passa de
+120 s com a máquina carregada (49 s sozinho; a `wev-base` do corpus já tem
+TIMEOUT para ele, então no `test-session-warn` ele sai ruim sempre que a
+sessão termina; ele agora está no `SKIP` do `test/session.py`, junto dos
+que o wasm-ld demora a desmanglar, para que a bateria não dependa da carga
+da máquina), e 4 que o disco do host muda: três escrevem módulos em
+`/tmp` (`#pragma clang module build`) e um lê `/dev` no `#embed`, como no
+nativo. O `microsoft-abi-emit-dependent` volta ao `KNOWN` (o corpus roda
+sem `/tmp`).
+
+**O tamanho e o tempo:**
+
+| | antes (§68) | agora |
+| --- | ---: | ---: |
+| `sc` dist | 38,2 MB | 32,6 MB |
+| `sc` dist, zstd -19 | | 26,6 MB |
+| `sc` release (sem strip) | 46,2 MB | 47,7 MB |
+
+`sc hello.c` leva 0,35–0,41 s, com 194 MB de pico (load ~18): descomprimir
+os 20 MB do `.cwasm` (0,2–0,4 s, §68) e copiá-lo para memória executável
+pesam nisso; `sc m.cpp` com `<iostream>`, 3,6 s. O que o §68 mediu das
+células segue: o engine no wasm é 1,3–1,75× mais lento, mais na célula dos
+cabeçalhos de C++.
+
+**O Ctrl-C** chega ao `Guest` pelo handler do loader (`on_ctrl_c`), e num
+pipe ele para a compilação (`sc: interrupted`, a sessão segue). No
+terminal ele não chega à compilação que o Enter faz (`Machine::enter`,
+dentro do `readline`): o rustyline troca o handler de SIGINT e o terminal
+está em modo cru. Era assim com o filho também.

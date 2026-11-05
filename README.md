@@ -37,12 +37,13 @@ it an object in place of the instance (`e` its exports):
 for the command, `wasi.initialize({exports: {memory: e.memory, _initialize: e._initialize}})`
 for the library (`bench/cc.mjs`).
 
-The same engine is also built natively (x86-64 Linux), with the same cuts:
-24.5 MB (7.6 MB zstd) against 52 MB uncut. It still compiles to wasm, so the
-student's code runs in wasm either way. `build/sc` is what ships: the REPL
-(`sc`, `sc FILE`, `sc help`) with that engine and the session linked in.
-Its compiler is a child, `sc --engine`, and `sc --cc1 ...` and `sc --ld ...`
-are the one-shot engine (`--`: a student's program may be called `ld`).
+`build/sc` is what ships: the REPL (`sc`, `sc FILE`, `sc help`), with
+`sc.wasm` in it, compiled for wasmtime and compressed (20 MB). Its compiler
+is `sc.wasm`'s session in the same process, as in the browser: a cell that
+fails is undone by the copy of the memory the session takes, and Ctrl-C,
+the timeout and the memory limit are wasmtime's (`ANALISE.md` §68). Until
+then the engine was also built natively, and the compiler was a child
+process that forked before each cell.
 
 `import std;` takes a hello from 2.8 s to 0.14 s in V8. The engine builds
 `std.pcm` once (6.8 s) from libc++'s `std.cppm`, without `<csignal>`, which
@@ -76,31 +77,27 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `llvm/lld-files.patch`, wasm-ld, which also reads and writes each cell
   there). `sc_start.cpp` is `sc.wasm`'s `_start`, and `sc_pack.cpp`
   its `sc_files`: the pack in the module, a squashfs without compression
-  (`scripts/pack.py`) that squashfuse's library reads. `sc` links the native engine, with the session too.
+  (`scripts/pack.py`) that squashfuse's library reads.
 - `Cargo.toml`, `build.rs` and `src/` are the Rust crate `sc`
   (`ANALISE.md` §51). `cargo build --release` makes
-  `build/cargo/release/sc` and `scload`: without `SC_LINK_ARGS`, `build.rs`
-  runs `make sc-deps` (the cut engine's link arguments, and what `sc`
-  embeds) and links `build/link-session-cut/engine.args`. `sc` embeds
-  what a session reads (`PLANO-REPL.md` §5.4): a squashfs `build.rs`
-  writes, with the sysroot's headers and libraries, clang's headers and
-  the session's arguments, which the engine sees under `/sc`
-  (`src/bin/sc/pack.rs`), and each library compiled by wasmtime (its
-  `.cwasm`, which the loader takes in place of compiling it). Installing
-  `sc` is copying it: it runs anywhere, and writes only the REPL's history
-  and theme.
+  `build/cargo/release/sc` and `scload`: `build.rs` runs `make sc-deps`
+  (what `sc` embeds). `sc` embeds `build/sc.wasm`, compiled by wasmtime
+  and compressed with zstd, and a squashfs `build.rs` writes
+  (`PLANO-REPL.md` §5.4) with the session's arguments and the libraries
+  the loader loads, each with its `.cwasm`, which the loader takes in
+  place of compiling it (`src/bin/sc/pack.rs`). The session's headers
+  and libraries are in `sc.wasm`'s own pack. Installing `sc` is copying
+  it: it runs anywhere, and writes only the REPL's history and theme.
   From a clean checkout that is the LLVM pin built twice (native tools,
-  host libraries) and the sysroot, without `make learn`: the cuts are in
-  `cuts/`. It took 14 min on 56 cores (7.3 h of CPU) and 6.6 GB.
-  - `src/engine/` (the `engine` feature, the default) is bindgen over
-    `engine/sc.h`, the protocol between the REPL and its child (`wire`),
-    the REPL's side of it (`Child`, and `Repl`, which replays a lost
-    session) and a safe Rust API over the linked engine (`Session`,
-    `main`, `serve`; `ANALISE.md` §23 and §24). `make test-proto` runs its
-    tests (`tests/session.rs`) on the uncut engine. With the `wasm`
-    feature, the same API calls `sc.wasm`'s exports through wasmtime
-    (`src/engine/wasm.rs`): `build/sc-wasm`, the test host of the
-    module (`ANALISE.md` §48).
+  then wasm) and the sysroot, without `make learn`: the cuts are in
+  `cuts/`.
+  - `src/engine/` is bindgen over `engine/sc.h`, `Repl` (the log, which
+    replays a lost session) over a `Compiler`, and, with the `engine`
+    feature (the default), `Guest`: `sc.wasm`'s session on wasmtime, the
+    compiler of `sc` (`ANALISE.md` §68). Inside `sc.wasm` (`wasm/`),
+    `Session` is a safe Rust API over the engine linked in (§23, §24).
+    `make test-proto` runs the tests of `Repl` over `Guest`
+    (`tests/session.rs`).
   - `src/loader.rs` loads wasm shared objects the way the REPL does:
     `libc.so` and `libc++.so` from wasi-sdk, then each input, sharing one
     memory and one function table. A definition in an input hides an
@@ -115,8 +112,9 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
     `sc_scload`.
   - `src/bin/sc/` is the REPL, `src/bin/scload.rs` the loader alone, for
     the batteries. `sc --replay` is the test of the REPL's side
-    (`test/split.py`, `test/session.py`); `build/sc-full` is `sc` with the
-    uncut engine, their base.
+    (`test/split.py`, `test/session.py`); with `SC_CWASM` naming the uncut
+    `sc.wasm` compiled by `sc --precompile` (`build/sc-full.cwasm`), it
+    makes their base.
 - `llvm/` has the patches over the LLVM pin (`Makefile` has the commit) and the
   CMake toolchain file for wasi-sdk. `wasi-host.patch` makes LLVM build for
   WASI, from YoWASP's patch. `no-veclibs.patch` lets `scripts/trim.py` build
@@ -167,7 +165,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   `runtimes.cmake.in` is the toolchain file for libc++ with exceptions.
 - `cuts/` lists what the link leaves out. See [Cuts](#cuts).
 - `scripts/link.py` links the engine from the LLVM libraries and applies the
-  cuts; `--native` links `build/sc` from the host build of LLVM. `scripts/trim.py` builds the trimmed intrinsics table and
+  cuts. `scripts/trim.py` builds the trimmed intrinsics table and
   `TargetLibraryInfo`. `attrib.py`, `cat2.py` and `o0passes.py` are for
   measuring (see `ANALISE.md` §10). `scripts/flags.py` has the engine's flags:
   `[c++|gnu17] [pic] [pcm|mod]` prints the cc1 flags, `--session c|c++
@@ -182,10 +180,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   the session: every source of the corpus as one cell (`ses-`), the
   sequences of cells, undos and restarts in `test/seq/` (`seq-`), the
   sources that crash the engine between good cells (`crash-`) and the
-  memory over 1000 cells (`mem-`). `test/node/engine.mjs` is the child
-  of `sc --replay` (`sc --engine`) on Node, the prototype of the JS host:
-  a snapshot of the memory in place of the fork (`make
-  test-session-node`, `ANALISE.md` §56). `test/node/loader.mjs` is
+  memory over 1000 cells (`mem-`). `test/node/loader.mjs` is
   `src/loader.rs` in JS, and `test/node/scload` the `scload` over it
   (`make test-split-node`, `ANALISE.md` §57). `test/node/wasm.mjs` is
   the host's primitives over the JS API, and `test/node/scload-rs` the
@@ -224,21 +219,14 @@ make checkinv    # the invocation of sc_inv.cpp against clang's parser
 make size        # raw, gzip and zstd sizes
 make loader      # build/cargo/release/scload
 make learn       # rebuild what the cuts keep, from the corpus
-make native      # build/sc, the REPL with the native engine (builds LLVM once more)
-make test-native # the corpus on build/sc against the uncut native engine
-make learn-native # after make learn: what only the native engine calls
-make test-proto  # the Rust API (src/engine) over the uncut native engine
-make learn-session # after make learn-native: what only the REPL's session calls
-make learn-session-wasm # then what only sc.wasm's session calls
+make repl        # build/cargo/release/sc, the REPL
+make test-proto  # Repl over sc.wasm's session (tests/session.rs)
+make learn-session # after make learn: what only the REPL's session calls
 make test-split  # the corpus's programs as REPL cells (build/sc)
-make test-session # the session's other slices (test/session.py) against the uncut engine
+make test-session # the session's other slices (test/session.py) against the uncut sc.wasm
 make test-session-warn # ses-, seq- and crash- with -Weverything
-make test-session-wasm # the same slices on sc.wasm's session (build/sc-wasm)
-make test-session-wasm-warn
-make test-split-wasm
 make test-split-node # test-split with the JS loader (test/node/scload)
 make test-split-node-rs # and with sc.wasm's loader on Node (test/node/scload-rs)
-make test-session-node # the slices with the child and the loader on Node (test/node)
 ```
 
 The first `make` fetches wasi-sdk 29, the LLVM pin with the patches, and the
@@ -268,23 +256,14 @@ a cut rule or bumping LLVM, then `make test`.
 A C or C++ feature the corpus does not cover can reach a stub. The engine then
 traps with `unreachable`.
 
-The native engine (the one in `build/sc`) takes the same cuts from a host build of LLVM
-(`build/host`, from the same patched sources). The function names learned on
-wasm are matched by their demangled names, where `int64_t` is `long long`
-on wasm and `long` on x86-64, and `std::` is libc++'s `std::__2` on wasm and
-libstdc++'s `std::__cxx11` natively. What inlines differently on x86-64 adds
-the functions in `cuts/symbols.host.used` (`make learn-native`, which runs
-the corpus on `sc --cc1` and `sc --ld` as `make test-native` does). A cut
-function prints its name and aborts; cut data is zeros, as at address 0 in
-`sc.wasm`.
-
-The session in that engine is cut the same way. What only it calls is in
-`cuts/symbols.session.used`, by demangled name, which both engines keep:
-`sc.wasm` has the session too. `make learn-session`
-(`scripts/learn_session.py`) learns it on the native engine, from the
-functions that abort in the session's slices (`ses-` and `seq-` and
-`crash-` with `-Weverything`, and `split-`), and puts back the objects they
-are in.
+What only the REPL's session calls is in `cuts/symbols.session.used`, by
+demangled name. `make learn-session` (`scripts/learn_session.py`) learns it
+on `sc` with the cut `sc.wasm` being learned as its compiler (`SC_CWASM`),
+from the cut functions that trap in the session's slices (`ses-` and
+`seq-` and `crash-` with `-Weverything`, and `split-`), and puts back the
+objects they are in. Until `ANALISE.md` §68 the engine was also built
+natively, and the list has what that one called too, matched by demangled
+names where `int64_t` was `long` and `std::` libstdc++'s.
 
 The corpus has 11,736 files: c-testsuite, gcc's torture tests (`execute/` is
 linked and run, `compile/` only compiled), clang's own C and C++ tests

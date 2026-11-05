@@ -26,17 +26,19 @@ rustyline = { version = "18", features = ["derive", "custom-bindings"], optional
 dirs = { version = "6", optional = true }
 # the pack sc embeds (src/bin/sc/pack.rs), which build.rs writes
 backhand = { version = "0.25.5", default-features = false, features = ["zstd"], optional = true }
-# Ctrl-C (the loader), the child's signals and pipes (the engine)
+# Ctrl-C (the loader)
 libc = "0.2"
-# the wasm feature: WASI of sc.wasm's sessions
-tokio = { version = "1", features = ["rt"], optional = true }
+# sc.wasm's .cwasm, which build.rs compresses (src/engine/guest.rs)
+zstd = { version = "0.13", optional = true }
 
 # the bindings of engine/sc.h; the pack sc embeds (build.rs), with the
-# libraries compiled by the wasmtime of the loader, with its features
+# libraries and sc.wasm compiled by the wasmtime of the loader, with its
+# features
 [build-dependencies]
 bindgen = { version = "0.72", default-features = false, features = ["runtime"], optional = true }
 backhand = { version = "0.25.5", default-features = false, features = ["zstd"], optional = true }
 wasmtime = { version = "48.0.3", default-features = false, features = ["runtime", "std", "cranelift", "gc", "gc-drc", "parallel-compilation"], optional = true }
+zstd = { version = "0.13", features = ["zstdmt"], optional = true }
 
 # make test-loader and test-proto (tests/)
 [dev-dependencies]
@@ -50,13 +52,10 @@ native = ["dep:wasmtime", "dep:wasmtime-wasi"]
 # the engine's API (the bindings of engine/sc.h) and the machine, which
 # sc.wasm links too (wasm/)
 machine = ["dep:bindgen"]
-# sc, with the engine linked in (PLANO-REPL.md §1.1): build.rs links the
-# arguments of SC_LINK_ARGS, by default build/link-session-cut/engine.args,
-# which it asks make for
-engine = ["native", "machine", "dep:backhand", "dep:wasmtime", "dep:bpaf", "dep:rustyline", "dep:dirs"]
-# the same API over sc.wasm's exports through wasmtime (src/engine/wasm.rs),
-# in place of the linked engine: build/sc-wasm (PLANO-REPL.md §5.2)
-wasm = ["engine", "dep:tokio"]
+# sc: the machine, with sc.wasm's session on wasmtime as the compiler
+# (src/engine/guest.rs, ANALISE.md §68), which build.rs embeds; build.rs
+# asks make for it
+engine = ["native", "machine", "dep:backhand", "dep:wasmtime", "dep:zstd", "dep:bpaf", "dep:rustyline", "dep:dirs"]
 
 [[bin]]
 name = "sc"

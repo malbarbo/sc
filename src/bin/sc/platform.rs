@@ -1,7 +1,7 @@
-//! The machine of the native `sc`: the compiler in a child (`sc --engine`),
-//! the code on wasmtime, the pack embedded.
+//! The machine of the native `sc`: the compiler is sc.wasm's session in
+//! this process, the code on wasmtime, the pack embedded.
 use crate::{pack, reader};
-use sc::engine::Child;
+use sc::engine::Guest;
 use sc::loader::native::Wasmtime;
 use std::io::{self, IsTerminal};
 use std::time::Duration;
@@ -19,13 +19,11 @@ pub struct Native;
 pub type Machine = sc::machine::Machine<Native>;
 
 impl sc::machine::Platform for Native {
-    type Compiler = Child;
+    type Compiler = Guest;
     type Runtime = Wasmtime;
 
-    fn compiler(&self) -> io::Result<Child> {
-        let mut child = Child::spawn(&std::env::current_exe()?, &["--engine"])?;
-        child.limit(Some(TIMEOUT), Some(MEMORY));
-        Ok(child)
+    fn compiler(&self) -> io::Result<Guest> {
+        Guest::new(Some(TIMEOUT), Some(MEMORY))
     }
 
     fn runtime(&self, argv: &[String], interactive: bool) -> sc::loader::Result<Wasmtime> {

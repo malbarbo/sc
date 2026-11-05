@@ -1,26 +1,21 @@
 //! sc: C and C++ for students, with a REPL. The command line is the one of
 //! sgleam and spython: `sc` is the REPL, `sc FILE` runs a program.
 //!
-//! The engine is linked in (PLANO-REPL.md §1.1, phase 6b): the compiler is
-//! the child `sc --engine`, and `sc --cc1 ...` and `sc --ld ...` are the
-//! one-shot engine, `sc_main`'s `-cc1` and `ld` (a student's program may be
-//! called `ld`). What a session reads, its arguments, the headers and the
-//! libraries, is in the pack this binary embeds ([`pack`]): `sc` copied
-//! anywhere runs. The one-shot engine reads the disk.
+//! The compiler is sc.wasm's session in this process, on wasmtime
+//! ([`sc::engine::Guest`], ANALISE.md §68), and the code runs there too.
+//! What a session reads is in the binary: the headers in sc.wasm, the
+//! arguments and the libraries in the pack ([`pack`]): `sc` copied anywhere
+//! runs.
 //!
 //! `sc --replay <dir> <cell>... -- <session args>` is the test of the REPL's
 //! side (test/split.py, test/session.py): each cell (a file, %undo, or
-//! %restart, a new child that replays the log) goes to a child session
+//! %restart, a new instance that replays the log) goes to a session
 //! through a Repl, which replays the log when the session is lost. It prints
 //! "== <cell> <status>" and the diagnostics of each, and writes the shared
 //! object of each accepted cell as <dir>/<k>.so (k: the cell's position,
 //! from 1, in three digits); an undo removes the last one. It exits with 1
-//! if the session cannot go on.
-//!
-//! With the `wasm` feature (build/sc-wasm) the engine is
-//! `<this program>.wasm`, which `<this program> --precompile` compiles
-//! first ([`sc::engine::wasm`]): the test host of `sc.wasm`, whose sessions
-//! read the pack too.
+//! if the session cannot go on. `sc --precompile <in.wasm> <out.cwasm>`
+//! compiles another sc.wasm for it (`SC_CWASM`).
 
 mod config;
 mod pack;
@@ -31,7 +26,7 @@ mod shell;
 use bpaf::{Bpaf, Parser};
 use platform::{Machine, Native};
 use sc::machine::{check, lang_of, run, source, Lang, Outcome, Safety};
-use sc::engine::{Repl, Status};
+use sc::engine::{Guest, Repl, Status};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -144,18 +139,10 @@ fn show_help<T>(parser: bpaf::OptionParser<T>, args: &[&str]) -> ExitCode {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     let engine = match args.get(1).map(String::as_str) {
-        Some("--engine") => {
-            pack::install();
-            sc::engine::serve_child().map(|()| 0).map_err(Into::into)
-        }
-        Some(mode @ ("--cc1" | "--ld")) => {
-            let mode = if mode == "--cc1" { "-cc1" } else { "ld" };
-            let args = [args[0].as_str(), mode].into_iter().chain(args[2..].iter().map(String::as_str));
-            sc::engine::main(args).map_err(Into::into)
-        }
         Some("--replay") => replay(&args[2..]).map(|()| 0),
-        #[cfg(feature = "wasm")]
-        Some("--precompile") => sc::engine::wasm::precompile().map(|()| 0).map_err(Into::into),
+        Some("--precompile") if args.len() == 4 => {
+            sc::engine::precompile(Path::new(&args[2]), Path::new(&args[3])).map(|()| 0).map_err(Into::into)
+        }
         _ => return sc(),
     };
     match engine {
@@ -172,9 +159,7 @@ fn replay(args: &[String]) -> Result<()> {
     let usage = "--replay <dir> <cell>... -- <session args>";
     let sep = args.iter().position(|a| a == "--").ok_or(usage)?;
     let (dir, cells) = args[..sep].split_first().ok_or(usage)?;
-    // SC_CHILD: another engine, as test/node/sc-node
-    let program = std::env::var_os("SC_CHILD").map_or_else(std::env::current_exe, |p| Ok(p.into()))?;
-    let mut r = Repl::new(program, args[sep + 1..].to_vec(), None, None)?;
+    let mut r = Repl::start(Guest::new(None, None)?, args[sep + 1..].to_vec())?;
     let mut sos: Vec<PathBuf> = vec![];
     let mut out = io::stdout().lock();
     for (k, cell) in cells.iter().enumerate() {

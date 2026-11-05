@@ -1,11 +1,12 @@
-/* The engine's API (PLANO-REPL.md §2). Only scalars and pointers, so the
-   signatures are the same on wasm32 and x86-64. The Rust side takes the
-   types and declarations from here through bindgen (proto/).
+/* The engine's API (PLANO-REPL.md §2): sc.wasm's exports. Only scalars and
+   pointers. The Rust side takes the types and declarations from here
+   through bindgen (src/engine).
 
    A result belongs to the engine and is valid until the next call on the
    same session. The engine is not thread safe: one thread uses it. A fatal
-   error in the compiler ends the process, so the native REPL runs a session
-   in a child process. */
+   error in the compiler ends the module (a trap or an exit): with
+   SC_SNAPSHOT, sc_session_recover puts the session back as before the cell
+   (ANALISE.md §65). */
 #ifndef SC_H
 #define SC_H
 
@@ -16,8 +17,8 @@ extern "C" {
 enum sc_status {
   SC_OK = 0,    /* done */
   SC_ERROR = 1, /* an error in the student's code. A failed cell leaves part of
-                   itself in the session (§3.3); the child of the protocol
-                   goes on from a copy taken before it */
+                   itself in the session (§3.3); with SC_SNAPSHOT the copy
+                   taken before it puts the session back */
   SC_LOST = 2,  /* after a fatal error, a failed link or an undo: the session must be
                    recreated and the log replayed (§3.6) */
   SC_INCOMPLETE = 3, /* SC_CELL_WHOLE: the cell stops short, as a failed cell
@@ -100,10 +101,10 @@ const unsigned char *sc_result_ptr(sc_session *s, int part);
 unsigned sc_result_len(sc_session *s, int part);
 
 /* The files a session reads in place of the disk: those under root (the
-   pack the native sc embeds, PLANO-REPL.md §5.4), for its clang and its
-   wasm-ld. The rest are on the disk, and so is all without them and in the
-   one-shot engine. sc.wasm does not export it: it has its own pack, which
-   its host turns on with sc_pack (sc_pack.cpp). A path
+   pack inside sc.wasm, PLANO-REPL.md §5.4), for its clang and its wasm-ld.
+   The rest are on the disk, and so is all without them and in the one-shot
+   engine. sc.wasm does not export it: its host turns its own pack on with
+   sc_pack (sc_pack.cpp). A path
    asked for is absolute and without "." or "..", with '/' or the system's
    separator. What read and list return is valid until the process ends. */
 struct sc_files {
@@ -120,27 +121,6 @@ void sc_set_files(const struct sc_files *files);
 
 /* The one-shot engine: sc -cc1 ..., sc ld ... (argv[0] is the program). */
 int sc_main(int argc, const char **argv);
-
-/* The protocol of the native child (sc-engine session, proto/): each message
-   is the header, in the host's byte order, then len[0], len[1] and len[2]
-   bytes. The child answers each request with one SC_MSG_REPLY: its status,
-   and the parts in the order of enum sc_part. It ends at the end of its
-   input.
-     SC_MSG_NEW   a session (it replaces the one before): the arguments of
-                  sc_session_new, each followed by a NUL, in the first part
-     SC_MSG_CELL  sc_session_cell: the source in the first part, the mode in
-                  status. In SC_CELL_SO, SC_CELL_WHOLE and SC_CELL_TYPE the
-                  child forks a copy of itself first; if the cell fails or
-                  ends the process, the copy answers SC_ERROR (or
-                  SC_INCOMPLETE) and goes on, so the session is as before
-                  the cell. After SC_CELL_TYPE the copy always goes on
-     SC_MSG_UNDO  sc_session_undo
-     SC_MSG_DEPTH sc_session_depth: the source in the first part; the reply's
-                  status is the depth */
-enum sc_msg { SC_MSG_NEW = 1, SC_MSG_CELL = 2, SC_MSG_UNDO = 3, SC_MSG_REPLY = 4, SC_MSG_DEPTH = 5 };
-struct sc_msg_header {
-  unsigned kind, status, len[3];
-};
 
 #ifdef __cplusplus
 }

@@ -1,13 +1,11 @@
 // The bindings of engine/sc.h (the machine feature), and with the engine
-// feature the arguments that link the engine into sc and the tests
-// (scripts/link.py --emit-link): the file SC_LINK_ARGS names, else
-// build/link-session-cut/engine.args, the cut engine. Without SC_LINK_ARGS
-// and outside make, make sc-deps builds it and what sc reads at run time, so
-// that cargo build alone makes sc. And the pack sc embeds (PLANO-REPL.md
-// §5.4), $OUT_DIR/sc.sqfs, also with the wasm feature.
-use std::{env, fs, path::PathBuf, process::Command};
+// feature what sc embeds: the pack (PLANO-REPL.md §5.4), $OUT_DIR/sc.sqfs,
+// and sc.wasm compiled for wasmtime, $OUT_DIR/sc.cwasm.zst (ANALISE.md §68).
+// Outside make, make sc-deps builds what they come from, so that cargo build
+// alone makes sc.
+use std::{env, path::PathBuf};
 #[cfg(feature = "engine")]
-use std::{collections::BTreeMap, io::Cursor, path::Path};
+use std::{collections::BTreeMap, fs, io::Cursor, path::Path, process::Command};
 
 // the loader's wasmtime Config, which the libraries' .cwasm must have
 #[cfg(feature = "engine")]
@@ -36,73 +34,44 @@ fn main() {
         .expect("bindgen engine/sc.h")
         .write_to_file(PathBuf::from(env::var("OUT_DIR").unwrap()).join("sc.rs"))
         .unwrap();
-    if env::var_os("CARGO_FEATURE_ENGINE").is_none() {
-        return;
-    }
     #[cfg(feature = "engine")]
-    pack(&root, &PathBuf::from(env::var("OUT_DIR").unwrap()).join("sc.sqfs"));
-
-    if env::var_os("CARGO_FEATURE_WASM").is_some() {
-        return;
-    }
-    println!("cargo:rerun-if-env-changed=SC_LINK_ARGS");
-    let file = match env::var_os("SC_LINK_ARGS") {
-        Some(file) => PathBuf::from(file),
-        None => {
-            watch(&root);
-            // under make, the rule that runs cargo has built it
-            if env::var_os("MAKELEVEL").is_none() {
-                make(&root);
-            }
-            root.join("build/link-session-cut/engine.args")
+    {
+        let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+        // under make, the rule that runs cargo has built them
+        watch(&root);
+        if env::var_os("MAKELEVEL").is_none() {
+            make(&root);
         }
-    };
-    println!("cargo:rerun-if-changed={}", file.display());
-    for arg in fs::read_to_string(&file).unwrap().lines().chain(["-lstdc++"]) {
-        println!("cargo:rustc-link-arg-bin=sc={arg}");
-        println!("cargo:rustc-link-arg-tests={arg}");
+        pack(&root, &out.join("sc.sqfs"));
+        cwasm(&root.join("build/sc.wasm"), &out.join("sc.cwasm.zst"));
     }
 }
 
-/// The libraries a session links and loads (scripts/flags.py, solibs), with
-/// those they need.
+/// The libraries the loader loads (scripts/flags.py, solibs), with those
+/// they need.
 #[cfg(feature = "engine")]
 const LIBS: [&str; 5] = ["libc.so", "libc++.so", "libc++abi.so", "libsc_rt.so", "libsetjmp.so"];
 
-/// The pack: a squashfs (zstd -19, blocks of 128 KiB) with what a session
-/// reads, at the paths of the pack's view (scripts/flags.py, PACK): the
-/// sysroot's headers, libraries and ignorelist in sysroot/, clang's headers
-/// and builtins in res/, the arguments in repl/. Each library has its
-/// <name>.cwasm next to it, compiled for the loader and cargo's target, with
-/// the CPU features that any of it has. Out of clang's headers go the
-/// intrinsics of the other targets, and out of libc its DWARF, which frames
-/// hides (wasisdk://).
+/// The pack: a squashfs (zstd -19, blocks of 128 KiB) with what the machine
+/// reads (src/bin/sc/pack.rs), at the paths of the pack's view
+/// (scripts/flags.py, PACK): the libraries the loader loads in sysroot/lib,
+/// the arguments in repl/. Each library has its <name>.cwasm next to it,
+/// compiled for the loader and cargo's target, with the CPU features that
+/// any of it has. Out of libc goes its DWARF, which frames hides
+/// (wasisdk://). The session's headers and libraries are in sc.wasm.
 #[cfg(feature = "engine")]
 fn pack(root: &Path, out: &Path) {
     let b = root.join("build");
-    let res = b.join("wasi-sdk-29.0-x86_64-linux/lib/clang/21");
-    let (lib, builtins) = ("lib/wasm32-wasip1", "lib/wasm32-unknown-wasip1/libclang_rt.builtins.a");
-    let trees = [
-        (b.join("sysroot/include"), "sysroot/include"),
-        (res.join("include"), "res/include"),
-        (b.join("pack/repl"), "repl"),
-    ];
-    let mut inputs: Vec<(PathBuf, String)> =
+    let lib = "lib/wasm32-wasip1";
+    let inputs: Vec<(PathBuf, String)> =
         LIBS.iter().map(|l| (b.join("sysroot").join(lib).join(l), format!("sysroot/{lib}/{l}"))).collect();
-    inputs.push((b.join("sysroot/share/sc/ignorelist.txt"), "sysroot/share/sc/ignorelist.txt".into()));
-    inputs.push((res.join(builtins), format!("res/{builtins}")));
-    for p in trees.iter().map(|t| &t.0).chain(inputs.iter().map(|i| &i.0)) {
+    println!("cargo:rerun-if-changed={}", b.join("pack/repl").display());
+    for p in inputs.iter().map(|i| &i.0) {
         println!("cargo:rerun-if-changed={}", p.display());
     }
     // the image's path of each file, and the file
     let mut files = BTreeMap::new();
-    for (dir, at) in &trees {
-        tree(dir, at, &mut files);
-    }
-    files.retain(|k: &String, _| {
-        let name = k.strip_prefix("res/include/").unwrap_or("/");
-        name.contains('/') || !(name.contains("intrin") || name.starts_with("arm_"))
-    });
+    tree(&b.join("pack/repl"), "repl", &mut files);
     files.extend(inputs.into_iter().map(|(from, to)| (to, from)));
 
     // build.rs also runs again for a change to the engine: then the 35 s of
@@ -149,6 +118,35 @@ fn pack(root: &Path, out: &Path) {
         fs.push_file(Cursor::new(bytes), to, file).unwrap();
     }
     fs.write(fs::File::create(out).unwrap()).unwrap();
+    fs::write(stamp_file, stamp).unwrap();
+}
+
+/// sc.wasm, which the native sc runs (src/engine/guest.rs), compiled for
+/// the loader's Config and the target, with zstd -19.
+#[cfg(feature = "engine")]
+fn cwasm(wasm: &Path, out: &Path) {
+    println!("cargo:rerun-if-changed={}", wasm.display());
+    let me = env::current_exe().unwrap();
+    let stamp: String = [wasm, &me]
+        .iter()
+        .map(|p| {
+            let m = fs::metadata(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            format!("{} {} {:?}\n", p.display(), m.len(), m.modified().unwrap())
+        })
+        .chain([env::var("TARGET").unwrap()])
+        .collect();
+    let stamp_file = out.with_extension("stamp");
+    if out.exists() && fs::read_to_string(&stamp_file).is_ok_and(|s| s == stamp) {
+        return;
+    }
+    let mut cfg = config::config();
+    cfg.target(&env::var("TARGET").unwrap()).unwrap();
+    let engine = wasmtime::Engine::new(&cfg).unwrap();
+    let bytes = engine.precompile_module(&fs::read(wasm).unwrap()).unwrap_or_else(|e| panic!("{}: {e}", wasm.display()));
+    let mut z = zstd::Encoder::new(fs::File::create(out).unwrap(), 19).unwrap();
+    z.multithread(std::thread::available_parallelism().map_or(1, |n| n.get() as u32)).unwrap();
+    std::io::Write::write_all(&mut z, &bytes).unwrap();
+    z.finish().unwrap();
     fs::write(stamp_file, stamp).unwrap();
 }
 
@@ -202,8 +200,9 @@ fn strip_debug(wasm: &[u8]) -> Vec<u8> {
 }
 
 /// What make sc-deps builds from.
+#[cfg(feature = "engine")]
 fn watch(root: &std::path::Path) {
-    for dir in ["engine", "cuts", "llvm", "rt", "Makefile"] {
+    for dir in ["engine", "cuts", "llvm", "rt", "src", "wasm", "Makefile"] {
         println!("cargo:rerun-if-changed={}", root.join(dir).display());
     }
     // the scripts, without the __pycache__ that running them writes
@@ -217,6 +216,7 @@ fn watch(root: &std::path::Path) {
 
 /// make sc-deps, with cargo's jobs. The first time it builds LLVM; cargo
 /// shows its output with -vv.
+#[cfg(feature = "engine")]
 fn make(root: &PathBuf) {
     let mut cmd = Command::new("make");
     cmd.arg("-C").arg(root).arg("sc-deps");

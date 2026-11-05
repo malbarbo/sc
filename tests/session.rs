@@ -1,10 +1,8 @@
-//! The safe API over the uncut engine: sessions in C and C++, a cell with an
-//! error, the replay, undo, the one-shot engine and the thread rule. The
-//! shared objects run in the loader (build/cargo/release/scload).
-//!
-//! One test of the engine in this process: it stays on the first thread that
-//! uses it. The REPL's side (Repl) goes through children (sc --engine).
-use sc::engine::{main, Child, Error, Mode, Repl, Session, Status};
+//! The REPL's side over sc.wasm's session on wasmtime (Guest, the sc.wasm
+//! that sc embeds): a cell with an error, a crash, the replay, undo, the
+//! limits, Enter, the shown values and `:type`. The shared objects run in
+//! the loader (build/cargo/release/scload).
+use sc::engine::{Guest, Repl, Status};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::{fs, io::Write};
@@ -44,24 +42,6 @@ fn run(name: &str, sos: &[Vec<u8>]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr)
 }
 
-/// Compiles the cells; per cell, the status and the exported names, and the
-/// shared objects of the accepted ones.
-fn cells(s: &mut Session, srcs: &[&str], mode: Mode) -> (Vec<(Status, Vec<String>)>, Vec<Vec<u8>>) {
-    let (mut res, mut sos) = (vec![], vec![]);
-    for src in srcs {
-        let r = s.cell(src, mode).unwrap();
-        if r.status() == Status::Ok && mode == Mode::So {
-            assert!(r.so().starts_with(b"\0asm"), "{r:?}");
-            sos.push(r.so().to_vec());
-        }
-        if r.status() != Status::Ok {
-            assert!(r.so().is_empty() && r.syms().next().is_none());
-        }
-        res.push((r.status(), r.syms().map(|x| x.into_owned()).collect()));
-    }
-    (res, sos)
-}
-
 const C: &[&str] = &[
     "#include <stdio.h>",
     "static int cnt;",
@@ -70,69 +50,16 @@ const C: &[&str] = &[
     "int main(void) { next(); printf(\"%d\\n\", next()); return 0; }",
 ];
 
-const CXX: &[&str] = &[
-    "#include <iostream>\n#include <string>",
-    "std::string greet(std::string n) { return \"oi \" + n; }",
-    "struct S { int v; S(int v) : v(v) {} };",
-    "int main() { try { throw S(7); } catch (S &e) { std::cout << greet(std::to_string(e.v)) << '\\n'; } }",
-];
-
-#[test]
-fn session() {
-    // C: a static shared by the cells, a cell with an error
-    let mut s = Session::new(args(false)).unwrap();
-    let (res, sos) = cells(&mut s, C, Mode::So);
-    let st: Vec<_> = res.iter().map(|r| r.0).collect();
-    assert_eq!(st, [Status::Ok, Status::Ok, Status::Ok, Status::Error, Status::Ok]);
-    assert!(res[2].1.contains(&"next".to_string()), "{res:?}");
-    assert_eq!(run("c", &sos), "2\n");
-
-    // the error cell's diagnostics; the session goes on
-    let r = s.cell("int z = ;", Mode::So).unwrap();
-    assert_eq!(r.status(), Status::Error);
-    assert!(r.diags().contains("error: expected expression"), "{}", r.diags());
-    assert_eq!(s.cell("int z = 1;", Mode::So).unwrap().status(), Status::Ok);
-    let r = s.cell("z", Mode::Type).unwrap();
-    assert_eq!((r.status(), r.syms().collect::<Vec<_>>()), (Status::Ok, vec!["int".into()]));
-
-    // the replay: the same names, without the backend
-    let mut s2 = Session::new(args(false)).unwrap();
-    let (replay, _) = cells(&mut s2, C, Mode::Replay);
-    assert_eq!(replay, res);
-
-    // undo: the session is lost; a fresh one has nothing to undo
-    assert_eq!(s.undo().status(), Status::Lost);
-    let r = s.cell("int w;", Mode::So).unwrap();
-    assert_eq!(r.status(), Status::Lost);
-    assert!(r.diags().contains("lost"));
-    drop(s);
-    drop(s2);
-    let mut s3 = Session::new(args(false)).unwrap();
-    assert_eq!(s3.undo().status(), Status::Error);
-    drop(s3);
-
-    // C++ with exceptions and libc++
-    let mut s = Session::new(args(true)).unwrap();
-    let (res, sos) = cells(&mut s, CXX, Mode::So);
-    assert!(res.iter().all(|r| r.0 == Status::Ok), "{res:?}");
-    assert_eq!(run("cxx", &sos), "oi 7\n");
-
-    // the one-shot engine: a usage error
-    assert_eq!(main(["sc", "nope"]).unwrap(), 2);
-
-    // arguments are checked before they cross
-    assert!(matches!(Session::new(["-x", "c\0"]), Err(Error::Nul)));
-
-    // the engine stays on this thread
-    let other = std::thread::spawn(|| matches!(Session::new(args(false)), Err(Error::OtherThread)));
-    assert!(other.join().unwrap());
+/// A session in C or C++, without limits.
+fn repl(cxx: bool) -> Repl<Guest> {
+    Repl::start(Guest::new(None, None).unwrap(), args(cxx)).unwrap()
 }
 
 #[test]
-fn repl() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
+fn cells() {
+    let mut r = repl(false);
     let mut sos = vec![];
-    fn cell(r: &mut Repl<Child>, sos: &mut Vec<Vec<u8>>, src: &str) -> sc::engine::Answer {
+    fn cell(r: &mut Repl<Guest>, sos: &mut Vec<Vec<u8>>, src: &str) -> sc::engine::Answer {
         let a = r.cell(src.as_bytes()).unwrap();
         if a.status == Status::Ok {
             sos.push(a.so.clone());
@@ -149,7 +76,7 @@ fn repl() {
     assert_eq!(cell(&mut r, &mut sos, "#include <stdio.h>\nint p(void) { return EOF; }").status, Status::Ok);
     sos.pop();
     assert_eq!(r.undo().unwrap().status, Status::Ok);
-    // a crash ends the child's process; its copy from before the cell goes on
+    // a crash traps, and the copy from before the cell puts the session back
     let a = cell(&mut r, &mut sos, "#pragma clang __debug crash");
     assert_eq!(a.status, Status::Error);
     assert!(a.diags.contains("the engine crashed"), "{a:?}");
@@ -159,42 +86,45 @@ fn repl() {
     assert_eq!(r.undo().unwrap().status, Status::Ok);
     sos.pop();
     assert_eq!(r.len(), 3);
-    // the static of the first child is the one of the cells after the replays
+    // the static of the first instance is the one of the cells after the replays
     assert_eq!(cell(&mut r, &mut sos, C[4]).status, Status::Ok);
     assert_eq!(run("repl", &sos), "2\n");
     drop(r);
 
     // nothing to undo
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
+    let mut r = repl(false);
     assert_eq!(r.undo().unwrap().status, Status::Error);
 }
 
-/// A replay that fails (here a timeout of 0; Ctrl-C again, above the
-/// memory limit) is told in the answer: the REPL goes on, and the next request
-/// replays again.
+/// Above a limit (a timeout of 0, Ctrl-C, the memory) the call stops, and
+/// the copy puts the session back: the cell is an error. A replay that
+/// fails so (an undo) is told in the answer, and the session stays.
 #[test]
-fn replay_fails() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
-    assert_eq!(r.cell(C[0].as_bytes()).unwrap().status, Status::Ok);
+fn limits() {
+    let mut r = repl(true);
+    assert_eq!(r.cell(b"int x1 = 1;").unwrap().status, Status::Ok);
     r.limit(Some(std::time::Duration::ZERO), None);
-    let a = r.cell(b"int x2 = 1;").unwrap();
-    assert_eq!(a.status, Status::Lost);
-    assert!(a.diags.contains("the session was not restored"), "{a:?}");
-    assert_eq!(r.undo().unwrap().status, Status::Error);
+    let a = r.cell(b"#include <regex>").unwrap();
+    assert_eq!(a.status, Status::Error);
+    assert!(a.diags.contains("the compiler took more than 0 s"), "{a:?}");
     assert_eq!(r.len(), 1);
     r.limit(None, None);
-    assert_eq!(r.cell(b"int x3 = 1;").unwrap().status, Status::Lost);
-    assert_eq!(r.cell(b"int x4 = 1;").unwrap().status, Status::Ok);
-    assert_eq!(r.len(), 2);
-}
+    assert_eq!(r.cell(b"#include <regex>").unwrap().status, Status::Ok);
+    assert_eq!(r.cell(b"int x2 = x1;").unwrap().status, Status::Ok);
+    // the replay of <regex> takes more than the watchdog's tick
+    r.limit(Some(std::time::Duration::ZERO), None);
+    let a = r.undo().unwrap();
+    assert_eq!(a.status, Status::Error);
+    assert!(a.diags.contains("the cell was not undone"), "{a:?}");
+    assert_eq!(r.len(), 3);
+    r.limit(None, None);
+    assert_eq!(r.cell(b"int x3 = x2;").unwrap().status, Status::Ok);
+    assert_eq!(r.len(), 4);
 
-/// The memory is looked at once a reply takes more than a poll (200 ms).
-#[test]
-fn memory() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true), None, None).unwrap();
+    let mut r = repl(true);
     r.limit(None, Some(1));
-    let a = r.cell(b"#include <regex>\n#include <format>\n#include <iostream>").unwrap();
-    assert_eq!(a.status, Status::Lost);
+    let a = r.cell(b"#include <regex>").unwrap();
+    assert_eq!(a.status, Status::Error);
     assert!(a.diags.contains("the compiler took more than 0 MB"), "{a:?}");
 }
 
@@ -202,7 +132,7 @@ fn memory() {
 /// leaves nothing; the depth comes from the lexer.
 #[test]
 fn whole() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
+    let mut r = repl(false);
     let mut st = |src: &str| r.cell_if_whole(src.as_bytes()).unwrap().status;
     for src in [
         "int main(void)",
@@ -250,7 +180,7 @@ fn whole() {
 
 #[test]
 fn show() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
+    let mut r = repl(false);
     let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
     let has = |so: &[u8], s: &str| so.windows(s.len()).any(|w| w == s.as_bytes());
     assert_eq!(cell("int x = 3; struct p { int a; } q;").status, Status::Ok);
@@ -276,7 +206,7 @@ fn show() {
     assert!(a.diags.contains("must be directly called"), "{}", a.diags);
 
     // C++: the temporaries die after the call
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true), None, None).unwrap();
+    let mut r = repl(true);
     let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
     assert_eq!(cell("struct T { ~T() {} int n() { return 1; } }; T t;").status, Status::Ok);
     let a = cell("T().n()");
@@ -291,7 +221,7 @@ fn show() {
 /// of the expression stays in the session.
 #[test]
 fn type_of() {
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(false), None, None).unwrap();
+    let mut r = repl(false);
     assert_eq!(r.cell(b"int x = 3; struct p { int a; } q;").unwrap().status, Status::Ok);
     let mut ty = |src: &str| {
         let a = r.type_of(src.as_bytes()).unwrap();
@@ -314,7 +244,7 @@ fn type_of() {
 
     // C++: the names of a class or a template's inside are left out; the
     // copy constructor Sema defines goes with the expression
-    let mut r = Repl::new(env!("CARGO_BIN_EXE_sc").into(), args(true), None, None).unwrap();
+    let mut r = repl(true);
     let src = "#include <string>\n#include <vector>\nstd::string s; std::vector<int> v; struct T { std::string a; } t;";
     assert_eq!(r.cell(src.as_bytes()).unwrap().status, Status::Ok);
     for (src, want) in [("s", "std::string"), ("s + \"c\"", "std::string"), ("s.size()", "size_t"),

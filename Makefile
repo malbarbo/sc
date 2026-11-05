@@ -31,14 +31,13 @@ WASM_OPTS := -DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/$(B)/Toolchain-WASI-LLVM.cmake -DL
   -DLLD_BUILD_TOOLS=OFF -DDEFAULT_SYSROOT=/usr -DCLANG_RESOURCE_DIR=/usr
 
 # the Rust crate (Cargo.toml): sc and scload in build/cargo, where cargo
-# build puts them too (.cargo/config.toml). Each variant of the engine sc
-# links (SC_LINK_ARGS, build.rs) builds in a directory of its own
+# build puts them too (.cargo/config.toml)
 CARGO := --locked
 RUST := Cargo.toml Cargo.lock build.rs $(shell find src -name '*.rs') engine/sc.h
 SCLOAD := $(B)/cargo/release/scload
 SC_REPL := $(B)/cargo/release/sc
-# what the sc binaries embed (build.rs, PLANO-REPL.md §5.4): the arguments
-# of a session in the pack's view, the sysroot, its headers and libraries
+# what the sc binaries embed (build.rs, PLANO-REPL.md §5.4): sc.wasm, and
+# the pack: the arguments of a session in the pack's view, the libraries
 PACK_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/pack/repl/$l-$s.args $(B)/pack/repl/$l-$s-file.args))
 PACK = $(PACK_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 
@@ -53,7 +52,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader native baseline test test-small test-warn test-native learn learn-native learn-session learn-session-wasm checkinv size test-proto test-split test-session test-session-warn test-session-wasm test-session-wasm-warn test-split-wasm test-split-node test-split-node-rs test-aluno-node-rs test-session-node test-aluno test-checks test-dist repl sc-deps test-loader check rs-wasm dist clean
+.PHONY: all fetch llvm sysroot engine trim loader baseline test test-small test-warn learn learn-session checkinv size test-proto test-split test-session test-session-warn test-split-node test-split-node-rs test-aluno-node-rs test-aluno test-checks test-dist repl sc-deps test-loader check rs-wasm dist clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -90,7 +89,7 @@ CORPUS := $(B)/c-testsuite/.git $(B)/gcc-ts/.git $(B)/src/llvm/CMakeLists.txt
 fetch: $(W)/bin/clang $(CORPUS)
 
 # --- LLVM: native tools, then the wasm libraries. Of the native tools only
-# the tablegens (for the wasm and host builds), clang (the sysroot's) and
+# the tablegens (for the wasm build), clang (the sysroot's) and
 # wasm-ld (every link) are used; clang's libraries are checkinv's
 $(B)/native/bin/wasm-ld: | $(B)/src/llvm/CMakeLists.txt
 	cmake -G Ninja -S $(B)/src/llvm -B $(B)/native $(LLVM_OPTS) \
@@ -231,68 +230,27 @@ $(B)/sc-cut.wasm: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) $(RS_WASM) $(B)/trim/
 $(B)/sc.wasm: $(B)/sc-cut.wasm
 	wasm-opt -Oz --strip-debug --strip-producers $< -o $@
 
-# --- the native engine: the same engine and cuts over a host build of LLVM
-# from the patched sources (build/native, for the tools, is not cut)
-HOST_OPTS := $(LLVM_OPTS) -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_USE_LINKER=lld \
-  -DLLVM_ENABLE_PIC=OFF -DLLVM_ENABLE_THREADS=OFF -DLLVM_DEFAULT_TARGET_TRIPLE=wasm32-wasip1 \
-  -DLLVM_TABLEGEN=$(CURDIR)/$(B)/native/bin/llvm-tblgen -DCLANG_TABLEGEN=$(CURDIR)/$(B)/native/bin/clang-tblgen \
-  -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_UTILS=OFF -DLLVM_BUILD_UTILS=OFF -DLLVM_INCLUDE_RUNTIMES=OFF \
-  -DCLANG_INCLUDE_TESTS=OFF -DCLANG_BUILD_TOOLS=OFF -DLLD_BUILD_TOOLS=OFF -DDEFAULT_SYSROOT=/usr -DCLANG_RESOURCE_DIR=/usr
-HOST_FLAGS := -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS \
-  -I$(B)/src/clang/include -I$(B)/host/tools/clang/include -I$(B)/host/include -I$(B)/src/llvm/include \
-  -I$(B)/src/lld/include -I$(B)/host/tools/lld/include \
-  -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
-  -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
-
-$(B)/host/lib/libclangSema.a: | $(B)/native/bin/wasm-ld
-	cmake -G Ninja -S $(B)/src/llvm -B $(B)/host $(HOST_OPTS)
-	ninja -C $(B)/host clang lld
-
-$(B)/engine-host/%.o: engine/%.cpp engine/sc.h engine/sc_inv.h engine/sc_session.h | $(B)/host/lib/libclangSema.a
-	@mkdir -p $(@D)
-	clang++ $(HOST_FLAGS) -c $< -o $@
-
-$(B)/trim-host/Intrinsics.cpp.o: scripts/trim.py scripts/trim_intrinsics.py | $(B)/host/lib/libclangSema.a
-	scripts/trim.py --native
-
-# the binary that ships (PLANO-REPL.md §1.1): the REPL with the engine
-# linked in. sc --cc1 and sc --ld are the cut engine, the corpus's way in
+# --- the REPL's batteries, on sc (build/sc): its compiler is sc.wasm's
+# session on wasmtime (src/engine/guest.rs, ANALISE.md §68). SC_CWASM puts
+# another sc.wasm in place of the one sc embeds, compiled by sc --precompile:
+# the uncut one makes the bases
 $(B)/sc: $(SC_REPL)
 	llvm-strip -o $@ $<
 
-native: $(B)/sc
+$(B)/sc-full.cwasm: $(B)/sc-full.wasm $(SC_REPL)
+	$(SC_REPL) --precompile $< $@
 
-# --- the engine's API for Rust (src/engine): the uncut native engine with
-# the session (sc.h), as the link arguments for build.rs
-$(B)/link-session/engine.args: $(ENGINE:%=$(B)/engine-host/%.o) scripts/link.py
-	SC_LINKDIR=$(CURDIR)/$(B)/link-session scripts/link.py --native --full --emit-link $@ $(B)/link-session/engine
-
-test-proto: $(B)/link-session/engine.args $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so
-	SC_LINK_ARGS=$(CURDIR)/$< cargo test $(CARGO) --target-dir $(B)/cargo-full --lib --bins --test session
-
-# sc with the same engine: the child (sc --engine) and the test of the
-# REPL's side (sc --replay), PLANO-REPL.md phase 2, the base of build/sc's
-$(B)/sc-full: $(B)/link-session/engine.args $(RUST) $(PACK)
-	SC_LINK_ARGS=$(CURDIR)/$< cargo build --release $(CARGO) --target-dir $(B)/cargo-full --bin sc
-	cp $(B)/cargo-full/release/sc $@
-
-# the same, cut (PLANO-REPL.md phase 4): the REPL's engine. What only the
-# session calls is in cuts/symbols.session.used (make learn-session)
-$(B)/link-session-cut/engine.args: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o scripts/link.py \
-    cuts/objects.txt cuts/symbols.txt cuts/symbols.used cuts/symbols.host.used cuts/symbols.session.used cuts/o0init.txt
-	SC_LINKDIR=$(CURDIR)/$(B)/link-session-cut scripts/link.py --native --emit-link $@ $(B)/link-session-cut/engine
-
-# the corpus's programs as REPL cells against the programs whole (pic-)
-test-split: $(B)/sc $(SCLOAD) $(B)/res/native-base/summary.json
+# the corpus as cells (test/split.py), against the program whole, pic-
+test-split: $(B)/sc $(SCLOAD) $(B)/res/base/summary.json
 	test/split.py $(B)/sc
 
 # the slices of the session (PLANO-REPL.md phase 3, §6): ses-, seq-, crash-,
 # mem-; on the uncut engine they are the base of the cut one's
-$(B)/res/session-base/summary.json: $(B)/sc-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/native-base/summary.json
-	test/session.py $< $(@D)
+$(B)/res/session-base/summary.json: $(B)/sc-full.cwasm $(B)/sc test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/base/summary.json
+	SC_CWASM=$(CURDIR)/$< test/session.py $(B)/sc $(@D)
 
-$(B)/res/session-wev-base/summary.json: $(B)/sc-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/native-wev-base/summary.json
-	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $< $(@D)
+$(B)/res/session-wev-base/summary.json: $(B)/sc-full.cwasm $(B)/sc test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/wev-base/summary.json
+	SC_CWASM=$(CURDIR)/$< WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $(B)/sc $(@D)
 
 test-session: $(B)/sc $(SCLOAD) $(B)/res/session-base/summary.json
 	test/session.py $(B)/sc $(B)/res/session $(B)/res/session-base/summary.json
@@ -300,44 +258,18 @@ test-session: $(B)/sc $(SCLOAD) $(B)/res/session-base/summary.json
 test-session-warn: $(B)/sc $(SCLOAD) $(B)/res/session-wev-base/summary.json
 	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py $(B)/sc $(B)/res/session-wev $(B)/res/session-wev-base/summary.json
 
-# --- sc.wasm's session through its exports (PLANO-REPL.md §5.2): the same
-# protocol's loop over wasmtime (sc with the feature wasm). <host>.wasm is its
-# engine, compiled to <host>.cwasm; -cut has the names, for the cut function
-# a trap calls. The slices are checked against the one-shot sc.wasm's bases
-SC_WASM := $(B)/cargo-wasm/release/sc
-$(SC_WASM): $(RUST) $(PACK)
-	cargo build --release $(CARGO) --features wasm --target-dir $(B)/cargo-wasm --bin sc
-
-$(B)/sc-wasm-full: $(SC_WASM) $(B)/sc-full.wasm
-$(B)/sc-wasm-cut: $(SC_WASM) $(B)/sc-cut.wasm
-$(B)/sc-wasm: $(SC_WASM) $(B)/sc.wasm
-$(B)/sc-wasm-full $(B)/sc-wasm-cut $(B)/sc-wasm:
-	cp $< $@ && ln -sf $(notdir $(word 2,$^)) $@.wasm && $@ --precompile
-
-$(B)/res/session-wasm-base/summary.json: $(B)/sc-wasm-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/base/summary.json
-	test/session.py --wasm $< $(@D)
-
-$(B)/res/session-wasm-wev-base/summary.json: $(B)/sc-wasm-full test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/wev-base/summary.json
-	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py --wasm $< $(@D)
-
-test-session-wasm: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-base/summary.json
-	test/session.py --wasm $(B)/sc-wasm $(B)/res/session-wasm $(B)/res/session-wasm-base/summary.json
-
-test-session-wasm-warn: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-wev-base/summary.json
-	WFLAGS=-Weverything SLICES=ses,seq,crash test/session.py --wasm $(B)/sc-wasm $(B)/res/session-wasm-wev \
-	  $(B)/res/session-wasm-wev-base/summary.json
-
-test-split-wasm: $(B)/sc-wasm $(SCLOAD) $(B)/res/native-base/summary.json
-	test/split.py $(B)/sc-wasm $(B)/res/split-wasm
+# the REPL's side and the session's API (tests/session.rs), after changing them
+test-proto: $(SC_REPL) $(SCLOAD)
+	cargo test --release $(CARGO) --lib --bins --test session
 
 # the corpus as cells with the JS loader (test/node/loader.mjs) in place of
 # scload; the cells compile on build/sc
-test-split-node: $(B)/sc $(SCLOAD) $(B)/res/native-base/summary.json
+test-split-node: $(B)/sc $(SCLOAD) $(B)/res/base/summary.json
 	SCLOAD=test/node/scload test/split.py $(B)/sc $(B)/res/split-node
 
 # the same with sc.wasm's loader (src/loader.rs inside sc.wasm), on Node
 # with only the host's primitives (test/node/wasm.mjs)
-test-split-node-rs: $(B)/sc $(B)/sc.wasm $(SCLOAD) $(B)/res/native-base/summary.json
+test-split-node-rs: $(B)/sc $(B)/sc.wasm $(SCLOAD) $(B)/res/base/summary.json
 	SCLOAD=test/node/scload-rs test/split.py $(B)/sc $(B)/res/split-node-rs
 
 # test-aluno with sc inside sc.wasm (the machine, wasm/lib.rs's sc_cli), on
@@ -347,31 +279,19 @@ test-split-node-rs: $(B)/sc $(B)/sc.wasm $(SCLOAD) $(B)/res/native-base/summary.
 test-aluno-node-rs: $(B)/sc.wasm
 	test/aluno.py test/node/sc-rs
 
-# the same slices with the child on Node (test/node, PLANO-REPL.md §5.5): a
-# snapshot of the memory in place of the fork, and the JS loader. With 300
-# KB of stack V8 exhausts it where wasmtime does; its default, as a
-# browser's, goes deeper
-# --liftoff-only: each child would tier sc.wasm up again (ANALISE.md §56)
-test-session-node: $(B)/sc-wasm $(SCLOAD) $(B)/res/session-wasm-base/summary.json
-	SCLOAD=test/node/scload SC_NODE_FLAGS='--stack-size=300 --liftoff-only' test/session.py --wasm test/node/sc-node $(B)/res/session-node \
-	  $(B)/res/session-wasm-base/summary.json
-
 # --- the REPL's loader, runs the shared objects (native, wasmtime): scload,
-# for the batteries, without the engine; and sc, with the cut engine
-# (PLANO-REPL.md §1.1, phase 6b), whose compiler is the child sc --engine,
-# and what a session reads in the pack it embeds. Without SC_LINK_ARGS, build.rs links
-# $(SC_ENGINE_ARGS), as in a cargo build of its own
+# for the batteries, without the engine; and sc, the REPL, whose compiler is
+# the sc.wasm it embeds, with the pack (PLANO-REPL.md §1.1, ANALISE.md §68)
 $(SCLOAD): $(RUST)
 	cargo build --release $(CARGO) --no-default-features --features native --bin scload
-SC_ENGINE_ARGS := $(B)/link-session-cut/engine.args
-$(SC_REPL): $(RUST) $(SC_ENGINE_ARGS) $(PACK)
+$(SC_REPL): $(RUST) $(PACK) $(B)/sc.wasm
 	cargo build --release $(CARGO) --bin sc
 
 loader: $(SCLOAD)
 
 # the binaries that ship, with the profile that makes them small
 # (ANALISE.md §49): build/cargo/dist/scload and sc
-dist: $(SC_ENGINE_ARGS) $(PACK)
+dist: $(PACK) $(B)/sc.wasm
 	cargo build $(CARGO) --profile dist --bins
 
 # what needs no LLVM, for the CI (.github/workflows/ci.yaml): clippy on the
@@ -391,16 +311,15 @@ test-loader:
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc
 # FILE`, in the pack's view. build.rs puts them in the pack sc embeds
-# (PLANO-REPL.md §5.4), with the sysroot, the headers and the libraries
+# (PLANO-REPL.md §5.4), with the libraries
 $(B)/pack/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/pack/repl
 	scripts/flags.py --session $(firstword $(subst -, ,$*)) /sc $(wordlist 2,3,$(subst -, ,$*)) > $@
 
 repl: $(SC_REPL) sc-deps
 
-# what cargo build asks for (build.rs): the engine sc links and what it
-# embeds
-sc-deps: $(SC_ENGINE_ARGS) $(PACK)
+# what cargo build asks for (build.rs): what sc embeds
+sc-deps: $(PACK) $(B)/sc.wasm
 
 # a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
 test-aluno: repl
@@ -411,7 +330,7 @@ test-checks: repl
 
 # before shipping: the batteries of the REPL on the dist sc (lto, "s",
 # panic=abort), against the same bases
-test-dist: dist $(SCLOAD) $(B)/res/native-base/summary.json $(B)/res/session-base/summary.json sc-deps
+test-dist: dist $(SCLOAD) $(B)/res/base/summary.json $(B)/res/session-base/summary.json sc-deps
 	test/split.py $(B)/cargo/dist/sc $(B)/res/split-dist
 	test/session.py $(B)/cargo/dist/sc $(B)/res/session-dist $(B)/res/session-base/summary.json
 	test/aluno.py $(B)/cargo/dist/sc
@@ -433,17 +352,6 @@ test: $(B)/sc.wasm $(B)/res/base/summary.json $(SCLOAD)
 test-small: $(B)/sc.wasm $(B)/res/base/summary.json $(SCLOAD)
 	CORPUS=small test/corpus.py $(B)/sc.wasm $(B)/res/sc-small $(B)/res/base/summary.json
 
-# the native engine against the uncut native engine (sc.wasm and the native
-# engine differ where the host does: stack depth, memory, the sandbox)
-$(B)/res/native-base/summary.json: $(B)/sc-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
-	test/corpus.py $< $(B)/res/native-base
-
-$(B)/res/native-wev-base/summary.json: $(B)/sc-full test/corpus.py scripts/flags.py | $(CORPUS) $(SCLOAD) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).a $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
-	WFLAGS=-Weverything test/corpus.py $< $(B)/res/native-wev-base
-
-test-native: $(B)/sc $(B)/res/native-base/summary.json $(SCLOAD)
-	test/corpus.py $(B)/sc $(B)/res/native $(B)/res/native-base/summary.json
-
 test-warn: $(B)/sc.wasm $(B)/res/wev-base/summary.json $(SCLOAD)
 	WFLAGS=-Weverything test/corpus.py $(B)/sc.wasm $(B)/res/wev $(B)/res/wev-base/summary.json
 
@@ -452,19 +360,10 @@ test-warn: $(B)/sc.wasm $(B)/res/wev-base/summary.json $(SCLOAD)
 learn: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) $(B)/trim/Intrinsics.cpp.obj $(B)/res/wev-base/summary.json
 	WFLAGS=-Weverything SC_BASE=$(CURDIR)/$(B)/res/wev-base/summary.json scripts/link.py --learn $(B)/sc-cut.wasm
 
-# what only the native engine calls (cuts/symbols.host.used), after learn
-learn-native: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o $(B)/res/native-wev-base/summary.json $(SCLOAD)
-	WFLAGS=-Weverything SC_BASE=$(CURDIR)/$(B)/res/native-wev-base/summary.json scripts/link.py --native --learn $(B)/link-host-learn/engine
-
-# what only the REPL's session calls (cuts/symbols.session.used), after learn-native
-learn-session: $(ENGINE:%=$(B)/engine-host/%.o) $(B)/trim-host/Intrinsics.cpp.o $(B)/res/session-wev-base/summary.json \
-    $(B)/res/native-base/summary.json $(SCLOAD)
+# what only the REPL's session calls (cuts/symbols.session.used), after learn
+learn-session: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) $(B)/trim/Intrinsics.cpp.obj $(B)/res/session-wev-base/summary.json \
+    $(B)/res/base/summary.json $(SCLOAD) $(SC_REPL)
 	scripts/learn_session.py
-
-# after learn-session: what only sc.wasm's session calls, into the same list
-learn-session-wasm: $(WENGINE:%=$(B)/engine/%.o) $(SQFS_LIB) $(B)/trim/Intrinsics.cpp.obj $(B)/res/session-wasm-wev-base/summary.json \
-    $(B)/res/native-base/summary.json $(SCLOAD) $(SC_WASM)
-	scripts/learn_session.py --wasm
 
 # the invocation built by engine/sc_inv.cpp against clang's option parser (native)
 N := $(B)/native
@@ -505,4 +404,4 @@ size: $(B)/sc.wasm
 	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
 clean:
-	rm -rf $(B)/engine $(B)/engine-host $(B)/link-session $(B)/cargo* $(B)/sc-full $(B)/sc-wasm* $(B)/res/split* $(B)/res/session* $(B)/trim $(B)/trim-host $(B)/link-* $(B)/sc*.wasm $(B)/sc $(B)/res/sc* $(B)/res/native
+	rm -rf $(B)/engine $(B)/cargo* $(B)/res/split* $(B)/res/session* $(B)/trim $(B)/link-* $(B)/sc*.wasm $(B)/sc*.cwasm $(B)/sc $(B)/res/sc*

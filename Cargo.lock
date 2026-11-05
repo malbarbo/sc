@@ -1486,12 +1486,12 @@ dependencies = [
  "gimli",
  "libc",
  "rustyline",
- "tokio",
  "wasm-encoder",
  "wasmparser",
  "wasmtime",
  "wasmtime-wasi",
  "wat",
+ "zstd",
 ]
 
 [[package]]

@@ -1,5 +1,11 @@
 # Plano: compilação incremental para o REPL
 
+Revisão (2026-11-05, ANALISE.md §68): o `sc` nativo não tem mais engine
+nativo, filho nem `fork`. O compilador é a sessão do `sc.wasm` no próprio
+processo, no wasmtime, como no navegador, com a cópia da memória do §65 no
+lugar do `fork`. O que segue sobre o filho (§1.1, §2, §3.3) é a história
+dessa decisão.
+
 Versão 4 (2026-10-01):
 - o REPL nativo usa o wasmtime mínimo, com JIT (§1.4);
 - exceções e `setjmp`/`longjmp` entram no escopo (§1.5);
@@ -54,6 +60,11 @@ sinais, e compilar dentro do processo do REPL não é seguro:
 - **Vazamento.** Uma sessão abandonada vaza mais de 100 MB.
 - **Mais handlers.** O LLVM instala os próprios handlers
   (`RemoveFileOnSignal`).
+
+Nada disso vale para o clang dentro do `sc.wasm`: ele não instala
+handlers, e um crash dele é um trap que fica na instância. Por isso, desde
+o ANALISE.md §68, o `sc` roda a sessão do `sc.wasm` no próprio processo
+(`src/engine/guest.rs`), e a decisão abaixo foi revista.
 
 **Decisão.** A sessão vive num processo filho de longa duração:
 

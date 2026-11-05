@@ -1,51 +1,47 @@
 #!/usr/bin/env python3
-"""Phase 3 of PLANO-REPL.md (§6): the REPL's session through a native engine
-with the protocol's loop (build/sc), as the REPL drives it,
-`<engine> --replay` (src/bin/sc/main.rs). split- is test/split.py.
+"""Phase 3 of PLANO-REPL.md (§6): the REPL's session on sc (build/sc), whose
+compiler is sc.wasm's session on wasmtime (ANALISE.md §68), as the REPL
+drives it, `<engine> --replay` (src/bin/sc/main.rs). split- is test/split.py.
+SC_CWASM puts another sc.wasm in place of the one sc embeds: the uncut one
+makes the base (Makefile).
 
-usage: session.py [--update] [--wasm] [<engine> [<outdir> [<base summary.json>]]]
-       (build/sc, build/res/session); --wasm: <engine> is a host of sc.wasm
-       (build/sc-wasm, or test/node/sc-node, its child on Node)
+usage: session.py [--update] [<engine> [<outdir> [<base summary.json>]]]
+       (build/sc, build/res/session)
 SLICES=ses,seq,crash,mem picks the slices (all); ONLY=<name>,... (or a
 file of names) the results; JOBS sets the parallelism (48); WFLAGS adds warning flags to the
 session's (e.g. -Weverything; then seq- is not checked against expected.txt)
 
 ses-    each source of the corpus (test/corpuslib.py) as the one cell of a
-        session: accepted if and only if it compiles whole (the native base,
-        build/res/native-base: pic- for a program), and a program gives the
-        output of pic-. A source the corpus only compiles may fail to link.
-        With WFLAGS, the base is build/res/native-wev-base.
+        session: accepted if and only if it compiles whole (the one-shot
+        sc.wasm's base, build/res/base: pic- for a program), and a program
+        gives the output of pic-. A source the corpus only compiles may fail
+        to link. With WFLAGS, the base is build/res/wev-base.
         The session runs in the source's directory. KNOWN lists where a
         session cannot be the whole compile, with the reason.
 seq-    test/seq/NAME.c or NAME.cpp, cells separated by a line `//%%`; a
-        cell `//%undo` or `//%restart` (a new child that replays the log)
+        cell `//%undo` or `//%restart` (a new instance that replays the log)
         is that step. What the cells and the run give must be
         test/seq/expected.txt (--update writes it).
 crash-  each source on which the one-shot engine crashes or stops with a
-        fatal error (the native base), as a cell between two good ones, then
+        fatal error (the base), as a cell between two good ones, then
         a %restart and a good cell with main: the session goes on, the
         replay exports the same names and the program runs. In the session
         the cell may only fail: `#pragma clang __debug parser_crash` is an
         error where a cell is parsed.
 mem-    1000 small cells, C and C++, each in one session: after the first
-        100, the child's RSS grows by less than 50 KB a cell, and by less
-        than 5 MB over any 100 cells, each a link (§4).
-
-A host of sc.wasm (build/sc-wasm, the engine <engine>.wasm,
-PLANO-REPL.md §5.2) is checked against the one-shot sc.wasm (build/res/base
-and wev-base), where the native engine differs (a crash, the stack), and in
-mem- its memory.size stands for the RSS.
+        100, the module's memory.size grows by less than 50 KB a cell, and by
+        less than 5 MB over any 100 cells, each a link (§4).
 
 Writes <outdir>/<name>.txt and <outdir>/summary.json (ses-, seq- and crash-,
 normalized as the corpus's); with a base summary, lists the results that
 differ from it. Fails if a slice's own check fails. A function the cuts
-removed that the engine calls (scripts/link.py, native) is a line
+removed that the engine calls (scripts/link.py) is a line
 `sc: cut function called: <name>` of the result.
 """
-import difflib, glob, json, os, re, shutil, statistics, struct, subprocess, sys, threading, time
+import difflib, glob, json, os, re, shutil, statistics, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from corpuslib import IGNORE, diff, kill_session, norm_hash, only_names, run_all, sources, source_name
+from corpuslib import IGNORE, diff, norm_hash, only_names, run_all, sources, source_name
 from cells import JS, expected, run, same, std_pcm
 
 R = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -57,17 +53,16 @@ W_EXTRA = os.environ.get('WFLAGS', '').split()
 # the one-shot engine's results, with the same warnings: -Weverything turns
 # some errors into warnings
 UPDATE = '--update' in sys.argv[1:]
-WASM = '--wasm' in sys.argv[1:]  # sc with the feature wasm
-ARGS = [a for a in sys.argv[1:] if a not in ('--update', '--wasm')]
+ARGS = [a for a in sys.argv[1:] if a != '--update']
 ENG = os.path.realpath(ARGS[0] if ARGS else f'{B}/sc')
-BASE = f'{B}/res/{"" if WASM else "native-"}{"wev-" if W_EXTRA else ""}base'
+BASE = f'{B}/res/{"wev-" if W_EXTRA else ""}base'
 OUT = os.path.realpath(ARGS[1] if len(ARGS) > 1 else f'{B}/res/session')
 # where a session is not the whole compile (ANALISE.md §46)
 FILE = '__FILE__ (#include, #embed, __has_embed) names the cell, which is no file'
 MODULE = 'a module declaration cannot be in a cell'
 STMT = 'an expression at the top is a statement in a cell'
 DIR = 'the session runs in the source\'s directory, which has what "../" names; the corpus maps only the source'
-TMP = 'the corpus runs the engine without /tmp, which #pragma clang module build writes to (sc.wasm\'s hosts too)'
+TMP = 'the corpus runs the engine without /tmp, which #pragma clang module build writes to; sc gives sc.wasm the host\'s files'
 TU = 'a check at the end of the translation unit, which a session does not reach'
 LD = 'wasm-ld fails on the shared object, outside the session too'
 G = 'gcc-ts_gcc_testsuite_gcc.c-torture_'
@@ -92,16 +87,17 @@ KNOWN = {f'ses-{k}': v for k, v in {
     C + 'CodeGenCXX_wasm-reftypes-mangle': 'the guess between a statement and a declaration at the top takes'
                                           ' `void (*__funcref f)();` for a statement',
 }.items()}
-if not WASM:
-    KNOWN[f'ses-{C}CodeGenCXX_microsoft-abi-emit-dependent'] = TMP
+KNOWN[f'ses-{C}CodeGenCXX_microsoft-abi-emit-dependent'] = TMP
 BIG = ('an object of hundreds of MB: the corpus\'s sc.wasm fails to write it under wasmtime ("IO failure on output'
        ' stream: Out of memory"); a session links it in memory')
-HOST = {f'ses-{k}': BIG for k in (G + 'compile_20080625-1', G + 'compile_pr103813', C + 'SemaCXX_large-array-init')} if WASM else {}
+HOST = {f'ses-{k}': BIG for k in (G + 'compile_20080625-1', G + 'compile_pr103813', C + 'SemaCXX_large-array-init')}
 HOST.update({f'ses-{k}': v for k, v in JS.items()})
 KNOWN.update(HOST)
 # not run: names whose demangling grows exponentially, which wasm-ld does
-# for each cell's link (the corpus only compiles them)
-SKIP = {C + 'CodeGenCXX_mangle-ms-back-references-pr13207', C + 'CodeGenCXX_pr29160'}
+# for each cell's link (the corpus only compiles them); and one that takes
+# 49 s alone, which under 48 jobs passes the 120 s of a replay or not
+SKIP = {C + 'CodeGenCXX_mangle-ms-back-references-pr13207', C + 'CodeGenCXX_pr29160',
+        G + 'compile_limits-externdecl'}
 
 
 def root(mod=False):
@@ -225,84 +221,38 @@ def mem_cells(cxx, n):
     return cs
 
 
-class Child:
-    """`<engine> --engine`, through the protocol (engine/sc.h)"""
-    NEW, CELL, REPLY, SO = 1, 2, 4, 0
-
-    def __init__(self, timeout):
-        """the child, in a session of its own with the copies it forks: all
-        of them killed after timeout seconds, when a reply is an EOFError"""
-        self.p = subprocess.Popen([ENG, '--engine'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE if WASM else None, start_new_session=True,
-                                  env=dict(os.environ, SC_MEMORY_SIZE='1') if WASM else None)
-        self.timer = threading.Timer(timeout, self.kill)
-        self.timer.start()
-
-    def kill(self):
-        while kill_session(self.p.pid):
-            pass
-
-    def start(self, args):
-        st, (diags, _, _) = self.send(self.NEW, 0, b''.join(a.encode() + b'\0' for a in args))
-        if st != 0:
-            raise ValueError(f'no session: {diags.decode(errors="replace")}')
-
-    def send(self, kind, st, part):
-        """the reply's status and parts; EOFError if the child ended"""
-        self.p.stdin.write(struct.pack('=5I', kind, st, len(part), 0, 0) + part)
-        self.p.stdin.flush()
-        h = self.p.stdout.read(20)
-        if len(h) != 20:
-            raise EOFError(f'the child ended (exit {self.p.wait()})')
-        k, st, *ls = struct.unpack('=5I', h)
-        parts = [self.p.stdout.read(n) for n in ls]
-        if k != self.REPLY or any(len(x) != n for x, n in zip(parts, ls)):
-            raise ValueError(f'not a reply: kind {k}')
-        return st, parts
-
-    def rss(self):
-        """the RSS of the process spawned, in KB: the session while its cells
-        are accepted; in sc.wasm, the memory.size the host writes after each
-        cell (one line a cell)"""
-        while WASM:
-            l = self.p.stderr.readline()
-            if m := re.match(rb'sc: memory.size (\d+)$', l):
-                return int(m[1]) // 1024
-            if not l:
-                raise EOFError('no memory.size')
-            sys.stderr.buffer.write(l)
-        return int(re.search(r'VmRSS:\s+(\d+)', open(f'/proc/{self.p.pid}/status').read())[1])
-
-    def close(self):
-        self.timer.cancel()
-        try:
-            self.p.stdin.close()
-        except OSError:  # it ended
-            pass
-        self.p.wait()
-
-
 def mem(name, cxx):
-    rows, t0, bad = [], time.time(), []
-    c = Child(600)
+    """the module's memory.size after each cell, which sc writes with
+    SC_MEMORY_SIZE (src/engine/guest.rs)"""
+    d = f'{OUT}/{name}'
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    files = []
+    for i, src in enumerate(mem_cells(cxx, 1000)):
+        files.append(f'{d}/c{i + 1:04}.{"cpp" if cxx else "c"}')
+        open(files[-1], 'w').write(src)
+    t0 = time.time()
     try:
-        c.start(session(cxx, root()))
-        for i, src in enumerate(mem_cells(cxx, 1000)):
-            st, (diags, _, _) = c.send(Child.CELL, Child.SO, src.encode())
-            if st != 0:
-                bad.append(f'cell {i + 1}: {diags.decode(errors="replace")}')
-            rows.append((i + 1, c.rss()))
-    except (EOFError, ValueError, OSError) as e:
-        txt = ''.join(bad) + f'after {len(rows)} cells: {e}\n'
+        r = subprocess.run([ENG, '--replay', d] + files + ['--'] + session(cxx, root()), capture_output=True, text=True,
+                           timeout=600, env=dict(os.environ, SC_MEMORY_SIZE='1'))
+        sizes = [int(m) // 1024 for m in re.findall(r'^sc: memory.size (\d+)$', r.stderr, re.M)]
+        st = re.findall(r'^== \S+ (\w+)$', r.stdout, re.M)
+        bad = [f'cell {i + 1}: {s}\n' for i, s in enumerate(st) if s != 'ok']
+        if r.returncode or len(sizes) != len(files):
+            bad.append(f'exit {r.returncode}, {len(sizes)} memory sizes: {r.stderr[-2000:]}\n')
+    except subprocess.TimeoutExpired:
+        sizes, bad = [], ['TIMEOUT\n']
+    shutil.rmtree(d)
+    rows = list(enumerate(sizes, 1))
+    if bad or len(rows) < 300:
+        txt = ''.join(bad) + f'after {len(rows)} cells\n'
         open(f'{OUT}/{name}.txt', 'w').write(txt)
         return txt, False
-    finally:
-        c.close()
     secs = time.time() - t0
     slope = statistics.linear_regression(*zip(*rows[100:])).slope
     step = max(rows[i + 100][1] - rows[i][1] for i in range(100, len(rows) - 100))
-    good = not bad and slope < 50 and step < 5 * 1024
-    txt = (''.join(bad) + f'{len(rows)} cells, {secs / len(rows) * 1000:.1f} ms a cell; RSS {rows[99][1] // 1024} MB after 100,'
+    good = slope < 50 and step < 5 * 1024
+    txt = (f'{len(rows)} cells, {secs / len(rows) * 1000:.1f} ms a cell; memory {rows[99][1] // 1024} MB after 100,'
            f' {rows[-1][1] // 1024} MB after {len(rows)}; slope {slope:.1f} KB a cell, at most {step} KB over 100 cells\n')
     open(f'{OUT}/{name}.txt', 'w').write(txt + ''.join(f'{x} {y}\n' for x, y in rows))
     return txt, good
@@ -329,7 +279,7 @@ def main():
                  for p in sorted(glob.glob(f'{SEQ}/*.c') + glob.glob(f'{SEQ}/*.cpp'))]
     if only:
         jobs = [j for j in jobs if j[0] in only]
-    std_pcm(ENG, OUT)
+    std_pcm(OUT)
     with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
         rs = list(ex.map(lambda j: (j[0], *j[1](j[0], j[2])), jobs))
     bad = [n for n, _, good in rs if good is False and n not in KNOWN]

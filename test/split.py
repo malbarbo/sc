@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Phase 2 of PLANO-REPL.md: the programs of the corpus as REPL cells, through
-a native engine with the protocol's loop (sc --replay, src/bin/sc/main.rs).
+sc's session (sc --replay, src/bin/sc/main.rs).
 
 usage: split.py [<engine> [<outdir>]]   (build/sc, build/res/split)
 ONLY=<name>,... (or a file of names) runs only those programs; JOBS sets the parallelism (48)
@@ -8,9 +8,9 @@ ONLY=<name>,... (or a file of names) runs only those programs; JOBS sets the par
 Each program the corpus runs (test/samples, c-testsuite, gcc torture
 execute/, test/cxx, test/mod) is cut into one cell per top-level declaration
 (test/cells.py), the cells go through `<engine> --replay`, which compiles
-them in one child session and links each as a shared object, and the loader
-runs the shared objects. The output must be the one of the program compiled
-whole as a shared object (pic-, in the native base, build/res/native-base);
+them in one session and links each as a shared object, and the loader runs
+the shared objects. The output must be the one of the program compiled whole
+as a shared object (pic-, in the one-shot sc.wasm's base, build/res/base);
 a program that does not compile whole must not compile as cells either.
 KNOWN lists the programs that cannot, with the reason.
 
@@ -98,7 +98,7 @@ def main():
     if only := only_names():
         progs = [x for x in progs if x[1] in only]
     if any('/test/mod/' in p for p, _ in progs):
-        std_pcm(ENG, OUT)
+        std_pcm(OUT)
     with ThreadPoolExecutor(int(os.environ.get('JOBS', '48'))) as ex:
         rs = list(ex.map(one, progs))
     bad = [r for r in rs if not r[2] and r[0] not in KNOWN]

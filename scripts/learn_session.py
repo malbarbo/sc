@@ -1,27 +1,22 @@
 #!/usr/bin/env python3
 """What the REPL's session calls of what the cuts remove, PLANO-REPL.md
 phase 4: rewrites cuts/symbols.session.used (demangled names, which
-scripts/link.py keeps in both engines).
+scripts/link.py keeps).
 
-usage: learn_session.py [--wasm]   (make learn-session, after make learn and learn-native)
+usage: learn_session.py   (make learn-session, after make learn)
 
-The session runs only in the native engine (sc.wasm has none before phase
-5), so it learns there, as link.py --native --learn does: from the list
-as it is (empty it to learn it again from nothing), the cut engine with the session (link.py --native, with
-engine/sc_session.cpp and sc_api.cpp, linked into sc) runs the
-session's slices; each function it calls that the cuts removed prints its
-name (sc_cuts.cpp), goes in the list (or its object goes back, in
+From the list as it is (empty it to learn it again from nothing), the cut
+sc.wasm with its names (link.py, as sc-cut.wasm) is sc's compiler
+(SC_CWASM, src/engine/guest.rs), which runs the session's slices; each
+function it calls that the cuts removed says its name (frame 0 of the trap,
+`__wrap_`), goes in the list (or its object goes back, in
 cuts/objects.txt), and the slices that differ run again until they pass,
 then all of them again. The slices:
   test/session.py ses-, seq- and crash-, with -Weverything, against the
   uncut engine's (build/res/session-wev-base);
   test/split.py, against pic-.
-
---wasm learns what only sc.wasm's session calls (PLANO-REPL.md §5.2),
-into the same list: the cut sc.wasm with its names (link.py, as
-sc-cut.wasm) under the test host build/sc-wasm (sc, feature
-wasm), which says the cut function a trap calls; the base is
-build/res/session-wasm-wev-base.
+Until ANALISE.md §68 the list was learned on the native engine first, then
+on sc.wasm: it keeps what the native one called.
 """
 import json, os, re, shutil, subprocess, sys, time
 
@@ -30,11 +25,10 @@ sys.path.insert(0, f'{R}/test')
 from corpuslib import IGNORE, norm_hash
 
 B = f'{R}/build'
-WASM = sys.argv[1:] == ['--wasm']
-D = f'{B}/link-session-learn{"-wasm" * WASM}'
-ENG = f'{D}/sc'  # with --wasm, a host whose engine is ENG.wasm (test/session.py --wasm)
+D = f'{B}/link-session-learn'
+ENG = f'{B}/cargo/release/sc'  # its compiler is D/engine.cwasm (SC_CWASM)
 FILE = f'{R}/cuts/symbols.session.used'
-BASE = json.load(open(f'{B}/res/session-{"wasm-" * WASM}wev-base/summary.json'))
+BASE = json.load(open(f'{B}/res/session-wev-base/summary.json'))
 BASE = {k: v for k, v in BASE.items() if k.split('-', 1)[1] not in IGNORE}
 os.makedirs(D, exist_ok=True)
 log = open(f'{D}/learn.log', 'w')
@@ -48,7 +42,7 @@ def say(msg):
 
 def write(names):
     txt = ('# functions of cuts/symbols.txt that only the REPL\'s session calls, demangled\n'
-           '# (scripts/learn_session.py), on top of symbols.used and symbols.host.used\n'
+           '# (scripts/learn_session.py), on top of symbols.used\n'
            + ''.join(f'{s}\n' for s in sorted(names)))
     # the same list, untouched: the engines that depend on it are not relinked
     if not os.path.exists(FILE) or open(FILE).read() != txt:
@@ -56,21 +50,10 @@ def write(names):
 
 
 def link():
-    """the cut engine with the session, at ENG"""
-    if WASM:  # ENG.wasm is the engine of the host
-        subprocess.check_call([f'{R}/scripts/link.py', f'{D}/engine.wasm'], env=dict(os.environ, SC_LINKDIR=D),
-                              stdout=subprocess.DEVNULL)
-        shutil.copy(f'{B}/cargo-wasm/release/sc', ENG)
-        if not os.path.exists(f'{ENG}.wasm'):
-            os.symlink('engine.wasm', f'{ENG}.wasm')
-        subprocess.check_call([ENG, '--precompile'])
-        return
-    subprocess.check_call([f'{R}/scripts/link.py', '--native', '--emit-link', f'{D}/engine.args', f'{D}/engine'],
-                          env=dict(os.environ, SC_LINKDIR=D), stdout=subprocess.DEVNULL)
-    subprocess.check_call(['cargo', 'build', '-q', '--release', '--locked', '--manifest-path', f'{R}/Cargo.toml',
-                           '--target-dir', f'{D}/cargo', '--bin', 'sc'],
-                          env=dict(os.environ, SC_LINK_ARGS=f'{D}/engine.args'))
-    shutil.copy(f'{D}/cargo/release/sc', ENG)
+    """the cut engine with the session, D/engine.cwasm"""
+    subprocess.check_call([f'{R}/scripts/link.py', f'{D}/engine.wasm'], env=dict(os.environ, SC_LINKDIR=D),
+                          stdout=subprocess.DEVNULL)
+    subprocess.check_call([ENG, '--precompile', f'{D}/engine.wasm', f'{D}/engine.cwasm'])
 
 
 def slice_run(cmd, out, only, env={}):
@@ -80,7 +63,7 @@ def slice_run(cmd, out, only, env={}):
         return []
     if only is None:
         shutil.rmtree(out, ignore_errors=True)
-    e = dict(os.environ, **env)
+    e = dict(os.environ, SC_CWASM=f'{D}/engine.cwasm', **env)
     if only:
         open(f'{out}.only', 'w').write(''.join(f'{k}\n' for k in only))
         e['ONLY'] = f'{out}.only'
@@ -90,7 +73,7 @@ def slice_run(cmd, out, only, env={}):
 def ses(only):
     """the results of ses-, seq- and crash- that differ from the base"""
     out = f'{D}/ses'
-    slice_run([f'{R}/test/session.py'] + ['--wasm'] * WASM, out, only, {'WFLAGS': '-Weverything', 'SLICES': 'ses,seq,crash'})
+    slice_run([f'{R}/test/session.py'], out, only, {'WFLAGS': '-Weverything', 'SLICES': 'ses,seq,crash'})
     names = BASE if only is None else only
     return [k for k in names if not os.path.exists(f'{out}/{k}.txt') or norm_hash(open(f'{out}/{k}.txt').read()) != BASE[k]]
 
@@ -117,11 +100,9 @@ def put_back(syms):
         if l:
             (keep if l.startswith('!') else rm).append(re.compile(l.lstrip('!')))
     back = []
-    for o in (o for ms in json.load(open(f'{B}/link{"" if WASM else "-host"}-members.json')).values() for o in ms):
-        p = o if WASM else o[:-2] + '.obj'  # the paths of the rules are the wasm build's
+    for p in (o for ms in json.load(open(f'{B}/link-members.json')).values() for o in ms):
         if any(r.search(p) for r in rm) and not any(k.search(p) for k in keep):
-            nm = subprocess.run(['llvm-nm', '--defined-only', '-g', '-j', f'{B}/{"wasm" if WASM else "host"}/{o}'],
-                                capture_output=True, text=True)
+            nm = subprocess.run(['llvm-nm', '--defined-only', '-g', '-j', f'{B}/wasm/{p}'], capture_output=True, text=True)
             if syms & set(nm.stdout.split()):
                 back.append(p)
     if not back:

@@ -1,24 +1,13 @@
-//! The safe API over the linked engine.
-use super::{sys, Mode, Status};
-// the raw functions: the linked engine's, or sc.wasm's exports
-#[cfg(not(feature = "wasm"))]
+//! The safe API over the engine linked in: sc.wasm's own session (wasm/).
 use super::sys as raw;
-#[cfg(feature = "wasm")]
-use super::wasm as raw;
+use super::{sys, Mode, Status};
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, CString};
 use std::fmt;
-use std::io;
 use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 use std::sync::OnceLock;
 use std::thread::{self, ThreadId};
-
-// the child's side of the protocol, which forks: the native engine's
-#[cfg(feature = "engine")]
-mod serve;
-#[cfg(feature = "engine")]
-pub use serve::{serve, serve_child};
 
 /// Why a call did not reach the engine, or a session did not start.
 #[derive(Debug)]
@@ -31,8 +20,6 @@ pub enum Error {
     TooLong,
     /// The session could not start: the diagnostics.
     Start(String),
-    /// The protocol's pipes ([`serve`]).
-    Io(io::Error),
 }
 
 impl fmt::Display for Error {
@@ -42,18 +29,11 @@ impl fmt::Display for Error {
             Error::OtherThread => write!(f, "the engine is used from another thread"),
             Error::TooLong => write!(f, "the cell is too long"),
             Error::Start(d) => write!(f, "the session did not start: {d}"),
-            Error::Io(e) => write!(f, "{e}"),
         }
     }
 }
 
 impl std::error::Error for Error {}
-
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Error {
-        Error::Io(e)
-    }
-}
 
 /// The engine is not thread safe (LLVM is built without threads): only the
 /// first thread that uses it may.
@@ -91,27 +71,6 @@ impl Argv {
     fn argc(&self) -> c_int {
         (self.ptrs.len() - 1) as c_int
     }
-}
-
-/// The one-shot engine, `sc_main`: `args[0]` is the program, then `-cc1 ...`
-/// or `ld ...`. Returns the exit code.
-pub fn main<I, S>(args: I) -> Result<i32, Error>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    claim()?;
-    let mut argv = Argv::new(args)?;
-    // sc_main does not write to argv
-    Ok(unsafe { raw::sc_main(argv.argc(), argv.ptrs.as_mut_ptr()) })
-}
-
-/// The files the sessions read in place of the disk (`sc_set_files`): the
-/// paths under `files.root`, for their clang and wasm-ld; with `sc.wasm`,
-/// its own pack at the same root (`engine/sc_pack.cpp`).
-pub fn set_files(files: &'static sys::sc_files) {
-    // SAFETY: what files points to lives until the process ends
-    unsafe { raw::sc_set_files(files) }
 }
 
 /// A REPL session: each cell is compiled on top of the ones before.

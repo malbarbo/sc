@@ -3,8 +3,8 @@
 The programs of test/samples, test/cxx and test/mod are cut into one cell
 per top-level declaration (a preprocessor directive, a declaration ending
 in ';', a function or namespace body), and the output of the cells must be
-the one of the program compiled whole (pic-, from the native base,
-build/res/native-base). Phase 0 of PLANO-REPL.md chose, with these cells,
+the one of the program compiled whole (pic-, from the one-shot sc.wasm's
+base, build/res/base). Phase 0 of PLANO-REPL.md chose, with these cells,
 one session over chained PCHs (ANALISE.md §22).
 """
 import os, re, subprocess, sys
@@ -18,7 +18,7 @@ B = f'{R}/build'
 SR = f'{B}/sysroot'
 LIB = f'{SR}/lib/wasm32-wasip1'
 SCLOAD = os.environ.get('SCLOAD', f'{B}/cargo/release/scload')  # test/node/scload: the JS loader; scload-rs, sc.wasm's
-BASE = f'{B}/res/native-base'
+BASE = f'{B}/res/base'
 # on V8, with the JS loader (test/node/scload, PLANO-REPL.md §5.5) or sc.wasm's
 # (test/node/scload-rs), the programs whose trap V8 says less of than wasmtime
 JS = {
@@ -29,11 +29,14 @@ JS = {
 } if SCLOAD.endswith(('/node/scload', '/node/scload-rs')) else {}
 
 
-def std_pcm(eng, out):
-    """<out>/std.pcm, libc++'s std module as corpus.py builds it, by sc --cc1"""
+def std_pcm(out):
+    """<out>/std.pcm, libc++'s std module as corpus.py builds it, by the
+    one-shot sc.wasm under wasmtime"""
     src = [l for l in open(f'{SR}/share/libc++/v1/std.cppm') if 'csignal' not in l]
     open(f'{out}/std.cppm', 'w').writelines(src)
-    subprocess.check_call([eng, '--cc1'] + real(iface(pic(CXXFLAGS))[1:], B) + ['-o', f'{out}/std.pcm', f'{out}/std.cppm'])
+    # the loader's primitives (src/loader/host.rs), which the one-shot engine never calls
+    subprocess.check_call(['wasmtime', 'run', '-W', 'unknown-imports-trap=y', '--dir', '/', f'{B}/sc.wasm', '-cc1']
+                          + real(iface(pic(CXXFLAGS))[1:], B) + ['-o', f'{out}/std.pcm', f'{out}/std.cppm'])
 
 
 # --- one cell per top-level declaration

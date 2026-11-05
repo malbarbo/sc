@@ -203,7 +203,7 @@ impl ConditionalEventHandler for SmartBackspace {
         if spaces < 2 || !line.bytes().all(|b| b == b' ') {
             return None;
         }
-        let remove = if spaces % INDENT == 0 { INDENT } else { spaces % INDENT };
+        let remove = if spaces.is_multiple_of(INDENT) { INDENT } else { spaces % INDENT };
         Some(Cmd::Kill(Movement::BackwardChar(remove as u16)))
     }
 }

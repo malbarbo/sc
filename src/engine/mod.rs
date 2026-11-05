@@ -1,13 +1,12 @@
 //! The engine's API (`engine/sc.h`, PLANO-REPL.md §2) for Rust.
 //!
-//! [`sys`] is what bindgen generates from the header: the protocol's types
-//! and the raw functions. [`wire`] reads and writes the protocol's messages.
-//! [`Repl`] is the log that replays a lost session over a [`Compiler`]:
-//! with the `engine` feature, [`Child`], the engine in a child process.
+//! [`sys`] is what bindgen generates from the header: the types and the raw
+//! functions. [`Repl`] is the log that replays a lost session over a
+//! [`Compiler`]: natively (the `engine` feature), [`Guest`], sc.wasm's
+//! session on wasmtime (ANALISE.md §68).
 //!
-//! [`Session`] and [`main`] are a safe API over the raw functions of the
-//! engine linked in (in `sc`, or in sc.wasm with the loader), and, with the
-//! `engine` feature, [`serve`] is the child's side of the protocol:
+//! Inside sc.wasm (without the `native` feature), [`Session`] is a safe API
+//! over the raw functions of the engine linked in:
 //!
 //! - a [`Reply`] borrows its session, so the engine's buffers it points to
 //!   cannot be used after the next call, which replaces them;
@@ -16,31 +15,22 @@
 //! - arguments are checked before they cross (no NUL bytes, a cell under
 //!   4 GiB).
 //!
-//! The compiler still ends the process on a fatal error or a crash: the
-//! native REPL runs the engine in a child process (PLANO-REPL.md §1.1).
-//!
-//! With the `wasm` feature, the same API calls `sc.wasm`'s exports through
-//! wasmtime in place of the linked engine ([`wasm`]).
+//! The compiler ends the module on a fatal error or a crash: a trap, after
+//! which the copy of the memory puts the session back (§65).
 
 #[allow(non_camel_case_types, non_upper_case_globals, dead_code)]
 pub mod sys {
     include!(concat!(env!("OUT_DIR"), "/sc.rs"));
 }
 
-/// The header of each message between the REPL and its child.
-pub use sys::sc_msg_header as MsgHeader;
-
-/// The kinds of message ([`MsgHeader::kind`]).
-pub use sys::sc_msg as msg;
-
 /// What a call left (`enum sc_status`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     /// Done.
     Ok,
-    /// An error in the student's code. From a `Session`, which keeps part
-    /// of a failed cell (PLANO-REPL.md §3.3); from a [`Child`], the session
-    /// is as before the cell.
+    /// An error in the student's code. From a `Session` without the copy,
+    /// which keeps part of a failed cell (PLANO-REPL.md §3.3); from a
+    /// [`Guest`], the session is as before the cell.
     Error,
     /// The session must be recreated and its log replayed.
     Lost,
@@ -84,7 +74,8 @@ pub enum Mode {
     Whole,
     /// The cell is an expression without its `;`: its type, in place of the
     /// exported names. Nothing is generated, but as a failed cell it leaves
-    /// part of itself in a [`Session`]; a [`Child`] goes back to before it.
+    /// part of itself in a [`Session`] without the copy; a [`Guest`] goes
+    /// back to before it.
     Type,
 }
 
@@ -109,15 +100,16 @@ impl Mode {
     }
 }
 
-pub mod wire;
 mod repl;
 pub use repl::*;
 #[cfg(feature = "engine")]
-mod child;
+mod guest;
 #[cfg(feature = "engine")]
-pub use child::{interrupt, Child};
+pub use guest::{interrupt, precompile, Guest};
 
+// the engine linked in: only inside sc.wasm. Natively its functions would
+// be undefined, which MSVC refuses even unused
+#[cfg(not(feature = "native"))]
 mod session;
-#[cfg(feature = "wasm")]
-pub mod wasm;
+#[cfg(not(feature = "native"))]
 pub use session::*;

@@ -1,6 +1,6 @@
 //! The log that recreates a lost session (PLANO-REPL.md §3.6), over any
-//! [`Compiler`]: the engine in a child process ([`super::Child`]), or the
-//! session in the same module (sc.wasm).
+//! [`Compiler`]: sc.wasm's session on wasmtime (`Guest`), or the session in
+//! the same module (inside sc.wasm).
 use super::{Mode, Status};
 use std::fmt;
 use std::io;

@@ -12,14 +12,3 @@ SmallVector<MatchForCodepointName> nearestMatchesForCodepointName(StringRef, std
   return {};
 }
 } // namespace llvm::sys::unicode
-
-#ifndef __wasm__
-#include <cstdio>
-#include <cstdlib>
-// The native engine: the stub of a cut function (scripts/link.py --native)
-// jumps here with the function's name.
-extern "C" [[noreturn]] void sc_cut_called(const char *Name) {
-  fprintf(stderr, "sc: cut function called: %s\n", Name);
-  abort();
-}
-#endif
