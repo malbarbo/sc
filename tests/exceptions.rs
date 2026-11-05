@@ -1,16 +1,25 @@
 //! Many exceptions on wasmtime's DRC collector (PLANO-REPL.md §5.3, step
 //! 5), in a process of their own, so that only they count in its memory.
+//! Unix only: the memory is read with getrusage.
+#![cfg(unix)]
 
 mod common;
 
 use sc::loader::{Loader, Val};
 
-/// The resident memory of this process, in bytes.
+/// The peak resident memory of this process, in bytes: after a first run,
+/// what more runs add to it is what they kept. getrusage, not /proc, which
+/// only Linux has.
 fn rss() -> u64 {
-    let statm = std::fs::read_to_string("/proc/self/statm").unwrap();
-    let pages: u64 = statm.split_whitespace().nth(1).unwrap().parse().unwrap();
-    // SAFETY: sysconf only reads a value
-    pages * unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64
+    // SAFETY: getrusage writes the struct it is given
+    let ru = unsafe {
+        let mut ru = std::mem::zeroed::<libc::rusage>();
+        assert_eq!(libc::getrusage(libc::RUSAGE_SELF, &mut ru), 0);
+        ru
+    };
+    // kilobytes on Linux, bytes on macOS
+    let unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
+    ru.ru_maxrss as u64 * unit
 }
 
 #[test]
