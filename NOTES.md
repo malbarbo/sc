@@ -790,7 +790,7 @@ and `<csignal>` give `#error` in the WASI libc, so the corpus removes those
 two lines.
 
 `sc_inv.cpp` accepts `-emit-module-interface -fmodules-reduced-bmi`, `-I` and
-`-fmodule-file=<nome>=<pcm>`, and `checkinv` compares the three new
+`-fmodule-file=<name>=<pcm>`, and `checkinv` compares the three new
 combinations (SAME). The driver's reduced BMI only applies with
 `-fmodule-output`. With `--precompile` the `.pcm` is the complete one, and
 the reduced one would be almost the same size (27.8 MB). The corpus
@@ -1416,7 +1416,7 @@ Date: 2026-10-14.
 
 `build/sc-engine-full` (`proto/src/bin/sc-engine.rs`) is the uncut engine
 with this loop. `-cc1`/`ld` go to `sc_main`, `session` is the child, and
-`repl <dir> <células...> -- <args>` is a test of the parent's side, which
+`repl <dir> <cells...> -- <args>` is a test of the parent's side, which
 writes the `.so` of each accepted cell. The child writes the protocol to a
 copy of stdout and puts stderr on fd 1, so that nothing from the engine
 breaks a message. Eight cells with a crash and an `undo` (three children,
@@ -1950,7 +1950,7 @@ now.
 strict}. That makes 17 lines, all SAME.
 
 **The corpus at the levels.** Each program that runs also runs at levels
-`on` and `strict` (`<nome>-on`, `<nome>-strict`), linked as a whole, as in
+`on` and `strict` (`<name>-on`, `<name>-strict`), linked as a whole, as in
 `sc FILE`. The c-testsuite and the gcc torture tests have UB on purpose.
 In them E stays a warning (`safety(..., errors=False)`), so that the
 program does not stop at compile time.
@@ -2534,7 +2534,7 @@ So there is no need to filter by the student's frame, as the plan foresaw.
   list and, after `free`, the quarantine.
   - `__sc_rt_leaks(sp)` sorts the live blocks by address and scans as
     roots the words of the stack above `sp` and those of the modules' data.
-  - A value that falls in `[início, fim)` of a block reaches it, even when
+  - A value that falls in `[begin, end)` of a block reaches it, even when
     it points to the middle. The scan covers the reached blocks in turn.
   - The lost ones go to the loader through `__sc_rt_leak`, grouped by the
     allocation's stack.
@@ -3333,7 +3333,7 @@ session of `sc.h` (docs/plan-repl.md §5.2):
   the cell's directory.
 
 **The frozen bases.** Before the change, the six bases were copied to
-`build/res/<nome>-pre5`. The `summary.json` files:
+`build/res/<name>-pre5`. The `summary.json` files:
 
 | base | sha256 |
 |---|---|
@@ -4010,7 +4010,7 @@ the `.args`, and make them relative to a root that `sc` resolves in one
 place. Then it remains to choose between a fixed tree next to the binary
 (`<prefixo>/lib/sc`, like clang's resource directory) and the sysroot
 embedded in the binary, extracted on the first run to
-`~/.cache/sc/<versão>`. The second is one file, simpler for the student
+`~/.cache/sc/<version>`. The second is one file, simpler for the student
 and for a future Windows. Until then, the search works in the checkout and
 with `SC_BUILD`.
 
@@ -4790,7 +4790,7 @@ as `env.wasm_*` (`src/loader/runtime.rs`, the `Runtime` trait):
 | primitive | what it does |
 | --- | --- |
 | `instantiate(bytes, compilado, imports)` | compiles and instantiates. An import is a handle, the runtime's default (WASI, `env.wasm_stack`) or an i32 that becomes a new global, whose handle comes back in the list |
-| `export(inst, nome)` | the handle of what the instance exports |
+| `export(inst, name)` | the handle of what the instance exports |
 | `call(f, assinatura, vals)` | calls. The error is `Exit`, `Trap` (kind, message, fault address, frames) or `Fail` |
 | `read`, `write` | the memory |
 | `stack(id)` | the frames of a stack that `env.wasm_stack` stored |
@@ -4867,7 +4867,7 @@ loader, which compiles to `wasm32-wasip1` (`wasmparser`, `wasm-encoder`,
 | import | what it does |
 | --- | --- |
 | `wasm_instantiate(bytes, len, imports, n, out) -> status` | compiles and instantiates. An import is the host's default (0), a handle (1) or a new i32 global, constant (2) or mutable (3), whose handle the host writes back |
-| `wasm_export(inst, nome, len) -> h` | 0 if there is none |
+| `wasm_export(inst, name, len) -> h` | 0 if there is none |
 | `wasm_call(f, sig, sig_len, vals) -> status` | `vals`: 8 bytes per value. The results come back in them |
 | `wasm_error(buf, cap) -> len` | the message of the last failure or trap |
 | `wasm_frames(id, buf, cap) -> len` | the frames of a stack from `env.wasm_stack` (or of the last trap, with 0). One line each, the offset and the name |
@@ -4979,7 +4979,7 @@ as the run with the host's snapshot (11926 results. The only bad one is
 `limits-externdecl`, which already ran out of time). Comparing the raw
 files, only these differ:
 - 2 `mem-`: `memory.size`, with the copy;
-- 2 `ses-` with `/tmp/<nome>-<aleatório>.pcm` in the message;
+- 2 `ses-` with `/tmp/<name>-<random>.pcm` in the message;
 - 3 `ses-` (`fallthrough`, `noderef`) with the diagnostics in another
   order. The battery compares the sorted lines, and the order already
   differs between the cut and the full `sc.wasm` (`session-wasm` ×
@@ -5063,7 +5063,7 @@ reads the error.
   (`compiler-crash.c.repl`). V8's frames give the function and the
   offset, but not the instance, and `Loader::symbols` finds the DWARF
   through the instance. This is the open item of the frames in the
-  browser. `wasm.mjs` now strips from the names the `<módulo>.` that V8
+  browser. `wasm.mjs` now strips from the names the `<module>.` that V8
   puts in front and accepts C++ names with spaces, and so it finds
   `__sc_rt_report` (before, it said "aborted").
 
