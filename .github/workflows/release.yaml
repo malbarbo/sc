@@ -1,0 +1,228 @@
+name: release
+
+# sc for each target, as sgleam's release: an archive with sc and its
+# sha256, which the binary must run before a tag's draft release gets it.
+# sc embeds sc.wasm and its pack, which are the same for every target: one
+# job builds them on the LLVM of llvm.yaml (its cache), and each target's
+# job compiles sc around them.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  llvm:
+    uses: ./.github/workflows/llvm.yaml
+
+  # build/sc.wasm, build/pack/repl and the libraries of the pack: what
+  # build.rs embeds, besides what it compiles for the target
+  engine:
+    name: Build sc.wasm
+    needs: llvm
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/native/bin
+            build/native/lib/clang
+          key: llvm-native-${{ needs.llvm.outputs.key }}
+          fail-on-cache-miss: true
+
+      - uses: actions/cache/restore@v6
+        with:
+          path: build/wasm
+          key: llvm-wasm-${{ needs.llvm.outputs.key }}
+          fail-on-cache-miss: true
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32-wasip1
+
+      # the binaryen of the developer's machine: apt's is too old for exnref
+      - name: Install the build tools
+        run: |
+          sudo apt-get install -y ninja-build cmake
+          curl -sSL https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-x86_64-linux.tar.gz \
+            | tar xzf - -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_132/bin" >> "$GITHUB_PATH"
+
+      # the LLVM sources, for the engine's headers (only the cache has the
+      # rules that need them as order-only)
+      - name: Build
+        run: |
+          make build/src/llvm/CMakeLists.txt
+          make sc-deps
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sc-deps
+          path: |
+            build/sc.wasm
+            build/pack/repl
+            build/sysroot/lib/wasm32-wasip1/libc.so
+            build/sysroot/lib/wasm32-wasip1/libc++.so
+            build/sysroot/lib/wasm32-wasip1/libc++abi.so
+            build/sysroot/lib/wasm32-wasip1/libsc_rt.so
+            build/sysroot/lib/wasm32-wasip1/libsetjmp.so
+          if-no-files-found: error
+
+  build:
+    name: Build (${{ matrix.os }} / ${{ matrix.target }})
+    needs: engine
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # One target that fails leaves the others to finish, so a flaky run
+      # still says which targets build.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            setup: sudo apt-get install musl-tools
+
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            setup: sudo apt-get install musl-tools
+            linker: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            setup: git config --global core.longpaths true
+
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            setup: git config --global core.longpaths true
+
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            setup: ""
+
+          - os: macos-15
+            target: aarch64-apple-darwin
+            setup: ""
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Find the version
+        shell: bash
+        run: |
+          # A run started by hand has no tag, so it names the archives after
+          # the version of the crate and does not publish them.
+          CRATE="v$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "$GITHUB_REF_NAME" != "$CRATE" ]; then
+              echo "::error::The tag $GITHUB_REF_NAME differs from the version $CRATE of Cargo.toml"
+              exit 1
+            fi
+            VERSION="$GITHUB_REF_NAME"
+          else
+            VERSION="$CRATE"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Setup
+        if: matrix.setup != ''
+        run: ${{ matrix.setup }}
+
+      - name: Set linker
+        if: matrix.linker != ''
+        shell: bash
+        run: echo "${{ matrix.linker }}" >> $GITHUB_ENV
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: sc-deps
+          path: build
+
+      # MAKELEVEL: build.rs takes what make built (the sc-deps), as under
+      # make, and does not run make sc-deps
+      - name: Build release
+        shell: bash
+        env:
+          MAKELEVEL: "1"
+        run: cargo build --locked --profile dist --target ${{ matrix.target }} --bin sc
+
+      - name: Build archive
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            *-windows-*)
+              ARCHIVE="sc-$VERSION-${{ matrix.target }}.zip"
+              cp "build/cargo/${{ matrix.target }}/dist/sc.exe" sc.exe
+              7z a "$ARCHIVE" sc.exe
+              rm sc.exe ;;
+            *)
+              ARCHIVE="sc-$VERSION-${{ matrix.target }}.tar.gz"
+              cp "build/cargo/${{ matrix.target }}/dist/sc" sc
+              tar -czvf "$ARCHIVE" sc
+              rm sc ;;
+          esac
+          openssl dgst -r -sha256 -out "$ARCHIVE".sha256 "$ARCHIVE"
+          echo "ASSET=$ARCHIVE" >> $GITHUB_ENV
+
+      # what is in the archive compiles and runs C, and C++ with exceptions
+      - name: Ensure the binary compiles and runs a program
+        shell: bash
+        run: |
+          mkdir smoke && cd smoke
+          case "${{ matrix.target }}" in
+            *-windows-*) 7z x "../$ASSET"; SC=./sc.exe ;;
+            *) tar -xvzf "../$ASSET"; SC=./sc ;;
+          esac
+          $SC --version
+          printf '#include <stdio.h>\nint main(void) { puts("hello"); }\n' > hello.c
+          test "$($SC hello.c | tr -d '\r')" = hello
+          printf '#include <iostream>\n#include <stdexcept>\nint main() {\n  try { throw std::runtime_error("boom"); }\n  catch (const std::exception &e) { std::cout << e.what() << "\\n"; }\n}\n' > exc.cpp
+          test "$($SC exc.cpp | tr -d '\r')" = boom
+
+      - name: Hand the archive to the publish job
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
+          if-no-files-found: error
+
+  # The whole matrix publishes through this one job. A release step inside the
+  # matrix has every job create the draft at once, and the tag ends up with a
+  # draft per job and the archives split among them.
+  publish:
+    name: Publish the draft release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Collect every archive
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*-*-*'
+          path: dist
+          merge-multiple: true
+
+      - name: Upload release archives
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: dist/*

@@ -1,0 +1,106 @@
+name: llvm
+
+# The LLVM pin, built twice (native tools, then the wasm libraries): what
+# sc.wasm is linked from, for the release (release.yaml). It takes hours on
+# a runner (ANALISE.md §70), so it lives in a cache keyed by what it is
+# built from (make llvm-key and llvm/). A cache made on main serves every
+# tag, one made on a tag only that tag: this runs on main when the pin
+# changes, and every week, so that the cache does not go unused for the 7
+# days after which GitHub drops it.
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ Makefile, 'llvm/**', .github/workflows/llvm.yaml ]
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      key:
+        description: The key of the caches llvm-native-KEY and llvm-wasm-KEY
+        value: ${{ jobs.native.outputs.key }}
+
+jobs:
+  # clang, wasm-ld and the tablegens, for the host
+  native:
+    name: LLVM (native tools)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache key
+        id: key
+        run: echo "key=$( (make -s llvm-key; cat llvm/*) | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache/restore@v6
+        id: cache
+        with:
+          path: |
+            build/native/bin
+            build/native/lib/clang
+          key: llvm-native-${{ steps.key.outputs.key }}
+
+      - name: Install the build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y clang lld ninja-build cmake
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: make build/native/bin/wasm-ld
+
+      - uses: actions/cache/save@v6
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            build/native/bin
+            build/native/lib/clang
+          key: llvm-native-${{ steps.key.outputs.key }}
+
+  # clang and lld as wasm32-wasip1 libraries. The engine's link (scripts/
+  # link.py) remakes the archives from their objects without the cuts' ones,
+  # trim.py takes the compile commands of build.ninja, the engine the
+  # generated headers: all of build/wasm (~1 GB)
+  wasm:
+    name: LLVM (wasm)
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache/restore@v6
+        id: cache
+        with:
+          path: build/wasm
+          key: llvm-wasm-${{ needs.native.outputs.key }}
+
+      - uses: actions/cache/restore@v6
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            build/native/bin
+            build/native/lib/clang
+          key: llvm-native-${{ needs.native.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Install the build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y ninja-build cmake
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          make build/src/llvm/CMakeLists.txt
+          make llvm
+
+      - uses: actions/cache/save@v6
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: build/wasm
+          key: llvm-wasm-${{ needs.native.outputs.key }}

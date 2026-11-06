@@ -5221,3 +5221,56 @@ de execução do `test/corpus.py` com a máquina carregada (load ~180;
 sozinho, 47 s com compilação e tudo). O limite passa a 300 s, o mesmo da
 compilação e da ligação: nenhum programa do corpus fica em laço, então
 só um que ficasse pagaria isso.
+
+**A partida do `sc`.** `sc hello.c` leva 0,39–0,50 s (pico de 194 MB); a
+maior parte é descomprimir o `.cwasm` embutido (84 MB descomprimido),
+0,19–0,31 s com a máquina carregada (load 28–85). Comparado na mesma
+máquina (`zstd -d`/`lz4 -d` em memória):
+
+| formato | tamanho | descomprimir |
+| --- | ---: | ---: |
+| zstd -19 (o atual) | 21 MB | 0,19 s |
+| zstd -9 | 24 MB | 0,22 s |
+| zstd -3 | 27 MB | 0,24 s |
+| zstd -22 --long | 21 MB | 0,36 s |
+| lz4 -9 | 32 MB | 0,14 s |
+
+Fica o zstd -19: baixar o nível não acelera (o arquivo maior custa mais do
+que o nível poupa) e o lz4 poupa ~0,05 s por 11 MB a mais. Só um cache em
+disco (o `.cwasm` descomprimido, por mmap) levaria a partida a perto de
+zero, e o §52–54 o descartou.
+
+**O sc para Windows.** `make dist-windows` gera, com o `cargo xwin` e o
+perfil `dist`, `build/cargo/x86_64-pc-windows-msvc/dist/sc.exe` (31,7 MB;
+41,5 MB no perfil release) e `scload.exe` (6,7 MB). Os de Linux têm 32,6 MB
+e 7,5 MB. O build leva 5,5 min. O sc.exe da VM passa o `test/ctrlc.py
+ssh:win`, as exceções do C++, e sai com 134 numa exceção não capturada.
+`sc hello.c` leva 0,8–0,9 s na VM. O aarch64-pc-windows-msvc fica de fora,
+porque não há onde testá-lo.
+
+**O release na CI.** `.github/workflows/release.yaml`, como o do sgleam:
+uma tag `v*` (que tem de ser a versão do `Cargo.toml`) gera, em cada alvo
+nativo, `sc-VERSÃO-ALVO.tar.gz` ou `.zip`, com o sha256, e um draft
+release. São seis alvos: os cinco do sgleam e o aarch64-pc-windows-msvc
+(`windows-11-arm`, que entra também na matriz da `ci.yaml`). O que o sc
+embute e não depende do alvo (o `sc.wasm`, `build/pack/repl` e as cinco
+bibliotecas do pack, 8 MB em `tar.zst`) sai de um job só e passa aos
+outros como artefato. Cada alvo compila o sc em volta dele com
+`MAKELEVEL=1`, como sob o make, para o `build.rs` não chamar o `make
+sc-deps`. Antes de ir para o release, o binário do arquivo compila e roda
+um C e um C++ com exceção.
+
+O LLVM do pin custa, pelos `.ninja_log` daqui (a soma das tarefas, só
+dos alvos que o make pede), ~274 min nas ferramentas nativas e ~267 min
+nas bibliotecas wasm, além de ~6 min nos runtimes: ~2,3 h num runner de
+4 núcleos e ~4,6 h num de 2 (o repositório é privado). Por isso fica em
+`.github/workflows/llvm.yaml`, em dois jobs (cada um bem abaixo do limite
+de 6 h), com cache com chave tirada de `make llvm-key` e de `llvm/*`:
+`build/native/bin` e `lib/clang` (~150 MB) e `build/wasm` inteiro
+(~1 GB, porque o `link.py` refaz os arquivos `.a` a partir dos objetos). Um cache
+salvo numa tag só serve àquela tag, e o GitHub apaga o que fica 7 dias sem
+uso. Por isso o `llvm.yaml` roda no main quando o pin muda e toda semana,
+e o release o chama. Num clone limpo, só com o cache, o `make -n
+sc-deps` não chama nenhum `ninja` do LLVM. Também rodaram aqui o
+`cargo build --profile dist` de um alvo só com o artefato, o arquivo e o
+teste do binário.

@@ -66,6 +66,10 @@ jobs:
             target: x86_64-pc-windows-msvc
             setup: git config --global core.longpaths true
 
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            setup: git config --global core.longpaths true
+
           - os: macos-15-intel
             target: x86_64-apple-darwin
             setup: ""

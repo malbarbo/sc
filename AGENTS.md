@@ -28,6 +28,7 @@ make repl        # build/cargo/release/sc, the REPL (sc, sc FILE, sc help), unst
                  # sc.wasm's session on wasmtime is its compiler (ANALISE.md §68)
 cargo build --release # the same sc (build.rs runs make sc-deps)
 make dist        # build/cargo/dist/scload and sc: small, LTO (~4 min)
+make dist-windows # the same sc.exe and scload.exe for x86_64-pc-windows-msvc (cargo-xwin)
 make test-aluno  # test/aluno, correct code, at each --safety level (scripts/flags.py)
 make test-checks # test/checks, one bug per program: what sc says of it at each level
 make test-loader # src/loader.rs: Ctrl-C, many exceptions, after changing the loader or wasmtime (no engine)

@@ -52,7 +52,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader baseline test test-small test-warn learn learn-session checkinv size test-proto test-split test-session test-session-warn test-split-node test-split-node-rs test-aluno-node-rs test-aluno test-checks test-dist repl sc-deps test-loader test-ctrl-c check rs-wasm dist clean
+.PHONY: all fetch llvm sysroot engine trim loader baseline test test-small test-warn learn learn-session checkinv size test-proto test-split test-session test-session-warn test-split-node test-split-node-rs test-aluno-node-rs test-aluno test-checks test-dist repl sc-deps test-loader test-ctrl-c check rs-wasm dist dist-windows llvm-key clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -104,6 +104,11 @@ $(B)/wasm/lib/libclangSema.a: | $(B)/native/bin/wasm-ld $(B)/Toolchain-WASI-LLVM
 	ninja -C $(B)/wasm clang lld
 
 llvm: $(B)/wasm/lib/libclangSema.a
+
+# what the LLVM build comes from, for the release's cache
+# (.github/workflows/release.yaml): with llvm/'s files, its key
+llvm-key:
+	@echo $(LLVM_COMMIT) $(LLVM_PATHS) $(LLVM_OPTS) $(WASM_OPTS) $(WASI_SDK_URL)
 
 # --- the sysroot: wasi-sdk's libc, with libc++, libc++abi and libunwind built
 # from the pin with exceptions (-fwasm-exceptions, the standard form, exnref);
@@ -293,6 +298,12 @@ loader: $(SCLOAD)
 # (ANALISE.md §49): build/cargo/dist/scload and sc
 dist: $(PACK) $(B)/sc.wasm
 	cargo build $(CARGO) --profile dist --bins
+
+# the same for Windows, cross-compiled with cargo-xwin (the MSVC CRT and
+# SDK it downloads; static CRT, .cargo/config.toml):
+# build/cargo/x86_64-pc-windows-msvc/dist/sc.exe and scload.exe
+dist-windows: $(PACK) $(B)/sc.wasm
+	cargo xwin build $(CARGO) --profile dist --target x86_64-pc-windows-msvc --bins
 
 # what needs no LLVM, for the CI (.github/workflows/ci.yaml): clippy on the
 # crate without the engine and with it (under clippy, build.rs neither asks
