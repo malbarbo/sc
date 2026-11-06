@@ -5489,3 +5489,20 @@ binary. The `sc-deps` artifact is 11.7 MB, and the archives (zip
 artifact, close to the size of the `.tar.gz`/`.zip`) are 27.4 MB (x86_64
 musl), 24.0 MB (aarch64 musl), 27.1 MB (x86_64 Windows), 23.6 MB
 (aarch64 Windows), 27.2 MB (x86_64 macOS), 23.9 MB (aarch64 macOS).
+
+## 71. A cut that only the size of a cell reaches
+
+`make test-split` failed on `mod-m2_stl`. The last cell crashed the cut
+`sc.wasm` and not the uncut one. On `build/sc-cut.wasm`, which keeps its
+names, the trap is in the stub of
+`clang::serialization::reader::HeaderFileInfoTrait::EqualKey`, called by
+`IncrementalParser::Parse` through `HeaderSearch::getFileInfo` and
+`ASTReader::GetHeaderFileInfo` on `std.pcm`. The table of a module's
+headers hashes only the size of a file and its time
+(`HeaderFileInfoTrait::ComputeHash`), and the module has no times. So
+`EqualKey` runs only when the cell has the size of a header that
+`std.pcm` knows. The cell had 1,092 bytes. With 5 bytes more the same
+session passes. No corpus can learn a call like that, so
+`cuts/symbols.txt` keeps the whole trait (`EqualKey` calls `getFile`,
+which was cut too). `sc.wasm` grows from 39,561,749 to 39,563,151 bytes
+(+1,402).

@@ -34,3 +34,6 @@ obj:/LLVMCore\.dir/AsmWriter\.cpp
 obj:/LLVMTransformUtils\.dir/(Debugify|CodeExtractor|LoopUtils|LoopSimplify|LoopRotationUtils|LoopUnroll\w*|LoopPeel|LoopVersioning|SimplifyIndVar|ScalarEvolutionExpander|SSAUpdater\w*|CloneFunction|FunctionComparator|SplitModule|SampleProfile\w*|MemoryOpRemark|BypassSlowDivision|SimplifyLibCalls|BuildLibCalls|VNCoercion|MisExpect|CodeMoverUtils|SCCPSolver|PredicateInfo)\.cpp
 # --- C++20: -fmodules makes clang create the module reader for every file; keep what it calls
 obj:/Serialization/CMakeFiles/.*/(ASTReader\w*|ModuleManager|ModuleFile|GlobalModuleIndex|InMemoryModuleCache|ModuleCache)\.cpp
+# the table of a module's headers hashes only a file's size: EqualKey runs
+# when a cell has the size of a header of std.pcm, which no corpus can learn
+!^clang::serialization::reader::HeaderFileInfoTrait::
