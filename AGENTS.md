@@ -31,7 +31,7 @@ make dist        # build/cargo/dist/scload and sc: small, LTO (~4 min)
 make test-aluno  # test/aluno, correct code, at each --safety level (scripts/flags.py)
 make test-checks # test/checks, one bug per program: what sc says of it at each level
 make test-loader # src/loader.rs: Ctrl-C, many exceptions, after changing the loader or wasmtime (no engine)
-make check       # clippy without the engine and on wasm/: the CI's (.github/workflows/ci.yaml)
+make check       # clippy with and without the engine (no LLVM: under clippy build.rs embeds nothing) and on wasm/: the CI's (.github/workflows/ci.yaml)
 make rs-wasm     # the Rust that sc.wasm links, alone
 make test-dist   # before shipping: test-split, test-session, test-aluno, test-checks on the dist sc
 ```

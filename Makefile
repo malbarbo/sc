@@ -295,10 +295,12 @@ dist: $(PACK) $(B)/sc.wasm
 	cargo build $(CARGO) --profile dist --bins
 
 # what needs no LLVM, for the CI (.github/workflows/ci.yaml): clippy on the
-# crate without the engine, which build.rs would ask make for, and on the
-# Rust of sc.wasm. The code is not in rustfmt's style
+# crate without the engine and with it (under clippy, build.rs neither asks
+# make for the engine nor embeds it), and on the Rust of sc.wasm. The code
+# is not in rustfmt's style
 check:
 	cargo clippy --release $(CARGO) --no-default-features --features native,machine --all-targets -- -D warnings
+	cargo clippy --release $(CARGO) --features engine --all-targets -- -D warnings
 	cargo clippy --release $(CARGO) --manifest-path wasm/Cargo.toml --target wasm32-wasip1 --target-dir $(B)/cargo-wasm32 -- -D warnings
 
 # the Rust of sc.wasm alone

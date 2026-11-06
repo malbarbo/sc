@@ -34,8 +34,10 @@ fn main() {
         .expect("bindgen engine/sc.h")
         .write_to_file(PathBuf::from(env::var("OUT_DIR").unwrap()).join("sc.rs"))
         .unwrap();
+    // clippy only checks: it needs neither the engine nor what sc embeds
+    // (src/engine/guest.rs, src/bin/sc/pack.rs), so it runs without LLVM
     #[cfg(feature = "engine")]
-    {
+    if !cfg!(clippy) {
         let out = PathBuf::from(env::var("OUT_DIR").unwrap());
         // under make, the rule that runs cargo has built them
         watch(&root);

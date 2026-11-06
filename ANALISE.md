@@ -5081,6 +5081,14 @@ e das próprias baterias):
   crash, desfazer, limites, Enter, valores, `:type`) e `test-loader`
   passam; o clippy com e sem a feature `engine` também.
 
+**O clippy da CI com a feature `engine`.** O `guest.rs` só compila com
+ela, e a CI não tem LLVM. Sob o clippy (`cfg(clippy)`, que o próprio
+`clippy-driver` liga, também no `build.rs`) o `build.rs` não chama o make
+nem monta o pack e o `.cwasm`, e o `PACK` e o `CWASM` ficam vazios; fora
+do clippy nada muda. O `make check` roda as duas formas: numa cópia do
+repositório sem `build/`, a com `engine` leva 3 min, quase tudo
+compilando o wasmtime.
+
 A nova base difere da do `sc-wasm` antigo (filho e `fork`, com só a raiz do
 repositório aberta) em 5 resultados: o `limits-externdecl`, que passa de
 120 s com a máquina carregada (49 s sozinho; a `wev-base` do corpus já tem

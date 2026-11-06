@@ -9,7 +9,11 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::sync::{Mutex, OnceLock};
 
+// clippy (the CI's make check) builds without the engine (build.rs)
+#[cfg(not(clippy))]
 static PACK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sc.sqfs"));
+#[cfg(clippy)]
+static PACK: &[u8] = &[];
 
 struct Pack {
     fs: FilesystemReader<'static>,

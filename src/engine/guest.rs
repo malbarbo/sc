@@ -28,7 +28,11 @@ use wasmtime::{Engine, Instance, Linker, Memory, Module, ResourceLimiter, Store,
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
+// clippy (the CI's make check) builds without the engine (build.rs)
+#[cfg(not(clippy))]
 static CWASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sc.cwasm.zst"));
+#[cfg(clippy)]
+static CWASM: &[u8] = &[];
 
 const CRASHED: &str = "sc: the engine crashed on this cell; the session is as it was before it\n";
 
