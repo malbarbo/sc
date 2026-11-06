@@ -1,1529 +1,1570 @@
-# Plano: compilação incremental para o REPL
+# Plan: incremental compilation for the REPL
 
-Revisão (2026-11-05, NOTES.md §68): o `sc` nativo não tem mais engine
-nativo, filho nem `fork`. O compilador é a sessão do `sc.wasm` no próprio
-processo, no wasmtime, como no navegador, com a cópia da memória do §65 no
-lugar do `fork`. O que segue sobre o filho (§1.1, §2, §3.3) é a história
-dessa decisão.
+Revision (2026-11-05, NOTES.md §68): the native `sc` no longer has a native
+engine, a child or a `fork`. The compiler is the session of `sc.wasm` in
+the same process, on wasmtime, as in the browser, with the memory copy of
+§65 in place of the `fork`. What follows about the child (§1.1, §2, §3.3)
+is the history of that decision.
 
-Versão 4 (2026-10-01):
-- o REPL nativo usa o wasmtime mínimo, com JIT (§1.4);
-- exceções e `setjmp`/`longjmp` entram no escopo (§1.5);
-- o compilador roda num processo filho (§1.1).
+Version 4 (2026-10-01):
+- the native REPL uses the minimal wasmtime, with JIT (§1.4);
+- exceptions and `setjmp`/`longjmp` come into scope (§1.5);
+- the compiler runs in a child process (§1.1).
 
-Decisões do professor (2026-10-01):
-- a redefinição é rejeitada por enquanto (§3.4);
-- um binário só, `sc`, que se reexecuta como filho (§1.1);
-- a linguagem usa os padrões mais novos (§1.6).
+The teacher's decisions (2026-10-01):
+- redefinition is rejected for now (§3.4);
+- one binary, `sc`, which runs itself again as the child (§1.1);
+- the language uses the newest standards (§1.6).
 
-A versão 2 foi revisada por três revisores adversários: internals do clang,
-runtime e build, testes e sequência. Cada mudança cita o achado que a
-motivou (C = clang, R = runtime, T = testes). Os experimentos estão no
-scratchpad da sessão (`adv1`–`adv3`) e em `~/.cache/sc-wtsize`, `sc-wmi` e
-`sc-wamr`.
+Three adversarial reviewers reviewed version 2. They covered clang
+internals, runtime and build, and tests and sequence. Each change cites
+the finding behind it (C = clang, R = runtime, T = tests). The experiments
+are in the session's scratchpad (`adv1`–`adv3`) and in `~/.cache/sc-wtsize`,
+`sc-wmi` and `sc-wamr`.
 
-## 0. Objetivo e restrições
+## 0. Goal and constraints
 
-- **O que a célula vê.** O REPL compila cada célula sobre as anteriores.
-  Tipos, funções, variáveis, macros e `#include` das células anteriores valem
-  na seguinte, sem o aluno repetir declarações. Os headers são lidos uma vez
-  por sessão.
-- **Execução.** Cada célula vira um `.so` wasm, carregado pelo loader (§18)
-  sobre os anteriores. O código do aluno é sempre wasm.
-- **Dois alvos.** O mesmo engine e os mesmos cortes servem ao nativo (x86-64
-  Linux) e ao wasm (`sc.wasm`, web).
-- **API.** A API do engine é C, em `engine/sc.h`. O Rust usa o que o bindgen
-  gera a partir desse header, sem nada mantido à mão (ver §1.1 e §2).
-- **Linguagem.** C++ **com exceções**, e C com `setjmp`/`longjmp` (§1.5).
-- **Regras do AGENTS.md:**
-  - `make test` com 0 diferenças;
+- **What the cell sees.** The REPL compiles each cell on top of the
+  earlier ones. Types, functions, variables, macros and `#include` of the
+  earlier cells hold in the next one, and the student does not repeat
+  declarations. The headers are read once per session.
+- **Execution.** Each cell becomes a wasm `.so`, which the loader (§18)
+  loads on top of the earlier ones. The student's code is always wasm.
+- **Two targets.** The same engine and the same cuts serve the native
+  build (x86-64 Linux) and wasm (`sc.wasm`, web).
+- **API.** The engine's API is C, in `engine/sc.h`. The Rust uses what
+  bindgen generates from that header, with nothing kept by hand (see §1.1
+  and §2).
+- **Language.** C++ **with exceptions**, and C with `setjmp`/`longjmp`
+  (§1.5).
+- **Rules of AGENTS.md:**
+  - `make test` with 0 differences;
   - `make checkinv` SAME;
-  - cortes antes de patches;
-  - NOTES.md atualizado.
+  - cuts before patches;
+  - NOTES.md kept up to date.
 
-## 1. Decisões
+## 1. Decisions
 
-### 1.1 Nativo: sessão num processo filho (R1–R4, R16, T-M5)
+### 1.1 Native: the session in a child process (R1–R4, R16, T-M5)
 
-O código do aluno roda no wasmtime (§1.4). O wasmtime trata os traps por
-sinais, e compilar dentro do processo do REPL não é seguro:
+The student's code runs on wasmtime (§1.4). Wasmtime handles traps through
+signals, and compiling inside the REPL's process is not safe:
 
-- **Os handlers de sinal brigam.** O `CrashRecoveryContext` instala
-  handlers sem encadear. Um trap do código do aluno (SIGILL, SIGFPE ou
-  SIGSEGV) chega a ele sem contexto ativo. Ele então desliga a recuperação, e
-  daí em diante `Process::Exit` mata o REPL.
-- **O contexto é global.** Com `LLVM_ENABLE_THREADS=OFF`, o contexto
-  "corrente" do CRC é um global do processo.
-- **`llvm_unreachable` é comportamento indefinido** no nosso build.
-- **SIGSEGV no `malloc`.** Ele deixa a trava da arena presa, num processo
-  com threads.
-- **Vazamento.** Uma sessão abandonada vaza mais de 100 MB.
-- **Mais handlers.** O LLVM instala os próprios handlers
-  (`RemoveFileOnSignal`).
+- **The signal handlers fight.** The `CrashRecoveryContext` installs
+  handlers without chaining them. A trap from the student's code (SIGILL,
+  SIGFPE or SIGSEGV) arrives at it with no active context. It then turns
+  recovery off, and from then on `Process::Exit` kills the REPL.
+- **The context is global.** With `LLVM_ENABLE_THREADS=OFF`, the "current"
+  context of the CRC is a global of the process.
+- **`llvm_unreachable` is undefined behaviour** in our build.
+- **SIGSEGV in `malloc`.** It leaves the arena lock held, in a process with
+  threads.
+- **Leak.** An abandoned session leaks more than 100 MB.
+- **More handlers.** LLVM installs its own handlers (`RemoveFileOnSignal`).
 
-Nada disso vale para o clang dentro do `sc.wasm`: ele não instala
-handlers, e um crash dele é um trap que fica na instância. Por isso, desde
-o NOTES.md §68, o `sc` roda a sessão do `sc.wasm` no próprio processo
-(`src/engine/guest.rs`), e a decisão abaixo foi revista.
+None of this holds for the clang inside `sc.wasm`. It installs no handlers,
+and a crash in it is a trap that stays in the instance. For this reason,
+since NOTES.md §68, `sc` runs the session of `sc.wasm` in its own process
+(`src/engine/guest.rs`), and the decision below was revised.
 
-**Decisão.** A sessão vive num processo filho de longa duração:
+**Decision.** The session lives in a long-running child process:
 
-- **Um binário só, chamado `sc`.** Ele junta o REPL, o loader e o engine:
-  - `sc` é o REPL;
-  - `sc --engine` é o filho, reexecutado pelo próprio `sc`;
-  - `sc -cc1 ...` e `sc ld ...` são o engine one-shot de hoje, que o corpus
-    usa para testar o binário entregue.
-- **O filho.** Ele conversa por pipes com mensagens prefixadas pelo tamanho.
-  Nesse modo o wasmtime nem é iniciado. **Decidido na fase 2: o laço é em
-  Rust**, sobre a API segura (`sc_proto::serve`), e o lado do pai também
-  (`sc_proto::Child` e `Repl`, com o log e o repasse do §3.6). Assim o laço
-  não é escrito duas vezes: o `sc --engine` da fase 6b usa o mesmo código
-  que o `build/sc-engine-full` de hoje.
-- **Nomes no build:**
-  - o crate do `loader/` passa a gerar o `sc`, que deixa de se chamar
+- **One binary, called `sc`.** It joins the REPL, the loader and the
+  engine:
+  - `sc` is the REPL;
+  - `sc --engine` is the child, which `sc` itself runs again;
+  - `sc -cc1 ...` and `sc ld ...` are today's one-shot engine, which the
+    corpus uses to test the shipped binary.
+- **The child.** It talks over pipes with messages prefixed by their size.
+  In this mode wasmtime does not even start. **Decided in phase 2: the
+  loop is in Rust**, on top of the safe API (`sc_proto::serve`), and so is
+  the parent's side (`sc_proto::Child` and `Repl`, with the log and the
+  replay of §3.6). This way nobody writes the loop twice. The
+  `sc --engine` of phase 6b uses the same code as today's
+  `build/sc-engine-full`.
+- **Names in the build:**
+  - the crate of `loader/` now generates `sc`, which is no longer called
     `scload`;
-  - o executável só de C++ de hoje passa a ser `build/sc-engine` (cortado) e
-    `build/sc-engine-full` (sem cortes). Ele existe só para o `make learn` e
-    para os testes;
-  - `build/sc` passa a ser o binário entregue;
-  - o wasm continua `sc.wasm`.
-- Antes de cada célula o filho faz `fork` de si mesmo (§3.3). Se a célula
-  falha ou derruba o compilador, a cópia segue no lugar dele, sem repasse.
-  Timeout ou Ctrl-C matam o filho. O REPL lança outro e faz o repasse
-  (§3.6).
-- Lançar o filho custa 4,5 ms e 11 MB, e matá-lo libera de verdade a
-  memória.
-- **Ligação do engine ao Rust, sem `ld -r`** (R7, que perderia o ICF):
-  - o `link.py --native` ganha o modo `--emit-link`, que grava a lista dos
-    objetos e arquivos já cortados, os stubs e o `wrap.rsp`;
-  - o `build.rs` passa a lista ao link do Rust (`cargo:rustc-link-arg`),
-    com `-fuse-ld=lld`, `--gc-sections`, `--icf=safe` e `-lstdc++`;
-  - o `ld.lld` 19 está em `/usr/bin`.
-- **Teste do binário entregue:**
-  - o `make learn` dirige o `build/sc-engine`, que tem os mesmos objetos do
-    engine; a parte em Rust não tem código do LLVM;
-  - o `make test-native` roda o corpus também pelo `build/sc` (`sc -cc1`,
-    `sc ld` e a sessão pelo `sc --engine`), contra a mesma base nativa.
+  - today's C++-only executable becomes `build/sc-engine` (cut) and
+    `build/sc-engine-full` (with no cuts). It exists only for `make learn`
+    and for the tests;
+  - `build/sc` becomes the shipped binary;
+  - the wasm stays `sc.wasm`.
+- Before each cell the child calls `fork` on itself (§3.3). If the cell
+  fails or brings the compiler down, the copy takes its place, with no
+  replay. A timeout or Ctrl-C kills the child. The REPL launches another
+  one and replays (§3.6).
+- Launching the child costs 4.5 ms and 11 MB, and killing it really frees
+  the memory.
+- **Linking the engine into the Rust, without `ld -r`** (R7, which would
+  lose the ICF):
+  - `link.py --native` gains the `--emit-link` mode, which writes the list
+    of the objects and archives already cut, the stubs and `wrap.rsp`;
+  - `build.rs` passes the list to the Rust link (`cargo:rustc-link-arg`),
+    with `-fuse-ld=lld`, `--gc-sections`, `--icf=safe` and `-lstdc++`;
+  - `ld.lld` 19 is in `/usr/bin`.
+- **Testing the shipped binary:**
+  - `make learn` drives `build/sc-engine`, which has the same objects as
+    the engine. The Rust part has no LLVM code;
+  - `make test-native` also runs the corpus through `build/sc` (`sc -cc1`,
+    `sc ld` and the session through `sc --engine`), against the same
+    native baseline.
 
-**Bindgen.** O crate `sc-proto` (`proto/`) roda o bindgen sobre `engine/sc.h` no build:
+**Bindgen.** The `sc-proto` crate (`proto/`) runs bindgen on `engine/sc.h` during the build:
 
-- Gera os tipos do protocolo: o enum de status, os códigos de mensagem e o
-  cabeçalho de cada mensagem.
-- O REPL nativo e o host Rust de testes do `sc.wasm` usam esses mesmos tipos.
-- Nenhuma constante nem layout é mantido à mão.
-- As declarações das funções também saem dele. Com a feature `engine`, o
-  crate liga o engine e dá uma API segura sobre elas (`Session`, `main`;
-  NOTES.md §23). As chamadas só acontecem no processo filho.
+- It generates the protocol's types. These are the status enum, the
+  message codes and the header of each message.
+- The native REPL and the Rust test host of `sc.wasm` use these same types.
+- Nobody keeps a constant or a layout by hand.
+- The function declarations come from it too. With the `engine` feature,
+  the crate links the engine and gives a safe API over them (`Session`,
+  `main`; NOTES.md §23). The calls happen only in the child process.
 
-### 1.2 Wasm: `sc.wasm` vira reactor que também exporta `_start` (R8, R9, T-B2)
+### 1.2 Wasm: `sc.wasm` becomes a reactor that also exports `_start` (R8, R9, T-B2)
 
-- **Reactor e comando no mesmo módulo.** `-mexec-model=reactor`, mais um
-  `_start` nosso que chama `__main_void`. Um experimento confirmou que o
-  módulo roda como comando e como biblioteca (exports).
-- **Testes inalterados.** O corpus (`wasmtime run sc.cwasm`), o `link.py
-  --learn` e as bases **não mudam**.
-- **Exports:** a lista atual está no §5.2, passo 3.
-- **Navegador:** o engine roda num Web Worker. Recuperar uma falha é
-  `terminate` + worker novo + repasse.
-- **Pilha:** os 16 "call stack exhausted" do corpus vêm do limite de pilha
-  wasm do motor. No navegador esse limite (~1 MB no V8) é fixo, e esses casos
-  continuam falhando lá. Isso fica documentado.
+- **Reactor and command in the same module.** `-mexec-model=reactor`, plus
+  our own `_start` that calls `__main_void`. An experiment confirmed that
+  the module runs as a command and as a library (exports).
+- **Tests unchanged.** The corpus (`wasmtime run sc.cwasm`), `link.py
+  --learn` and the baselines **do not change**.
+- **Exports:** the current list is in §5.2, step 3.
+- **Browser:** the engine runs in a Web Worker. Recovering from a failure
+  means `terminate`, a new worker and a replay.
+- **Stack:** the corpus's 16 "call stack exhausted" come from the engine's
+  wasm stack limit. In the browser this limit (~1 MB in V8) is fixed, and
+  these cases still fail there. The docs record this.
 
-### 1.3 Compilador com estado ou sem estado: decidido por um spike (T-M9)
+### 1.3 Compiler with or without state: decided by a spike (T-M9)
 
-O revisor de testes mediu a alternativa sem estado:
+The test reviewer measured the stateless alternative:
 
-- **`import std`.** Uma célula com `import std;` + vector/cout compila em
-  0,12 s e 53 MB no nativo. O §17 dá 0,14 s no V8.
-- **PCH encadeado** (`-fpch-codegen`):
-  - a célula 1, com headers e definições, leva 2,3 s e gera um PCH de 17 MB;
-  - cada célula seguinte leva 0,04 s de PCH mais 0,09 s de objeto;
-  - defeito achado: a célula 2 reemitiu o inicializador dinâmico da célula 1.
+- **`import std`.** A cell with `import std;` plus vector/cout compiles in
+  0.12 s and 53 MB natively. §17 gives 0.14 s in V8.
+- **Chained PCH** (`-fpch-codegen`):
+  - cell 1, with headers and definitions, takes 2.3 s and produces a 17 MB
+    PCH;
+  - each later cell takes 0.04 s of PCH plus 0.09 s of object;
+  - defect found. Cell 2 emitted the dynamic initializer of cell 1 again.
 
-Sem estado não há sessão viva, nem `CleanUpPTU`, nem repasse, nem crash
-recovery. Cada célula é um processo ou instância curto. Por isso a fase 0
-(§5) implementa as duas candidatas no engine sem cortes e decide com dados:
+Without state there is no live session, no `CleanUpPTU`, no replay and no
+crash recovery. Each cell is a short process or instance. For this reason
+phase 0 (§5) implements both candidates in the engine with no cuts and
+decides with data:
 
-- **A. Sessão** (`IncrementalParser`, §3): o caminho principal deste plano.
-- **B. Sem estado:** cada célula é compilada com um prefixo vindo das células
-  anteriores, por PCH encadeado. As restrições do §3.4 valem para as duas.
+- **A. Session** (`IncrementalParser`, §3): the main path of this plan.
+- **B. Stateless:** each cell compiles with a prefix that comes from the
+  earlier cells, through chained PCH. The restrictions of §3.4 hold for
+  both.
 
-**Decidido na fase 0 (2026-10-13): A.** Ver NOTES.md §22.
+**Decided in phase 0 (2026-10-13): A.** See NOTES.md §22.
 
-### 1.4 Runtime nativo do código do aluno: wasmtime mínimo com JIT
+### 1.4 Native runtime for the student's code: minimal wasmtime with JIT
 
-Medido em 2026-10-01: x86-64, LTO, `opt-level=z`, strip, com um laço C de
-3·10⁸ iterações compilado em `-O0`.
+Measured on 2026-10-01: x86-64, LTO, `opt-level=z`, strip, with a C loop of
+3·10⁸ iterations compiled at `-O0`.
 
-| runtime | exceções | tamanho | tempo |
+| runtime | exceptions | size | time |
 | --- | :---: | ---: | ---: |
-| **wasmtime 48, Cranelift x86, features mínimas + exceções + WASI p1** | sim | **5,7 MB** | **0,81 s** |
-| wasmtime 48, só Pulley (interpretador) + exceções + WASI p1 | sim | 4,9 MB | 18 s (29 s com `-Oz`) |
-| wasmi 2.0 + WASI | **não** | 2,6 MB | 4,1 s |
-| WAMR, interpretador rápido | **não** | 0,30 MB | 7,5 s |
-| WAMR, interpretador clássico + exceções (legadas) | só legadas | 0,29 MB | 15 s |
+| **wasmtime 48, Cranelift x86, minimal features + exceptions + WASI p1** | yes | **5.7 MB** | **0.81 s** |
+| wasmtime 48, Pulley only (interpreter) + exceptions + WASI p1 | yes | 4.9 MB | 18 s (29 s with `-Oz`) |
+| wasmi 2.0 + WASI | **no** | 2.6 MB | 4.1 s |
+| WAMR, fast interpreter | **no** | 0.30 MB | 7.5 s |
+| WAMR, classic interpreter + exceptions (legacy) | legacy only | 0.29 MB | 15 s |
 
-**Por que os outros ficam de fora:**
+**Why the others stay out:**
 
-- **Pulley.** As células são geradas em tempo de execução, então o
-  Cranelift continua no binário. Sem o backend x86, que exige um patch no
-  Cargo, o binário diminui só 0,8 MB e fica 20 vezes mais lento.
-- **wasmi.** Rejeita a proposta de exceções (`module/import.rs:86`).
-- **WAMR.** Não compartilha entre instâncias uma memória, uma tabela e um
-  `__stack_pointer` criados pelo host:
-  - a wasm-c-api ignora memória e tabela importadas;
-  - as globais são copiadas por valor;
-  - o `call_indirect` sempre chama a própria instância;
-  - exceções só existem no interpretador clássico, na forma legada, e não
-    atravessam módulos;
-  - fechar isso dá de 1,5 a 2,5 meses de fork.
+- **Pulley.** The cells are generated at run time, so Cranelift stays in
+  the binary. Without the x86 backend, which needs a patch in Cargo, the
+  binary shrinks by only 0.8 MB and becomes 20 times slower.
+- **wasmi.** It rejects the exceptions proposal (`module/import.rs:86`).
+- **WAMR.** It does not share across instances a memory, a table and a
+  `__stack_pointer` that the host creates:
+  - the wasm-c-api ignores an imported memory and table;
+  - globals are copied by value;
+  - `call_indirect` always calls its own instance;
+  - exceptions exist only in the classic interpreter, in the legacy form,
+    and do not cross modules;
+  - closing these gaps costs 1.5 to 2.5 months of a fork.
 
-**Configuração do loader:**
+**Configuration of the loader:**
 
-- **Features:** `default-features = false` e `["runtime", "std",
-  "cranelift", "gc", "gc-drc"]`. O `gc` é exigido por
-  `Config::wasm_exceptions`.
-- **WASI:** `wasmtime-wasi` só com `p1`.
-- **Interrupção:** `epoch_interruption`, para interromper um laço infinito
-  do aluno sem custo por instrução.
-- O protótipo `scload` tinha 26,7 MB, com as features padrão do wasmtime
-  (27,5 MB no início da fase 6a). O conjunto final está no §5.3. O `sc` final ≈ 24,5 MB do engine + 5,7 MB do runtime. Medido na fase 6a, o `scload` com o perfil final tem 8,1 MB, e não 5,7 MB (NOTES.md §49).
-- O `sc` acrescenta o `sc-proto`, o `bpaf`, o `rustyline`, o `dirs` e a
-  `libc` (0,9 MB, NOTES.md).
+- **Features:** `default-features = false` and `["runtime", "std",
+  "cranelift", "gc", "gc-drc"]`. `Config::wasm_exceptions` requires `gc`.
+- **WASI:** `wasmtime-wasi` with `p1` only.
+- **Interruption:** `epoch_interruption`, to stop an infinite loop of the
+  student with no cost per instruction.
+- The `scload` prototype was 26.7 MB, with wasmtime's default features
+  (27.5 MB at the start of phase 6a). §5.3 has the final set. The final `sc` ≈ 24.5 MB of engine + 5.7 MB of runtime. Measured in phase 6a, `scload` with the final profile is 8.1 MB, not 5.7 MB (NOTES.md §49).
+- `sc` adds `sc-proto`, `bpaf`, `rustyline`, `dirs` and `libc` (0.9 MB,
+  NOTES.md).
 
-### 1.5 Exceções e `setjmp`/`longjmp`
+### 1.5 Exceptions and `setjmp`/`longjmp`
 
-Hoje o C++ é `-fno-exceptions`. A libc++ do wasi-sdk 29 vem sem exceções, e
-os cortes tiraram o `CGException` e o EH do `ItaniumCXXABI` (NOTES.md §12). O
-`setjmp.h` do WASI dá `#error` sem a proposta de exceções, e o `std.cppm`
-tira o `<csetjmp>` (§17). As duas coisas usam o mesmo mecanismo, então
-entram juntas.
+Today C++ is `-fno-exceptions`. The libc++ of wasi-sdk 29 comes without
+exceptions, and the cuts removed `CGException` and the EH of
+`ItaniumCXXABI` (NOTES.md §12). WASI's `setjmp.h` gives `#error` without
+the exceptions proposal, and `std.cppm` drops `<csetjmp>` (§17). Both
+features use the same mechanism, so they come in together.
 
-- **Forma:** a padronizada (exnref, `try_table`). Os navegadores atuais e o
-  wasmtime 48 a suportam.
-  - O LLVM do pin ainda gera a forma legada por padrão
+- **Form:** the standard one (exnref, `try_table`). Current browsers and
+  wasmtime 48 support it.
+  - The pin's LLVM still generates the legacy form by default
     (`wasm-use-legacy-eh`, `cl::init(true)`, `WebAssemblyTargetMachine.cpp:80`).
-  - O engine liga a forma padronizada ao iniciar. O sc não lê `-mllvm`, então
-    o valor é posto direto no `cl::opt` registrado.
-  - Confirmado na fase E: o wasmtime 48 recusa a forma legada ("legacy_exceptions
-    feature required for try instruction"), e a padronizada roda nele e no
-    node 24 (V8). O valor vai no `FrontendOptions::LLVMArgs`, que o `checkinv`
-    compara, e o `scSetLLVMArgs` o põe no `cl::opt` sem o parser.
-- **Runtime C/C++:**
-  - feito: `make sysroot` monta o `build/sysroot` (NOTES.md §20). A
-    libunwind vai dentro da libc++abi (as duas se chamam no wasm), e o
-    `SILENT_TERMINATE` fica desligado, para o aluno ver o tipo e o `what()`;
-  - a libc++, a libc++abi e a libunwind são construídas a partir do
-    `build/src` (o pin) com `-fwasm-exceptions -mllvm
-    -wasm-use-legacy-eh=false`, para `wasm32-wasip1`, em `.a` e `.so`;
-  - a libc do wasi-sdk 29 continua, inclusive a `libsetjmp`, que já vem no
-    sysroot (`libsetjmp.a`, `libsetjmp.so`);
-  - o `std.pcm` é gerado de novo, agora com `<csetjmp>`;
-  - novo alvo no Makefile: `build/runtimes`, com a receita registrada no
-    NOTES.md.
+  - The engine turns on the standard form at start-up. sc does not read
+    `-mllvm`, so the engine puts the value directly into the registered
+    `cl::opt`.
+  - Confirmed in phase E. Wasmtime 48 refuses the legacy form
+    ("legacy_exceptions feature required for try instruction"), and the
+    standard form runs on it and on node 24 (V8). The value goes in
+    `FrontendOptions::LLVMArgs`, which `checkinv` compares, and
+    `scSetLLVMArgs` puts it into the `cl::opt` without the parser.
+- **C/C++ runtime:**
+  - done: `make sysroot` builds `build/sysroot` (NOTES.md §20). libunwind
+    goes inside libc++abi (the two call each other in wasm), and
+    `SILENT_TERMINATE` stays off, so the student sees the type and the
+    `what()`;
+  - libc++, libc++abi and libunwind are built from `build/src` (the pin)
+    with `-fwasm-exceptions -mllvm
+    -wasm-use-legacy-eh=false`, for `wasm32-wasip1`, as `.a` and `.so`;
+  - the libc of wasi-sdk 29 stays, including `libsetjmp`, which the
+    sysroot already ships (`libsetjmp.a`, `libsetjmp.so`);
+  - `std.pcm` is generated again, now with `<csetjmp>`;
+  - a new target in the Makefile, `build/runtimes`, with the recipe
+    recorded in NOTES.md.
 - **`sc_inv.cpp`:**
   - C++: `-fcxx-exceptions -fexceptions -exception-model=wasm`;
-  - C: `-mllvm -wasm-enable-sjlj` equivalente, posto direto no `cl::opt`;
-  - os dois com `+exception-handling` nas target features;
-  - o `checkinv` ganha as combinações com exceções e confere contra o driver
-    com `-fwasm-exceptions`.
-- **Ligação e loader:**
-  - o `.so` de cada célula importa a tag `__cpp_exception`, e o `__c_longjmp`
-    para `setjmp`;
-  - o loader cria cada tag uma vez e a passa a todos os módulos, como faz com
-    a memória e a tabela. Na prática, a `libc++abi.so` define e exporta o
-    `__cpp_exception`, e a `libsetjmp.so` importa o `__c_longjmp`, que o
-    loader cria;
-  - **exceção não capturada:** no wasm não há fase de busca, então a
-    libc++abi nunca chama o `std::terminate`, e a exceção sai para o host
-    ("thrown Wasm exception"). O host faz o que a libc++abi faz no nativo:
-    lê o ponteiro da exceção (campo 0 da exnref com a tag
-    `__cpp_exception`), chama `__cxa_begin_catch` e `std::terminate`, que
-    imprime "terminating due to uncaught exception of type …: …" e aborta.
-    Feito no loader; o host JS faz o mesmo com `WebAssembly.Exception.getArg`;
-  - uma exceção lançada na libc++abi e pega numa célula atravessa os módulos
-    pela tag compartilhada.
+  - C: the equivalent of `-mllvm -wasm-enable-sjlj`, put directly into the
+    `cl::opt`;
+  - both with `+exception-handling` in the target features;
+  - `checkinv` gains the combinations with exceptions and checks them
+    against the driver with `-fwasm-exceptions`.
+- **Linking and the loader:**
+  - the `.so` of each cell imports the `__cpp_exception` tag, and
+    `__c_longjmp` for `setjmp`;
+  - the loader creates each tag once and passes it to every module, as it
+    does with the memory and the table. In practice, `libc++abi.so`
+    defines and exports `__cpp_exception`, and `libsetjmp.so` imports
+    `__c_longjmp`, which the loader creates;
+  - **uncaught exception:** wasm has no search phase, so libc++abi never
+    calls `std::terminate`, and the exception goes out to the host
+    ("thrown Wasm exception"). The host does what libc++abi does natively.
+    It reads the exception's pointer (field 0 of the exnref with the
+    `__cpp_exception` tag), calls `__cxa_begin_catch` and
+    `std::terminate`, which prints "terminating due to uncaught exception
+    of type …: …" and aborts. Done in the loader. The JS host does the
+    same with `WebAssembly.Exception.getArg`;
+  - an exception thrown in libc++abi and caught in a cell crosses the
+    modules through the shared tag.
 - **Corpus:**
-  - programas de aluno com exceções: `throw`/`catch` por valor e por
-    referência, hierarquia, `std::exception` da biblioteca
-    (`std::vector::at`, `std::stoi`), RAII durante o desenrolar, `noexcept`
-    com `std::terminate`, exceção que cruza células do REPL;
-  - em C, `setjmp`/`longjmp`, inclusive entre células;
-  - os testes do clang que hoje dão "exceptions disabled" passam a compilar.
-    A base muda, e cada mudança vai para o `IGNORE` com motivo, ou para a base
-    nova, como mudança intencional;
-  - depois, o `make learn` traz de volta o código de EH. O tamanho é medido,
-    e o orçamento do §5.1 é revisto só para esta fase, porque exceção é
-    requisito.
+  - student programs with exceptions: `throw`/`catch` by value and by
+    reference, a hierarchy, `std::exception` from the library
+    (`std::vector::at`, `std::stoi`), RAII during unwinding, `noexcept`
+    with `std::terminate`, an exception that crosses REPL cells;
+  - in C, `setjmp`/`longjmp`, including across cells;
+  - the clang tests that today give "exceptions disabled" now compile. The
+    baseline changes, and each change goes to `IGNORE` with a reason, or
+    to the new baseline, as an intended change;
+  - afterwards, `make learn` brings back the EH code. We measure the size,
+    and we revise the budget of §5.1 only for this phase, because
+    exceptions are a requirement.
 
-### 1.6 Padrões mais novos
+### 1.6 Newer standards
 
-- **O padrão:**
-  - C passa de gnu17 para **gnu23**, o padrão C mais novo publicado. O
-    `c2y` do pin é rascunho.
-  - C++ passa de gnu++20 para **gnu++26** (`LangStandards.def:188`).
-  - A libc++ do pin tem só parte do C++26, então o que falta é medido e
-    registrado.
-- **No REPL e para o aluno:** o padrão é fixo, sem opção.
-- **No `sc_inv`:**
-  - passa a aceitar `-std=`, só para o corpus;
-  - o padrão default muda;
-  - o `checkinv` confere as combinações novas contra o driver com
-    `-std=gnu23` e `-std=gnu++26`.
-- **Cobertura dos cortes:**
-  - o C23 rejeita as definições K&R e o `int` implícito, comuns nos testes
-    gcc torture e na c-testsuite. No padrão novo, esses testes param no
-    frontend e deixam de cobrir o backend;
-  - por isso as fatias desses testes continuam com `-std=gnu17`. Os
-    programas de aluno, o `test/mod` e os testes do clang usam o padrão
-    novo;
-  - testes C23 e C++23/26 entram em `test/samples` e `test/cxx`: `nullptr`,
-    `constexpr` e `typeof` em C; `std::print`, `std::expected`, deducing this
-    e `std::ranges::to` em C++;
-  - o `std.pcm` é gerado de novo com gnu++26.
-- **Junto da fase E:** as bases e os cortes mudam de uma vez (§5).
+- **The standard:**
+  - C moves from gnu17 to **gnu23**, the newest published C standard. The
+    pin's `c2y` is a draft.
+  - C++ moves from gnu++20 to **gnu++26** (`LangStandards.def:188`).
+  - The pin's libc++ has only part of C++26, so we measure and record what
+    is missing.
+- **In the REPL and for the student:** the standard is fixed, with no
+  option.
+- **In `sc_inv`:**
+  - it now accepts `-std=`, only for the corpus;
+  - the default standard changes;
+  - `checkinv` checks the new combinations against the driver with
+    `-std=gnu23` and `-std=gnu++26`.
+- **Coverage of the cuts:**
+  - C23 rejects K&R definitions and implicit `int`, which are common in
+    the gcc torture tests and in c-testsuite. Under the new standard, these
+    tests stop in the frontend and no longer cover the backend;
+  - for this reason the slices of these tests stay with `-std=gnu17`. The
+    student programs, `test/mod` and the clang tests use the new standard;
+  - C23 and C++23/26 tests go into `test/samples` and `test/cxx`.
+    `nullptr`, `constexpr` and `typeof` in C, and `std::print`,
+    `std::expected`, deducing this and `std::ranges::to` in C++;
+  - `std.pcm` is generated again with gnu++26.
+- **Together with phase E:** the baselines and the cuts change at once
+  (§5).
 
-## 2. A API (`engine/sc.h`)
+## 2. The API (`engine/sc.h`)
 
-Só escalares e ponteiros, para que a assinatura seja a mesma em wasm32 e
-x86-64. O resultado pertence ao engine e vale até a próxima chamada (R13).
-Não há `sc_buf` alocado pelo host.
+Only scalars and pointers, so that the signature is the same in wasm32 and
+x86-64. The engine owns the result, and it is valid until the next call
+(R13). There is no `sc_buf` allocated by the host.
 
 ```c
 enum sc_status {
-  SC_OK = 0,    /* pronto */
-  SC_ERROR = 1, /* erro no código do aluno; a sessão volta ao estado anterior à célula */
-  SC_LOST = 2,  /* erro fatal, falha de link depois do codegen ou undo:
-                   a sessão deve ser recriada e repassada */
+  SC_OK = 0,    /* done */
+  SC_ERROR = 1, /* error in the student's code; the session goes back to before the cell */
+  SC_LOST = 2,  /* fatal error, a link failure after codegen, or undo:
+                   the session has to be made again and replayed */
 };
-enum sc_part { SC_DIAGS = 0, SC_SO = 1, SC_SYMS = 2 /* exports do .so, para o repasse */ };
-enum sc_cell_mode { SC_CELL_SO = 0, SC_CELL_REPLAY = 1 /* só IR, para o repasse */ };
+enum sc_part { SC_DIAGS = 0, SC_SO = 1, SC_SYMS = 2 /* exports of the .so, for the replay */ };
+enum sc_cell_mode { SC_CELL_SO = 0, SC_CELL_REPLAY = 1 /* IR only, for the replay */ };
 
 typedef struct sc_session sc_session;
-/* flags de sessão (§3.5), -x c|c++, depois de "--" os argumentos do wasm-ld;
-   *out sempre recebe a sessão, também em SC_ERROR (para ler SC_DIAGS) */
+/* session flags (§3.5), -x c|c++, and after "--" the arguments of wasm-ld;
+   *out always gets the session, in SC_ERROR too (to read SC_DIAGS) */
 int sc_session_new(int argc, const char *const *argv, sc_session **out);
 void sc_session_free(sc_session *s);
 int sc_session_cell(sc_session *s, const char *src, unsigned len, int mode);
 int sc_session_undo(sc_session *s);                             /* SC_LOST (§3.3) */
 const unsigned char *sc_result_ptr(sc_session *s, int part);
 unsigned sc_result_len(sc_session *s, int part);
-int sc_main(int argc, const char **argv);                       /* o engine de hoje */
+int sc_main(int argc, const char **argv);                       /* the engine of today */
 
-/* protocolo do filho nativo: cabeçalho de cada mensagem nos pipes */
+/* protocol of the native child: the header of each message on the pipes */
 enum sc_msg { SC_MSG_NEW = 1, SC_MSG_CELL = 2, SC_MSG_UNDO = 3, SC_MSG_REPLY = 4 };
 struct sc_msg_header { unsigned kind, status, len[3]; };
 ```
 
-Feito na fase 1 (2026-10-13; NOTES.md §23). Em relação ao rascunho:
-`sc_session_new` devolve o status, `sc_session_free` existe, o `codegen` virou
-`mode`, e o engine recebe os argumentos do link em vez de deduzir onde estão
-a libc e os builtins.
+Done in phase 1 (2026-10-13; NOTES.md §23). Compared with the draft,
+`sc_session_new` returns the status, `sc_session_free` exists, `codegen`
+became `mode`, and the engine receives the link's arguments instead of
+working out where the libc and the builtins are.
 
-- **Entradas do engine:**
-  - o `main` dos executáveis só de C++ é `engine/sc_entry.cpp`, que chama
-    `sc_main` (`-cc1`/`ld`);
-  - o `build/sc-engine-full` (fase 2) é Rust (`proto/src/bin/sc-engine.rs`):
-    `-cc1`/`ld` vão para o `sc_main`, `session` é o filho e `repl` é o
-    teste do lado do pai;
-  - no wasm, o `_start` chama o mesmo `sc_main`.
-- **O protocolo** (comentário do `sc.h`): o cabeçalho na ordem de bytes do
-  host e as três partes. `SC_MSG_NEW` leva os argumentos separados por NUL,
-  `SC_MSG_CELL` a fonte (o modo vai em `status`), e cada pedido recebe um
-  `SC_MSG_REPLY` com as partes na ordem do `enum sc_part`. O filho acaba no
-  fim da entrada e escreve o protocolo numa cópia do stdout; o fd 1 passa a
-  ser o stderr, para que nada do engine quebre uma mensagem.
-- **Diagnósticos:**
-  - a sessão usa um `TextDiagnosticPrinter` sobre uma string;
-  - o que vai direto para o fd 2 (`sc_cut_called`, "LLVM ERROR", lld em
-    erro fatal) o pai lê do stderr do filho (nativo) ou do stderr WASI (wasm);
-  - os nomes `input_line_N` e a nota "In file included from `<<< inputs >>>`"
-    viram o nome que o REPL dá à célula, por um mapeamento no printer (C-M1).
+- **Entry points of the engine:**
+  - the `main` of the C++-only executables is `engine/sc_entry.cpp`, which
+    calls `sc_main` (`-cc1`/`ld`);
+  - `build/sc-engine-full` (phase 2) is Rust (`proto/src/bin/sc-engine.rs`).
+    `-cc1`/`ld` go to `sc_main`, `session` is the child and `repl` is the
+    test of the parent's side;
+  - in wasm, `_start` calls the same `sc_main`.
+- **The protocol** (comment in `sc.h`): the header in the host's byte order
+  and the three parts. `SC_MSG_NEW` carries the arguments separated by NUL,
+  `SC_MSG_CELL` carries the source (the mode goes in `status`), and each
+  request gets an `SC_MSG_REPLY` with the parts in the order of
+  `enum sc_part`. The child ends at the end of its input and writes the
+  protocol to a copy of stdout. Fd 1 becomes stderr, so that nothing from
+  the engine breaks a message.
+- **Diagnostics:**
+  - the session uses a `TextDiagnosticPrinter` over a string;
+  - the parent reads what goes straight to fd 2 (`sc_cut_called`, "LLVM
+    ERROR", lld on a fatal error) from the child's stderr (native) or from
+    the WASI stderr (wasm);
+  - the names `input_line_N` and the note "In file included from
+    `<<< inputs >>>`" become the name the REPL gives the cell, through a
+    mapping in the printer (C-M1).
 
-## 3. A sessão (candidata A)
+## 3. The session (candidate A)
 
-**Fase 2 (2026-10-14; NOTES.md §24).** O `split-` (`make test-split`)
-iguala o `pic-` em 1.941 dos 1.947 programas do corpus. Os 6 restantes são
-limites conhecidos (`KNOWN` no `test/split.py`). Para chegar lá, a sessão
-ganhou quatro correções (§3.8) e o loader, as referências para a frente.
-Os itens que faltavam foram fechados em 2026-10-17: o §3.4 (o aviso de não
-usado pelo §29 do NOTES.md; a redefinição, sem nota), as combinações
-incrementais no `checkinv` (§3.5) e o `return` no topo, por um patch no
-Sema (§3.7). O `#include` depois de uma
-célula que falhou foi resolvido pelo snapshot por `fork` (§3.3).
+**Phase 2 (2026-10-14; NOTES.md §24).** `split-` (`make test-split`)
+matches `pic-` in 1,941 of the corpus's 1,947 programs. The other 6 are
+known limits (`KNOWN` in `test/split.py`). To get there, the session
+gained four fixes (§3.8) and the loader gained forward references. The
+open items were closed on 2026-10-17. These were §3.4 (the unused warning
+through NOTES.md §29, and redefinition with no note), the incremental
+combinations in `checkinv` (§3.5), and a top-level `return`, through a
+patch in Sema (§3.7). The `fork` snapshot (§3.3) solved an `#include`
+after a cell that failed.
 
-### 3.1 Montagem (C-B3, C-m1, C-m3)
+### 3.1 Assembly (C-B3, C-m1, C-m3)
 
-- **Nada de `clangInterpreter` nem de `IncrementalAction`.** Para `EmitObj`,
-  o `IncrementalAction` embrulha um `EmitLLVMOnlyAction`. Ele chamaria o
-  `emitBackendOutput` com `Backend_EmitNothing`, que o `sc_backend.cpp`
-  rejeita.
+- **No `clangInterpreter` and no `IncrementalAction`.** For `EmitObj`,
+  `IncrementalAction` wraps an `EmitLLVMOnlyAction`. That would call
+  `emitBackendOutput` with `Backend_EmitNothing`, which `sc_backend.cpp`
+  rejects.
 - **`engine/sc_session.cpp`:**
-  - um `ASTFrontendAction` mínimo, com `TU_Incremental`, `EndSourceFile`
-    vazio e `CurContext = nullptr` depois do `ExecuteAction`;
-  - o consumer é um `CreateLLVMCodeGen` puro;
-  - um arquivo principal vazio, `<<< inputs >>>`, remapeado;
-  - depois do `ParseAST` inicial, o primeiro módulo é guardado vivo (o
-    CodeGen guarda referências a ele) e entra um `StartModule`.
-- **Por célula, o núcleo do `IncrementalParser` copiado** (`Parse`,
+  - a minimal `ASTFrontendAction`, with `TU_Incremental`, an empty
+    `EndSourceFile` and `CurContext = nullptr` after `ExecuteAction`;
+  - the consumer is a plain `CreateLLVMCodeGen`;
+  - an empty main file, `<<< inputs >>>`, remapped;
+  - after the initial `ParseAST`, the session keeps the first module alive
+    (CodeGen holds references to it) and calls `StartModule`.
+- **Per cell, the core of `IncrementalParser`, copied** (`Parse`,
   `ParseOrWrapTopLevelDecl`, `CleanUpPTU`):
-  - ~310 linhas com a ação;
-  - commit de origem no cabeçalho;
-  - conferido a cada troca de pin com `git diff` dos arquivos de origem. A
-    troca para 23.1.3 está pendente.
-- **Depois do parse:** `GenModule` (`ReleaseModule` + `StartModule`), o
-  pós-passo do §3.2 e `emitBackendOutput(..., Backend_EmitObj, ...)` direto
-  no módulo da PTU. Os passes por módulo e a checagem de data layout
-  funcionam assim.
-- **Link:** o `lld` lê e escreve arquivos (R5).
-  - A sessão tem um diretório temporário próprio: `/tmp` no nativo, um
-    preopen gravável no wasm, um FS em memória no shim WASI do navegador.
-  - O `.so` é lido de volta para o resultado.
-  - Se o `lldMain` devolve `canRunAgain=false`, o status é `SC_LOST`.
+  - ~310 lines with the action;
+  - the source commit in the header;
+  - checked at each pin change with `git diff` of the source files. The
+    switch to 23.1.3 is pending.
+- **After the parse:** `GenModule` (`ReleaseModule` + `StartModule`), the
+  post-pass of §3.2 and `emitBackendOutput(..., Backend_EmitObj, ...)`
+  directly on the PTU's module. The per-module passes and the data layout
+  check work this way.
+- **Link:** `lld` reads and writes files (R5).
+  - The session has its own temporary directory. It is `/tmp` natively, a
+    writable preopen in wasm, and an in-memory FS in the browser's WASI
+    shim.
+  - The session reads the `.so` back into the result.
+  - If `lldMain` returns `canRunAgain=false`, the status is `SC_LOST`.
 
-### 3.2 Estado interno duplicado em cada célula (C-B1, bloqueador da versão 1)
+### 3.2 Internal state duplicated in each cell (C-B1, blocker of version 1)
 
-**O problema.** No modo incremental, o CodeGen reemite em toda PTU as
-declarações com ligação interna: `static`, namespace anônimo e `static`
-local de função `static`. Cada `.so` ganha uma cópia própria. Confirmado no
-`clang-repl-17`: `static int cnt` incrementado numa célula aparece como 0 na
-seguinte.
+**The problem.** In incremental mode, CodeGen emits again in every PTU the
+declarations with internal linkage. These are `static`, the anonymous
+namespace, and a local `static` of a `static` function. Each `.so` gets
+its own copy. Confirmed in `clang-repl-17`. A `static int cnt` incremented
+in one cell shows up as 0 in the next.
 
-**A correção** é um pós-passo de IR no engine, sem patch:
+**The fix** is an IR post-pass in the engine, with no patch:
 
-1. Na primeira vez que uma global interna ligada a uma declaração aparece
-   (`CodeGenerator::GetDeclForMangledName`), ela é promovida a externa com
-   visibilidade default, sob um nome único da sessão.
-2. A sessão guarda o conjunto dos nomes promovidos. Nos módulos seguintes,
-   uma cópia reemitida vira declaração (`deleteBody`, sem inicializador).
-3. Continuam internos `__cxx_global_var_init*`, `__stmts__*`,
-   `_GLOBAL__sub_I_*` e `.str*`.
+1. The first time an internal global tied to a declaration appears
+   (`CodeGenerator::GetDeclForMangledName`), the post-pass promotes it to
+   external with default visibility, under a name unique to the session.
+2. The session keeps the set of promoted names. In later modules, a copy
+   emitted again becomes a declaration (`deleteBody`, no initializer).
+3. `__cxx_global_var_init*`, `__stmts__*`, `_GLOBAL__sub_I_*` and `.str*`
+   stay internal.
 
-Testes: os casos `cnt`, `nx` (`static` local de função `static`) e `an`
-(namespace anônimo), em C e C++, no `repl-`.
+Tests: the cases `cnt`, `nx` (a local `static` of a `static` function) and
+`an` (anonymous namespace), in C and C++, in `repl-`.
 
-### 3.3 Célula com erro (C-B2, C-M4)
+### 3.3 A cell with an error (C-B2, C-M4)
 
-- **O problema.** O CodeGen só para em erro *irrecuperável*. As declarações
-  vistas antes do erro vazam para o módulo corrente.
-- **Ao falhar:**
-  1. `Consumer->HandleTranslationUnit` (vê o erro, faz `clear` e `M.reset`);
+- **The problem.** CodeGen only stops on an *unrecoverable* error. The
+  declarations seen before the error leak into the current module.
+- **On failure:**
+  1. `Consumer->HandleTranslationUnit` (it sees the error, calls `clear`
+     and `M.reset`);
   2. `StartModule`;
-  3. só então `CleanUpPTU` e `Diags.Reset`.
+  3. only then `CleanUpPTU` and `Diags.Reset`.
 
   Status `SC_ERROR`.
-- **Isso não basta** (fase 2). O `CleanUpPTU` deixa restos de cabeçalhos
-  lidos pela célula que falhou:
-  - as guardas de inclusão continuam definidas (o `#include` seguinte não
-    lê nada);
-  - o `Sema` guarda o `namespace std` da célula;
-  - o `operator new` implícito e enumeradores continuam no lookup.
+- **This is not enough** (phase 2). `CleanUpPTU` leaves remains of the
+  headers that the failed cell read:
+  - the include guards stay defined (the next `#include` reads nothing);
+  - `Sema` keeps the cell's `namespace std`;
+  - the implicit `operator new` and enumerators stay in lookup.
 
-  Tapar cache por cache não termina. **Decidido (2026-10-14): snapshot por
-  `fork`.** No `serve` (`proto/src/engine.rs`), antes de cada célula
-  `SC_CELL_SO`, o filho faz `fork`. A cópia espera num pipe. Se a célula é
-  aceita, a cópia acaba. Se falha, o original passa a resposta à cópia e
-  acaba, e a cópia segue com a sessão de antes da célula. Se o original
-  morre na célula (crash), a cópia responde `SC_ERROR` com "the engine
-  crashed" e segue. O log do `Repl` guarda só as células aceitas. O pid do
-  filho muda a cada erro. No navegador o equivalente é copiar a memória do
-  wasm antes da célula (fase 6b).
-- **Desfazer depois do codegen** (link ou carga falhou, ou `undo` pedido
-  pelo aluno): o `CleanUpPTU` restaura só o lookup. O estado do CodeGen e as
-  especializações não voltam. Então `undo` de uma célula já gerada é
-  `SC_LOST` + repasse sem ela. O `undo` barato existe só para a célula que
-  falhou.
+  Plugging one cache after another never ends. **Decided (2026-10-14): a
+  `fork` snapshot.** In `serve` (`proto/src/engine.rs`), before each
+  `SC_CELL_SO` cell, the child calls `fork`. The copy waits on a pipe. If
+  the session accepts the cell, the copy ends. If the cell fails, the
+  original passes the reply to the copy and ends, and the copy goes on
+  with the session from before the cell. If the original dies in the cell
+  (crash), the copy replies `SC_ERROR` with "the engine crashed" and goes
+  on. The log of `Repl` keeps only the accepted cells. The child's pid
+  changes at each error. In the browser the equivalent is to copy the
+  wasm memory before the cell (phase 6b).
+- **Undo after codegen** (the link or the load failed, or the student
+  asked for `undo`): `CleanUpPTU` restores only lookup. The CodeGen state
+  and the specializations do not come back. So `undo` of a cell that was
+  already generated is `SC_LOST` plus a replay without it. The cheap
+  `undo` exists only for the cell that failed.
 
-### 3.4 Semântica do modo incremental (C-m2)
+### 3.4 Semantics of incremental mode (C-m2)
 
-**O que muda em relação a um TU normal:**
+**What changes compared with a normal TU:**
 
-- O fim de TU roda por célula, e as definições tentativas são completadas
-  por célula. Em C, `int x;` seguido de `int x = 5;` vira duas definições
-  fortes, e o loader esconde a primeira.
-- `UnusedFileScopedDecls` não é limpo: um `static` não usado é avisado de
-  novo em toda célula.
-- Uma expressão final sem `;` é aceita em silêncio, como um valor descartado.
+- The end of TU runs per cell, and the tentative definitions are completed
+  per cell. In C, `int x;` followed by `int x = 5;` becomes two strong
+  definitions, and the loader hides the first.
+- `UnusedFileScopedDecls` is not cleared. An unused `static` gets a
+  warning again in every cell.
+- A final expression without `;` is accepted silently, as a discarded
+  value.
 
-**Decisões para a v1:**
+**Decisions for v1:**
 
-- ~~O aviso de não usado só sai na célula que define a declaração. Isso é
-  filtrado no printer, pela PTU de origem.~~ Mudou no protótipo (NOTES.md
-  §29): a sessão esvazia o `UnusedFileScopedDecls` e o `UndefinedButUsed` a
-  cada célula, porque uma célula seguinte pode usar ou definir o nome; no
-  REPL o fim de célula não avisa nada. `sc FILE` e `sc check` usam
-  `-sc-one-cell` e avisam como o compilador de uma vez só.
-- ~~`warn_unused_expr` fica ignorado; uma expressão sem `;` dá "falta
-  `;`" e a impressão de valor fica fora da v1.~~ Mudou no protótipo
-  (NOTES.md §26): a expressão sem `;` mostra o valor, se for escalar, e
-  não é mais um valor descartado (`llvm/incremental-stmts.patch`), então
-  o `warn_unused_expr` voltou.
-- Fica para depois mostrar struct, union, array e enum pelo nome. O motor
-  passa a descrição do tipo (campos, offsets, tamanhos, enumeradores) e o
-  endereço de uma temporária, e o `sc` lê a memória do wasm, sem gerar
-  código na célula. Os tipos da biblioteca do C++ (`std::string`,
-  `vector`) ficam fora: o formato deles é da libc++.
+- ~~The unused warning only comes out in the cell that defines the
+  declaration. The printer filters this by the source PTU.~~ Changed in
+  the prototype (NOTES.md §29). The session empties
+  `UnusedFileScopedDecls` and `UndefinedButUsed` at each cell, because a
+  later cell can use or define the name. In the REPL the end of a cell
+  gives no warning. `sc FILE` and `sc check` use `-sc-one-cell` and warn
+  like the compiler on a whole file.
+- ~~`warn_unused_expr` stays ignored. An expression without `;` gives
+  "missing `;`", and printing the value stays out of v1.~~ Changed in the
+  prototype (NOTES.md §26). The expression without `;` shows the value,
+  if it is a scalar, and is no longer a discarded value
+  (`llvm/incremental-stmts.patch`), so `warn_unused_expr` came back.
+- Showing a struct, union, array and enum by name stays for later. The
+  engine passes the type's description (fields, offsets, sizes,
+  enumerators) and the address of a temporary, and `sc` reads the wasm
+  memory, without generating code in the cell. The C++ library's types
+  (`std::string`, `vector`) stay out, because libc++ owns their layout.
 
-**Redefinição (C-M3, T-M7).**
+**Redefinition (C-M3, T-M7).**
 
-- O clang rejeita a redefinição, e o upstream não a suporta (o clang-repl
-  usa `%undo`).
-- Remover do lookup não basta. O `DeferredDecls` do CodeGen é indexado pelo
-  nome mangled e emitiria o corpo antigo.
-- **Decidido: a v1 rejeita.** ~~A mensagem do clang ganha uma nota do sc que
-  sugere `undo` da célula anterior.~~ Decidido em 2026-10-17: sem nota. O
-  erro do clang já aponta a definição anterior ("previous definition is
-  here", com a `cell_N`), e o `:undo` só desfaz a última célula, então a
-  nota só serviria num caso. O `:undo` está no `:help`.
-- Aceitar a redefinição fica para depois. Seria um patch que apaga o nome de
-  `DeferredDecls` e `EmittedDeferredDecls` e a declaração do lookup.
+- Clang rejects the redefinition, and upstream does not support it
+  (clang-repl uses `%undo`).
+- Removing it from lookup is not enough. CodeGen's `DeferredDecls` is
+  indexed by the mangled name and would emit the old body.
+- **Decided: v1 rejects it.** ~~Clang's message gains a note from sc that
+  suggests `undo` of the earlier cell.~~ Decided on 2026-10-17: no note.
+  Clang's error already points to the earlier definition ("previous
+  definition is here", with the `cell_N`), and `:undo` only undoes the
+  last cell, so the note would help in one case only. `:undo` is in
+  `:help`.
+- Accepting the redefinition stays for later. It would be a patch that
+  erases the name from `DeferredDecls` and `EmittedDeferredDecls` and the
+  declaration from lookup.
 
-### 3.5 Flags da sessão (C-m1, T-m3)
+### 3.5 Session flags (C-m1, T-m3)
 
-- `scParseArgs` hoje exige um arquivo e deduz C/C++ pela extensão. A sessão
-  ganha `-x c`/`-x c++` explícito e dispensa o arquivo.
-- A sessão força:
+- `scParseArgs` today requires a file and works out C/C++ from the
+  extension. The session gains an explicit `-x c`/`-x c++` and needs no
+  file.
+- The session forces:
   - PIC;
   - `-fvisibility=default`;
   - `-fincremental-extensions`;
   - `DisableFree=false`;
   - `ClearASTBeforeBackend=false`.
-- O `checkinv` ganha as combinações incrementais: c, c++, pic e c++ pic
-  mod. O `TU_Incremental` não é flag de cc1, então fica fora do `checkinv`
-  e coberto pelos testes de sessão. Feito em 2026-10-17 (NOTES.md §44):
-  o `checkinv` roda os argumentos das 12 sessões (`build/repl/*.args`), e
-  o que a sessão força está em `scIncremental`.
+- `checkinv` gains the incremental combinations: c, c++, pic and c++ pic
+  mod. `TU_Incremental` is not a cc1 flag, so it stays out of `checkinv`,
+  and the session tests cover it. Done on 2026-10-17 (NOTES.md §44).
+  `checkinv` runs the arguments of the 12 sessions (`build/repl/*.args`),
+  and `scIncremental` holds what the session forces.
 
-### 3.6 Repasse depois de `SC_LOST` (C-B4, R6, T-M4)
+### 3.6 Replay after `SC_LOST` (C-B4, R6, T-M4)
 
-**Sem codegen não funciona.** O `moveLazyEmissionStates` carrega de um
-módulo para o outro:
+**It does not work without codegen.** `moveLazyEmissionStates` carries
+from one module to the next:
 - `DeferredDecls`;
 - `MangleCtx`;
 - `Manglings`;
-- as vtables adiadas.
+- the deferred vtables.
 
-Sem esse estado, funções `_LIBCPP_HIDE_FROM_ABI` usadas depois viram só
-declarações, e elas não são exportadas pelo `.so` antigo.
+Without this state, `_LIBCPP_HIDE_FROM_ABI` functions used later become
+only declarations, and the old `.so` does not export them.
 
-**O repasse:**
+**The replay:**
 
-1. O host guarda o log das células aceitas, menos as desfeitas. Uma célula
-   que falhou não deixa nada no filho (§3.3).
-2. Sessão nova. O log é reaplicado com codegen completo e com o pós-passo do
-   §3.2 (reconstrói os nomes promovidos), mas sem backend e sem link
-   (`codegen=1`, com o objeto descartado).
-3. Para cada célula aceita, o conjunto dos símbolos exportados (`SC_SYMS`)
-   tem que bater com o gravado na compilação original. Se não bater, o REPL
-   pede para reiniciar a sessão.
-4. O `CrashRecoveryContextCleanupRegistrar<Sema>` copiado é removido: no filho
-   não há recuperação dentro do processo.
+1. The host keeps the log of the accepted cells, minus the undone ones. A
+   cell that failed leaves nothing in the child (§3.3).
+2. A new session. The host applies the log again with full codegen and
+   with the post-pass of §3.2 (which rebuilds the promoted names), but
+   without the backend and without the link (`codegen=1`, with the object
+   thrown away).
+3. For each accepted cell, the set of exported symbols (`SC_SYMS`) has to
+   match the one recorded in the original compilation. If it does not
+   match, the REPL asks to restart the session.
+4. The copied `CrashRecoveryContextCleanupRegistrar<Sema>` is removed. The
+   child has no in-process recovery.
 
-### 3.7 Bugs do clang-repl e o pin 23.1.3
+### 3.7 Bugs of clang-repl and the 23.1.3 pin
 
-Decidido em 2026-09-30: o pin vai para `llvmorg-23.1.3` (previsto para
-~2026-10-06) **antes** do trabalho de REPL, num commit próprio. A versão
-traz três correções de que a sessão precisa:
+Decided on 2026-09-30: the pin moves to `llvmorg-23.1.3` (expected around
+~2026-10-06) **before** the REPL work, in a commit of its own. The release
+brings three fixes that the session needs:
 
-| bug | upstream | no plano |
+| bug | upstream | in the plan |
 | --- | --- | --- |
-| vtable duplicada entre PTUs | #185648, no 23.1.3 | vem com o pin |
-| `Undo` não desliga a PTU | #213235, no 23.1.3 | vem com o pin |
-| entrada que falha apaga declarações anteriores | #218149, no release/23.x depois do 23.1.2 | vem com o pin |
-| reemissão de `static` | aberto | §3.2 (pós-passo de IR, sem patch) |
-| entrada que falha vaza IR | #226252, aberto | §3.3 (snapshot por `fork`) |
-| `#include` depois de uma entrada que falhou ou de `undo` | aberto | resolvido: snapshot por `fork` (§3.3); o `undo` já era repasse |
-| `return` no topo derruba o compilador | aberto | resolvido: `llvm/repl-outside-function.patch` dá o erro no Sema (NOTES.md §43) |
-| `static` local e lambda num comando de topo derrubam o compilador (C++) | aberto | resolvido: `llvm/repl-outside-function.patch` (NOTES.md §45) |
-| entrada que termina dentro de um `{`, `(` ou `[`, ou num `_Pragma(`, trava o compilador | aberto | resolvido: `llvm/incremental-input-end.patch` (NOTES.md §46) |
-| cada entrada tem o seu namespace anônimo | aberto | resolvido: `llvm/incremental-anon-namespace.patch` (NOTES.md §46) |
-| `B::C::C() {}` com `C` privada de `B` dá erro de acesso | aberto | resolvido: `llvm/incremental-access.patch` (NOTES.md §46) |
+| vtable duplicated across PTUs | #185648, in 23.1.3 | comes with the pin |
+| `Undo` does not turn the PTU off | #213235, in 23.1.3 | comes with the pin |
+| an input that fails erases earlier declarations | #218149, in release/23.x after 23.1.2 | comes with the pin |
+| `static` emitted again | open | §3.2 (IR post-pass, no patch) |
+| an input that fails leaks IR | #226252, open | §3.3 (`fork` snapshot) |
+| `#include` after an input that failed or after `undo` | open | solved: `fork` snapshot (§3.3); `undo` was already a replay |
+| a top-level `return` brings the compiler down | open | solved: `llvm/repl-outside-function.patch` gives the error in Sema (NOTES.md §43) |
+| a local `static` and a lambda in a top-level statement bring the compiler down (C++) | open | solved: `llvm/repl-outside-function.patch` (NOTES.md §45) |
+| an input that ends inside a `{`, `(` or `[`, or in a `_Pragma(`, hangs the compiler | open | solved: `llvm/incremental-input-end.patch` (NOTES.md §46) |
+| each input has its own anonymous namespace | open | solved: `llvm/incremental-anon-namespace.patch` (NOTES.md §46) |
+| `B::C::C() {}` with `C` private to `B` gives an access error | open | solved: `llvm/incremental-access.patch` (NOTES.md §46) |
 
-A cópia do `IncrementalParser` (§3.1) é feita a partir do 23.1.3, não do pin
-atual.
+The copy of `IncrementalParser` (§3.1) comes from 23.1.3, not from the
+current pin.
 
-### 3.8 O que o `split-` achou (fase 2)
+### 3.8 What `split-` found (phase 2)
 
-- **C: o escopo de bloco vazava** (bug do upstream). No modo incremental,
-  `Sema::ActOnPopScope` não tira nome nenhum do `IdResolver` em C, de
-  nenhum escopo. A intenção é manter os nomes do topo entre as PTUs, mas
-  parâmetros, locais e rótulos também ficavam. `int f(int f)` dava
-  "redefinition", e um rótulo ou um nome repetido em blocos diferentes
-  dava erro. O `llvm/incremental-c-scopes.patch` limita isso ao escopo do
-  TU, o único sem pai.
-- **Função sem protótipo** (C antes do C23). A chamada declara a função
-  como variádica. No TU inteiro a definição troca essa declaração; na
-  célula seguinte não. O pós-passo dá à declaração o tipo LLVM da definição
-  de uma célula anterior.
-- **`static` usado antes da definição.** A declaração usa o nome promovido
-  (`f.sc`), e a célula que define a função a emite mesmo sem uso nela, como
-  o uso no TU inteiro faria.
-- **`inline` com `always_inline`** (`available_externally`). O backend
-  descarta essa definição, então ela não é exportada. Depois de cada célula
-  ela volta para os adiados do CodeGen, para ser emitida de novo onde outra
-  célula a usar.
-- **Os erros do backend** (`__builtin_return_address`) vão para os
-  diagnósticos da sessão, como no one-shot, e a célula dá `SC_LOST`.
-- **No loader**, uma célula pode usar o que uma célula posterior define,
-  como uma declaração antes da definição num arquivo:
-  - a entrada `GOT.mem` é preenchida quando o símbolo chega;
-  - uma função ainda sem definição ganha na hora uma entrada da tabela, que
-    a definição preenche (o mesmo endereço para todos os módulos);
-  - uma chamada direta passa por um stub em wasm com `call_indirect` para
-    essa entrada. Os trampolins do host acabavam com a pilha nativa numa
-    recursão entre células.
+- **C: the block scope leaked** (an upstream bug). In incremental mode,
+  `Sema::ActOnPopScope` removes no name from `IdResolver` in C, from any
+  scope. The intent is to keep the top-level names across PTUs, but
+  parameters, locals and labels stayed too. `int f(int f)` gave
+  "redefinition", and a label or a name repeated in different blocks gave
+  an error. `llvm/incremental-c-scopes.patch` limits this to the TU's
+  scope, the only one without a parent.
+- **A function without a prototype** (C before C23). The call declares the
+  function as variadic. In a whole TU the definition replaces that
+  declaration. In the next cell it does not. The post-pass gives the
+  declaration the LLVM type of the definition from an earlier cell.
+- **A `static` used before its definition.** The declaration uses the
+  promoted name (`f.sc`), and the cell that defines the function emits it
+  even with no use in that cell, as the use in a whole TU would.
+- **`inline` with `always_inline`** (`available_externally`). The backend
+  drops this definition, so the cell does not export it. After each cell
+  it goes back to CodeGen's deferred list, so that CodeGen emits it again
+  wherever another cell uses it.
+- **The backend's errors** (`__builtin_return_address`) go to the
+  session's diagnostics, as in the one-shot, and the cell gives `SC_LOST`.
+- **In the loader**, a cell can use what a later cell defines, like a
+  declaration before the definition in a file:
+  - the `GOT.mem` entry is filled when the symbol arrives;
+  - a function that has no definition yet gets a table entry right away,
+    and the definition fills it (the same address for every module);
+  - a direct call goes through a wasm stub with `call_indirect` to this
+    entry. The host trampolines used up the native stack in a recursion
+    across cells.
 
-### 3.9 O que as fatias da fase 3 acharam
+### 3.9 What the slices of phase 3 found
 
-As fatias `ses-`, `seq-`, `crash-` e `mem-` estão no `test/session.py`
-(`make test-session`), e não no `corpus.py`: rodam sobre o
-`sc-engine repl`, que só existe no nativo, e o `corpus.py` roda qualquer
-engine one-shot. Na fase 4 o mesmo script roda sobre o engine cortado,
-contra o `summary.json` do sem cortes. O `ses-` achou três bugs do
-clang-repl (tabela do §3.7). A lista do que não pode ser igual ao
-compile inteiro, com o motivo, está no `KNOWN` do script (NOTES.md
-§46).
+The slices `ses-`, `seq-`, `crash-` and `mem-` are in `test/session.py`
+(`make test-session`), not in `corpus.py`. They run on `sc-engine repl`,
+which exists only natively, and `corpus.py` runs any one-shot engine. In
+phase 4 the same script runs on the cut engine, against the
+`summary.json` of the uncut one. `ses-` found three clang-repl bugs (the
+table of §3.7). The `KNOWN` list of the script holds what cannot match
+the whole compile, with the reason (NOTES.md §46).
 
-## 4. Memória e estado global
+## 4. Memory and global state
 
-- **Nativo:** a memória da sessão é do filho. Uma válvula (RSS acima de um
-  limite, por exemplo 1 GB) leva a matar o filho e fazer o repasse.
-- **Wasm:** a mesma válvula sobre o `memory.size`. Recuperar é descartar o
-  `Store` ou o Worker.
-- **One-shot (`sc_main`):** continua com `-disable-free` e `BuryPointer`.
-  Por isso os hosts garantem **uma instância por compilação one-shot**
-  (T-M6). Nada de reaproveitar o reactor para compilações avulsas.
-- **Estado global** (R11, verificado):
-  - `LLVMInitialize*` é idempotente;
-  - o `lld` faz `Ctx::reset` em todo link;
-  - o assert do `install_fatal_error_handler` não existe no build.
-  - Dentro de uma sessão, o que importa é o lld depois de erro fatal
-    (`canRunAgain`), já tratado como `SC_LOST`.
-- **Critérios mensuráveis** (T-m4):
-  - `mem-`: 1.000 células pequenas. Depois de aquecer, a inclinação do RSS
-    tem que ficar abaixo de 50 KB/célula e a do `memory.size` abaixo de
-    64 KB/célula. Os limites são revistos com o primeiro dado. Medido na
-    fase 3 (nativo): 2,6 KB/célula em C e 5,2 KB/célula em C++. O
-    `memory.size` espera o reactor (fase 5).
-  - Memória do `lld` por link: RSS antes e depois de 100 links seguidos,
-    diferença abaixo de 5 MB.
+- **Native:** the session's memory belongs to the child. A valve (RSS
+  above a limit, for example 1 GB) leads to killing the child and
+  replaying.
+- **Wasm:** the same valve on `memory.size`. Recovering means discarding
+  the `Store` or the Worker.
+- **One-shot (`sc_main`):** it keeps `-disable-free` and `BuryPointer`.
+  For this reason the hosts guarantee **one instance per one-shot
+  compilation** (T-M6). The hosts never reuse the reactor for separate
+  compilations.
+- **Global state** (R11, checked):
+  - `LLVMInitialize*` is idempotent;
+  - `lld` calls `Ctx::reset` on every link;
+  - the assert of `install_fatal_error_handler` does not exist in the build.
+  - Inside a session, what matters is lld after a fatal error
+    (`canRunAgain`), which the session already treats as `SC_LOST`.
+- **Measurable criteria** (T-m4):
+  - `mem-`: 1,000 small cells. After warm-up, the slope of RSS has to stay
+    below 50 KB/cell and the slope of `memory.size` below 64 KB/cell. The
+    limits get revised with the first data. Measured in phase 3 (native):
+    2.6 KB/cell in C and 5.2 KB/cell in C++. `memory.size` waits for the
+    reactor (phase 5).
+  - Memory of `lld` per link: RSS before and after 100 links in a row,
+    with a difference below 5 MB.
 
-## 5. Fases
+## 5. Phases
 
-**Regra geral (T-B1):** o desenvolvimento das fases 0 a 3 roda sobre os
-engines **sem cortes** (`sc-host-full`, `sc-full.wasm`). O engine cortado
-só entra na fase 4, depois do aprendizado.
+**General rule (T-B1).** Phases 0 to 3 develop on the engines **without
+cuts** (`sc-host-full`, `sc-full.wasm`). The cut engine comes in only in
+phase 4, after the learning step.
 
-**Nomes.** O plano usa os nomes da época de cada fase. Hoje eles são:
-- `sc-host-full` e `sc-host-cut`: o `build/sc-full` e o `build/sc`, com
-  `sc --cc1` e `sc --ld`;
-- `sc-engine-full` e `sc-engine`: o `build/sc-full` e o `build/sc`, com
-  `sc --engine` e `sc --replay`;
-- `sc-proto` (`proto/`, `sc_proto::`) e o `loader/`: o crate `sc`, na
-  raiz (`src/engine/`, `sc::engine::`; `src/loader.rs`; `src/bin/`);
-- `sc-engine-wasm*`: o `build/sc-wasm*`;
-- `build/repl`: o `repl/` do pacote que o `sc` embute (§5.4), escrito em
-  `build/pack/repl`;
-- `test/spike.py`: o `test/cells.py`, desde que o spike saiu.
+**Names.** The plan uses the names from the time of each phase. Today they
+are:
+- `sc-host-full` and `sc-host-cut` are `build/sc-full` and `build/sc`,
+  with `sc --cc1` and `sc --ld`;
+- `sc-engine-full` and `sc-engine` are `build/sc-full` and `build/sc`,
+  with `sc --engine` and `sc --replay`;
+- `sc-proto` (`proto/`, `sc_proto::`) and `loader/` are the `sc` crate,
+  at the root (`src/engine/`, `sc::engine::`; `src/loader.rs`; `src/bin/`);
+- `sc-engine-wasm*` is `build/sc-wasm*`;
+- `build/repl` is the `repl/` of the pack that `sc` embeds (§5.4), written
+  to `build/pack/repl`;
+- `test/spike.py` is `test/cells.py`, since the spike left.
 
-| fase | entrega | critério de saída |
+| phase | deliverable | exit criterion |
 | --- | --- | --- |
-| P. pin | `llvmorg-23.1.3`: rebase de `llvm/*.patch`, rebuild, `make learn`/`test`/`test-warn`/`checkinv`, tamanho no NOTES.md | os critérios de sempre. As fases 0 em diante só começam depois dela |
-| E+N. exceções e padrões | §1.5 e §1.6 completos, no fluxo one-shot de hoje (antes da sessão, porque mudam os cortes e as bases). Pode começar antes da P, mas o `learn` é refeito depois dela | `make test`, `test-warn`, `test-native` e `checkinv` 0 diferenças contra as bases novas; programas com exceções e `setjmp` rodando pelo `scload` (wasmtime) e no V8; tamanho registrado no NOTES.md |
-| 0. spike | as candidatas A e B (§1.3) mínimas sobre o `sc-host-full`; programas de `test/cxx` e `test/samples` cortados automaticamente em uma célula por declaração do topo, ligados e rodados pelo `scload`; uma célula fatal → repasse → célula seguinte | A: saída igual à do `pic-`; símbolos da célula após o repasse iguais aos sem crash. B: saída igual, sem reemitir inicializadores. Escolha registrada no NOTES.md (tempo por célula, complexidade, memória) |
-| 1. API | `sc.h`, `sc_entry.cpp`, `sc_main`; `sc_api.cpp` (a sessão da API sobre o spike A) e o crate `sc-proto` com a API segura em Rust (`make test-proto`) | `make test`, `test-native`, `test-warn` e `checkinv` sem diferença; `test-proto` verde |
-| 2. sessão | §3 completo no `sc-host-full`; `build/sc-engine-full session` (laço do protocolo, em Rust); um modo de teste `build/sc-engine-full repl <dir> <células...> -- <args>` que grava os `.so` e faz o repasse | `split-` (`make test-split`) igual ao `pic-` no engine sem cortes, fora os `KNOWN` |
-| 3. testes | as fatias `ses-`, `split-`, `seq-`, `crash-` e `mem-` no `corpus.py` (§6) | todas verdes no engine sem cortes |
-| 4. cortes | `make learn` e `learn-native` dirigindo o `build/sc-engine repl` com as fatias novas; `test-warn` delas | `make test` 0 diferenças com as fatias novas; tempo do learn medido; tamanho dentro do orçamento (§5.1) |
-| 5. reactor (feita, §5.2) | `sc.wasm` reactor + `_start`; as exports | antes de trocar, congelar `res/base/summary.json`; depois, o `sc-full.wasm` novo reproduz a base hash por hash (T-B2) |
-| 6a. loader mínimo (feita, §5.3) | o loader com as features mínimas do §1.4, exceções ligadas e tags compartilhadas, `epoch_interruption` | `pic-` e `repl-` com a mesma saída; tamanho do loader registrado |
-| 6b. hosts (nativo feito, NOTES.md §50; JS proposto no §5.5) | crate `sc-proto` (bindgen sobre `sc.h`), binário único `build/sc` (engine ligado pelo `--emit-link`), filho `sc --engine`, timeout, válvula, repasse; host JS documentado | `crash-` pelo REPL nativo: o REPL segue vivo e a célula seguinte funciona |
-| 7. docs e distribuição | NOTES.md (§20), README, AGENTS (alvos novos), Makefile (`.PHONY`, `clean` de `res/ses*` etc.); o `sc` fora do checkout (NOTES.md §51): os `.args` sem caminhos absolutos, relativos a uma raiz, e o sysroot embutido, sem extração (§5.4) | o `sc` copiado para fora do `build/` roda (§5.4) |
+| P. pin | `llvmorg-23.1.3`. Rebase of `llvm/*.patch`, rebuild, `make learn`/`test`/`test-warn`/`checkinv`, size in NOTES.md | The usual criteria. Phases 0 onward start only after this one |
+| E+N. exceptions and standards | §1.5 and §1.6 complete, in today's one-shot flow (before the session, because they change the cuts and the bases). It can start before P, but `learn` runs again after P | `make test`, `test-warn`, `test-native` and `checkinv` with 0 differences against the new bases. Programs with exceptions and `setjmp` run through `scload` (wasmtime) and on V8. Size recorded in NOTES.md |
+| 0. spike | Minimal candidates A and B (§1.3) on `sc-host-full`. Programs from `test/cxx` and `test/samples` split automatically into one cell per top-level declaration, linked and run by `scload`. A fatal cell, then a replay, then the next cell | A. Output equal to that of `pic-`. The cell's symbols after the replay equal those without a crash. B. Equal output, without emitting the initializers again. Choice recorded in NOTES.md (time per cell, complexity, memory) |
+| 1. API | `sc.h`, `sc_entry.cpp`, `sc_main`. `sc_api.cpp` (the API's session on spike A) and the `sc-proto` crate with the safe Rust API (`make test-proto`) | `make test`, `test-native`, `test-warn` and `checkinv` with no difference. `test-proto` green |
+| 2. session | §3 complete in `sc-host-full`. `build/sc-engine-full session` (the protocol loop, in Rust). A test mode `build/sc-engine-full repl <dir> <cells...> -- <args>` that writes the `.so` files and does the replay | `split-` (`make test-split`) equal to `pic-` on the engine without cuts, apart from the `KNOWN` |
+| 3. tests | The slices `ses-`, `split-`, `seq-`, `crash-` and `mem-` in `corpus.py` (§6) | All green on the engine without cuts |
+| 4. cuts | `make learn` and `learn-native` driving `build/sc-engine repl` with the new slices. Their `test-warn` | `make test` with 0 differences with the new slices. Learn time measured. Size within the budget (§5.1) |
+| 5. reactor (done, §5.2) | `sc.wasm` as reactor + `_start`. The exports | Before the switch, freeze `res/base/summary.json`. After it, the new `sc-full.wasm` reproduces the base hash by hash (T-B2) |
+| 6a. minimal loader (done, §5.3) | The loader with the minimal features of §1.4, exceptions on and shared tags, `epoch_interruption` | `pic-` and `repl-` with the same output. Loader size recorded |
+| 6b. hosts (native done, NOTES.md §50; JS proposed in §5.5) | The `sc-proto` crate (bindgen on `sc.h`), the single binary `build/sc` (engine linked through `--emit-link`), the child `sc --engine`, timeout, valve, replay. JS host documented | `crash-` through the native REPL. The REPL stays alive and the next cell works |
+| 7. docs and distribution | NOTES.md (§20), README, AGENTS (new targets), Makefile (`.PHONY`, `clean` of `res/ses*` etc.). `sc` outside the checkout (NOTES.md §51). The `.args` files without absolute paths, relative to a root, and the sysroot embedded, without extraction (§5.4) | `sc` copied out of `build/` runs (§5.4) |
 
-### 5.1 Orçamento de tamanho (T-m1)
+### 5.1 Size budget (T-m1)
 
-- No máximo **+1% em zstd** sobre os 5.452.450 do `sc.wasm`.
-- Acima disso, o plano passa a gerar dois engines, one-shot e sessão, a
-  partir dos mesmos objetos.
-- Os 5.452.450 eram o `sc.wasm` antes da fase E+N. A base da fase 5 é o
-  `sc.wasm` da fase 4, com 5.641.258 em zstd (NOTES.md §47). Pela
-  estimativa do §47, a sessão no wasm custa +0,47% sobre o `sc.wasm` de
-  antes da fase 4.
+- At most **+1% in zstd** over the 5,452,450 of `sc.wasm`.
+- Above that, the plan switches to building two engines, one-shot and
+  session, from the same objects.
+- The 5,452,450 was `sc.wasm` before phase E+N. The base for phase 5 is
+  the `sc.wasm` of phase 4, with 5,641,258 in zstd (NOTES.md §47). By the
+  estimate in §47, the session in the wasm costs +0.47% over the `sc.wasm`
+  from before phase 4.
 
-### 5.2 Fase 5 em detalhe: o reactor
+### 5.2 Phase 5 in detail: the reactor
 
-**Entrega.** O `sc.wasm` (e o `sc-full.wasm`) passa a ser um módulo só:
-- roda como comando (`wasmtime run`), exatamente como hoje;
-- exporta a sessão do `sc.h` para um host.
+**Deliverable.** `sc.wasm` (and `sc-full.wasm`) becomes a single module
+that:
+- runs as a command (`wasmtime run`), exactly as today;
+- exports the session of `sc.h` to a host.
 
-Um host nativo de teste, o `build/sc-engine-wasm`, dirige essas exports com
-as mesmas fatias da fase 3.
+A native test host, `build/sc-engine-wasm`, drives these exports with the
+same slices as phase 3.
 
-**Fora da fase 5:**
-- o host do navegador (Worker, JS);
-- a válvula de memória;
-- o REPL usar o `sc.wasm`;
-- o snapshot de memória para o navegador (passo 6 só mede).
+**Outside phase 5:**
+- the browser host (Worker, JS);
+- the memory valve;
+- the REPL using `sc.wasm`;
+- the memory snapshot for the browser (step 6 only measures it).
 
-Tudo isso é da fase 6.
+All of that belongs to phase 6.
 
-**O que não muda:**
-- o `build/sc` one-shot nativo e o `build/sc-engine`, nem os objetos deles;
-- o `corpus.py`, com os mesmos argumentos;
-- o `link.py --learn`, que segue rodando o corpus one-shot.
+**What does not change:**
+- the native one-shot `build/sc` and `build/sc-engine`, and their objects;
+- `corpus.py`, with the same arguments;
+- `link.py --learn`, which still runs the one-shot corpus.
 
-#### Passo 1. O reactor com `_start` (já verificado)
+#### Step 1. The reactor with `_start` (already checked)
 
-A revisão do plano verificou, com o wasi-sdk 29, o `wasm-ld` do pin e o
-wasmtime 48:
-- um módulo ligado com `-mexec-model=reactor` e com o nosso `_start`, que
-  faz `exit(__main_void())`, roda como comando. A saída e os códigos de
-  saída (0 e 3) são os de antes;
-- o `wasmtime run` chama o `_initialize` antes do `_start`, também com
-  `--invoke` e com um `.cwasm`, e o construtor global roda uma vez;
-- o `_initialize` do `crt1-reactor.o` tem uma guarda: uma segunda chamada
-  cai num `unreachable`. Todo host chama o `_initialize` uma vez por
-  instância.
+The review of the plan checked the following with wasi-sdk 29, the pin's
+`wasm-ld` and wasmtime 48:
+- a module linked with `-mexec-model=reactor` and with our `_start`, which
+  does `exit(__main_void())`, runs as a command. The output and the exit
+  codes (0 and 3) are the same as before;
+- `wasmtime run` calls `_initialize` before `_start`, also with
+  `--invoke` and with a `.cwasm`, and the global constructor runs once;
+- the `_initialize` of `crt1-reactor.o` has a guard. A second call hits an
+  `unreachable`. Every host calls `_initialize` once per instance.
 
-**O `node:wasi` recusa** um módulo que exporta o `_initialize` e o `_start`.
-O `wasi.start` exige que o `_initialize` não exista, e o `wasi.initialize`
-exige o contrário. Isso quebra o `bench/cc.mjs`. O contorno, verificado, é
-passar um objeto no lugar da instância:
-- comando: `wasi.start({exports: {memory, _start() { e._initialize(); e._start(); }}})`;
-- biblioteca: `wasi.initialize({exports: {memory, _initialize: e._initialize}})`.
+**`node:wasi` refuses** a module that exports both `_initialize` and
+`_start`. `wasi.start` requires that `_initialize` does not exist, and
+`wasi.initialize` requires the opposite. This breaks `bench/cc.mjs`. The
+workaround, checked, is to pass an object in place of the instance:
+- command: `wasi.start({exports: {memory, _start() { e._initialize(); e._start(); }}})`;
+- library: `wasi.initialize({exports: {memory, _initialize: e._initialize}})`.
 
-O contorno fica documentado no README, e o `bench/cc.mjs` passa a usá-lo.
+The README documents the workaround, and `bench/cc.mjs` switches to it.
 
-**Alternativa sem o reactor, também verificada.**
-- O módulo é ligado com `-nostartfiles` e exporta um `sc_init`, que chama
-  o `__wasi_init_tp` e o `__wasm_call_ctors` uma vez.
-- O nosso `_start` chama o `sc_init` e depois faz `exit(__main_void())`.
-- Assim o `wasi.start` do Node funciona sem mudança.
+**Alternative without the reactor, also checked.**
+- The module links with `-nostartfiles` and exports an `sc_init`, which
+  calls `__wasi_init_tp` and `__wasm_call_ctors` once.
+- Our `_start` calls `sc_init` and then does `exit(__main_void())`.
+- This way Node's `wasi.start` works without change.
 
-A recomendação é o reactor padrão, porque não reimplementa o crt. A
-alternativa fica registrada.
+The recommendation is the standard reactor, because it does not
+reimplement the crt. The alternative stays on record.
 
-#### Passo 2. Congelar as bases
+#### Step 2. Freeze the bases
 
-As bases dependem dos engines no Makefile. Religar um engine regera a base
-dele, e o critério do T-B2 se perde. Antes de qualquer mudança, as bases
-vão para `build/res/<nome>-pre5/`, e os hashes dos `summary.json` vão
-para o NOTES.md. São seis bases:
-- `base` e `wev-base` (`sc-full.wasm`);
-- `native-base` e `native-wev-base` (`sc-host-full`);
-- `session-base` e `session-wev-base` (`sc-engine-full`).
+The bases depend on the engines in the Makefile. Relinking an engine
+regenerates its base, and the T-B2 criterion is lost. Before any change,
+the bases go to `build/res/<name>-pre5/`, and the hashes of the
+`summary.json` files go to NOTES.md. There are six bases:
+- `base` and `wev-base` (`sc-full.wasm`);
+- `native-base` and `native-wev-base` (`sc-host-full`);
+- `session-base` and `session-wev-base` (`sc-engine-full`).
 
-Os critérios comparam com essas cópias.
+The criteria compare against these copies.
 
-**O que não pode mudar.** O plano não muda os objetos nativos:
-- o `_start` vai para um arquivo só do wasm, o `engine/sc_start.cpp`, e não
-  para o `sc_entry.cpp`;
-- a nota do diretório temporário vai para o README, e não para o `sc.h`,
-  que todo objeto inclui;
-- a mudança no `proto/` (passo 4) muda o código do `sc-engine-full`, e as
-  bases da sessão são comparadas com as congeladas para mostrar que ele não
-  mudou de comportamento.
+**What must not change.** The plan does not change the native objects:
+- `_start` goes into a wasm-only file, `engine/sc_start.cpp`, and not
+  into `sc_entry.cpp`;
+- the note on the temporary directory goes into the README, and not into
+  `sc.h`, which every object includes;
+- the change in `proto/` (step 4) changes the code of `sc-engine-full`,
+  and the session bases are compared with the frozen ones to show that its
+  behaviour did not change.
 
-#### Passo 3. O módulo
+#### Step 3. The module
 
-1. **Objetos.**
-   - O wasm ganha uma lista própria no Makefile:
+1. **Objects.**
+   - The wasm gets its own list in the Makefile:
      `WENGINE := $(ENGINE) sc_session sc_api sc_start`.
-   - O `WENGINE` vale nas regras `engine`, `sc-full.wasm`, `sc-cut.wasm` e
-     `learn`. O `ENGINE` continua sendo a lista do nativo.
-   - A regra `$(B)/engine/%.o` passa a depender do `engine/sc_session.h`.
-   - O `link.py` tem a lista no código (`ENGINE = [...]`). Sem `--native`,
-     ela ganha os três objetos.
-2. **Modelo.**
-   - O `link.py` repete o comando de link do clang. Com
-     `-mexec-model=reactor` nos `flags` do wasm, o modelo chega a todo link:
-     os stubs, o trace e o link final.
-   - O `sc_start.cpp` tem o `_start` do passo 1.
-3. **Exports.** São ligadas com `-Wl,--export=` a partir de uma lista
-   única, no `link.py`:
+   - `WENGINE` applies in the rules `engine`, `sc-full.wasm`, `sc-cut.wasm`
+     and `learn`. `ENGINE` stays the native list.
+   - The rule `$(B)/engine/%.o` now depends on `engine/sc_session.h`.
+   - `link.py` has the list in the code (`ENGINE = [...]`). Without
+     `--native`, the list gains the three objects.
+2. **Model.**
+   - `link.py` repeats clang's link command. With `-mexec-model=reactor`
+     in the wasm's `flags`, the model reaches every link. That covers the
+     stubs, the trace and the final link.
+   - `sc_start.cpp` has the `_start` from step 1.
+3. **Exports.** They are linked with `-Wl,--export=` from a single list,
+   in `link.py`:
    - `sc_session_new`, `sc_session_free`, `sc_session_cell`,
-     `sc_session_undo` e `sc_session_depth`;
-   - `sc_result_ptr` e `sc_result_len`;
-   - `malloc` e `free`, para o host pôr o argv e o fonte na memória;
-   - `chdir` (do wasi-libc). O guest começa no `/` qualquer que seja o cwd
-     do host (verificado), e a sessão acha os `#include "..."` pelo cwd: o
-     `session.py` roda cada sessão no diretório do fonte. O host chama o
-     `chdir` depois do `_initialize`;
-   - o `memory`, que já é exportado.
+     `sc_session_undo` and `sc_session_depth`;
+   - `sc_result_ptr` and `sc_result_len`;
+   - `malloc` and `free`, for the host to put the argv and the source in
+     memory;
+   - `chdir` (from wasi-libc). The guest starts at `/` whatever the host's
+     cwd is (checked), and the session finds the `#include "..."` files
+     through the cwd. `session.py` runs each session in the source's
+     directory. The host calls `chdir` after `_initialize`;
+   - `memory`, which is already exported.
 
-   O `sc_main` não é exportado: o one-shot entra pelo `_start`. A lista
-   substitui a do §1.2, que era anterior ao `sc.h`.
+   `sc_main` is not exported. The one-shot enters through `_start`. The
+   list replaces the one in §1.2, which predates `sc.h`.
 
-   A revisão confirmou que o wrap e o `noop:` não alcançam as exports: os
-   candidatos vêm só dos membros `.obj` do LLVM. As exports viram raízes
-   do `--gc-sections`, e os nomes delas passam pelo `wasm-opt`.
-4. **Diretório temporário.**
-   - O `sc_session_new` cria o diretório das células pelo
-     `system_temp_directory` do LLVM. No WASI, esse diretório é o `TMPDIR`
-     (ou `TMP`, `TEMP`, `TEMPDIR`), ou então o `P_tmpdir` do wasi-libc,
-     que é o `/tmp`.
-   - O host dá ao guest um `/tmp` gravável: `--dir` no wasmtime, e no
-     navegador um sistema de arquivos em memória. Isso vai para o README.
+   The review confirmed that the wrap and `noop:` do not reach the
+   exports. The candidates come only from LLVM's `.obj` members. The
+   exports become roots of `--gc-sections`, and their names go through
+   `wasm-opt`.
+4. **Temporary directory.**
+   - `sc_session_new` creates the cells' directory through LLVM's
+     `system_temp_directory`. On WASI, that directory is `TMPDIR` (or
+     `TMP`, `TEMP`, `TEMPDIR`), or else wasi-libc's `P_tmpdir`, which is
+     `/tmp`.
+   - The host gives the guest a writable `/tmp`. That is `--dir` in
+     wasmtime, and an in-memory file system in the browser. This goes into
+     the README.
 
-**Critério do passo 3:**
-- O `sc-full.wasm` novo reproduz `base-pre5` e `wev-base-pre5` hash por
-  hash.
-- `make test` e `test-warn` dão 0 diferenças no `sc.wasm` cortado.
-- `checkinv` imprime SAME.
-- Os objetos nativos não mudam: o `make -n` do `sc-host-full` não religa
-  nada.
+**Criterion for step 3:**
+- The new `sc-full.wasm` reproduces `base-pre5` and `wev-base-pre5` hash
+  by hash.
+- `make test` and `test-warn` give 0 differences on the cut `sc.wasm`.
+- `checkinv` prints SAME.
+- The native objects do not change. `make -n` of `sc-host-full` relinks
+  nothing.
 
-#### Passo 4. O host de teste: `build/sc-engine-wasm`
+#### Step 4. The test host: `build/sc-engine-wasm`
 
-As fatias da fase 3 são o oráculo. Para rodá-las sem mudar o `session.py`
-nem o `split.py`, o `sc-engine-wasm` é o `sc-engine` compilado com outra
-feature e faz o mesmo que ele:
-- `session`, o protocolo;
+The phase 3 slices are the oracle. To run them without changing
+`session.py` or `split.py`, `sc-engine-wasm` is `sc-engine` compiled with
+another feature. It does the same as the native one:
+- `session`, the protocol;
 - `repl`;
-- o one-shot (`-cc1 ...`, `ld ...`), que o `std_pcm()` do
-  `test/spike.py` usa para o `.pcm` do `import std;`.
+- the one-shot (`-cc1 ...`, `ld ...`), which `std_pcm()` in
+  `test/spike.py` uses for the `.pcm` of `import std;`.
 
-1. **Onde fica.**
-   - O `proto/` ganha a feature `wasm`. Ela troca só a camada crua: as sete
-     chamadas `sys::sc_*` atrás de `Session` e `Reply`, por chamadas das
-     exports pelo wasmtime. Não precisa de trait.
-   - O `serve`, o `Copy`, o `Repl` e o `sc-engine.rs` ficam como estão. O
-     `Reply::part` empresta o `memory.data(&store)` como hoje empresta o
-     ponteiro nativo.
-   - O `sc_main` do `sc-engine.rs`, com `wasm`, vira uma instância nova
-     que roda o `_start`: uma instância por compilação one-shot (§4).
-   - O `wasmtime` e o `wasmtime-wasi` entram nas versões exatas do
-     `loader/` (48.0.3). O `proto/Cargo.lock` e o `loader/Cargo.lock` são
-     regerados, porque o `loader` depende do `sc-proto` e todo build usa
-     `--locked`.
-2. **Instância.**
-   - Uma `Store` por sessão (`SC_MSG_NEW`): `_initialize`, `chdir` com o
-     cwd do processo, e depois `sc_session_new`. Antes de descartar a
-     `Store`, o host chama o `sc_session_free`, que apaga o diretório
-     temporário.
-   - O argv e o fonte vão para a memória pelo `malloc` exportado. Os
-     resultados são lidos pelo `sc_result_ptr` e pelo `sc_result_len`.
-   - O `.cwasm` do CLI não serve, porque o CLI é a versão 48.0.0 e o crate
-     é a 48.0.3: o wasmtime recusa um módulo de outra versão. O host
-     compila o módulo com o próprio `Engine` e guarda o resultado num
-     cache, como faz o `loader/src/lib.rs`.
-   - O `max_wasm_stack` fica no padrão (512 KiB, o mesmo do CLI), de onde
-     vêm os "call stack exhausted".
-3. **Diretórios e saída.**
-   - Um `--dir` da raiz do repositório no mesmo caminho do guest. O
-     `build/` está dentro dela, e o `session.py` passa caminhos absolutos
-     do host (sysroot, `-I`, `-L`, o `.pcm`).
-   - Um diretório temporário do host mapeado como `/tmp`.
-   - O stdout do guest vai para o stderr do host, como o `dup2(2, 1)` de
-     hoje, para não quebrar as mensagens do protocolo.
-   - O stdin não é herdado: o wasmtime-wasi o leria numa thread.
-4. **Fork.** O `serve` faz um fork por célula, e o fork só é seguro com uma
-   thread. Sem cuidado, o wasmtime tem 57 threads depois de compilar o
-   módulo (o rayon) e 114 depois das primeiras chamadas WASI (o tokio do
-   p1 síncrono). A receita verificada fica em 1 thread mesmo com arquivos:
-   - `Config::parallel_compilation(false)`, ou um módulo desserializado;
-   - um runtime tokio próprio, `new_current_thread().enable_all()`, com
+1. **Where it lives.**
+   - `proto/` gains the `wasm` feature. It swaps only the raw layer. The
+     seven `sys::sc_*` calls behind `Session` and `Reply` become calls to
+     the exports through wasmtime. No trait is needed.
+   - `serve`, `Copy`, `Repl` and `sc-engine.rs` stay as they are.
+     `Reply::part` borrows `memory.data(&store)` as it borrows the native
+     pointer today.
+   - With `wasm`, the `sc_main` of `sc-engine.rs` becomes a new instance
+     that runs `_start`. That is one instance per one-shot compilation
+     (§4).
+   - `wasmtime` and `wasmtime-wasi` come in at the exact versions of
+     `loader/` (48.0.3). `proto/Cargo.lock` and `loader/Cargo.lock` are
+     regenerated, because `loader` depends on `sc-proto` and every build
+     uses `--locked`.
+2. **Instance.**
+   - One `Store` per session (`SC_MSG_NEW`). It runs `_initialize`, then
+     `chdir` with the process's cwd, and then `sc_session_new`. Before
+     dropping the `Store`, the host calls `sc_session_free`, which deletes
+     the temporary directory.
+   - The argv and the source go into memory through the exported `malloc`.
+     The host reads the results through `sc_result_ptr` and
+     `sc_result_len`.
+   - The CLI's `.cwasm` does not work, because the CLI is version 48.0.0
+     and the crate is 48.0.3. Wasmtime refuses a module from another
+     version. The host compiles the module with its own `Engine` and keeps
+     the result in a cache, as `loader/src/lib.rs` does.
+   - `max_wasm_stack` stays at the default (512 KiB, the same as the
+     CLI's), which is where the "call stack exhausted" errors come from.
+3. **Directories and output.**
+   - A `--dir` for the repository root, at the same path in the guest.
+     `build/` is inside it, and `session.py` passes absolute host paths
+     (sysroot, `-I`, `-L`, the `.pcm`).
+   - A temporary host directory mapped as `/tmp`.
+   - The guest's stdout goes to the host's stderr, like today's
+     `dup2(2, 1)`, so that it does not break the protocol messages.
+   - The stdin is not inherited. Wasmtime-wasi would read it in a thread.
+4. **Fork.** `serve` forks once per cell, and the fork is safe only with
+   one thread. Without care, wasmtime has 57 threads after it compiles the
+   module (rayon) and 114 after the first WASI calls (the tokio of
+   synchronous p1). The checked recipe stays at 1 thread even with files:
+   - `Config::parallel_compilation(false)`, or a deserialized module;
+   - a tokio runtime of its own, `new_current_thread().enable_all()`, with
      `enter()`;
-   - `WasiCtxBuilder::allow_blocking_current_thread(true)` chamado **antes**
-     do `preopened_dir`, que captura o valor.
+   - `WasiCtxBuilder::allow_blocking_current_thread(true)` called
+     **before** `preopened_dir`, which captures the value.
 
-   Antes de cada fork, um assert de que o `/proc/self/task` tem uma
-   entrada. Com essa receita, um trap no processo depois do fork voltou
-   como `Err`, e a `Store` do pai continuou usável.
-5. **Falhas.** No `serve`, o original roda a célula e a cópia espera.
-   - Um trap (erro fatal, pilha esgotada) ou o `proc_exit` (o `I32Exit`
-     do wasmtime) volta como `Err` da chamada.
-   - Com um `Err`, o host faz `_exit` no original, sem ler resultado. A
-     cópia então responde "the engine crashed", como no SIGSEGV do nativo.
-   - Nos modos sem fork (`REPLAY`, `NEW`, `UNDO`, `DEPTH`), o mesmo `Err`
-     encerra o processo, como uma queda nativa.
-6. **`mem-`.** O `session.py` lê o RSS no `/proc`. Com `wasm`, o host
-   escreve no stderr uma linha com o `memory.size` depois de cada célula,
-   e o `session.py` a lê.
+   Before each fork, an assert checks that `/proc/self/task` has one
+   entry. With this recipe, a trap in the process after the fork came
+   back as `Err`, and the parent's `Store` stayed usable.
+5. **Failures.** In `serve`, the original runs the cell and the copy
+   waits.
+   - A trap (fatal error, exhausted stack) or `proc_exit` (wasmtime's
+     `I32Exit`) comes back as an `Err` from the call.
+   - On an `Err`, the host does `_exit` in the original, without reading
+     a result. The copy then answers "the engine crashed", as with the
+     native SIGSEGV.
+   - In the modes without a fork (`REPLAY`, `NEW`, `UNDO`, `DEPTH`), the
+     same `Err` ends the process, like a native crash.
+6. **`mem-`.** `session.py` reads the RSS in `/proc`. With `wasm`, the
+   host writes a line with `memory.size` to stderr after each cell, and
+   `session.py` reads it.
 
-**Alvos novos no Makefile:**
-- `$(B)/sc-engine-wasm` (sobre o `sc.wasm`) e
-  `$(B)/sc-engine-wasm-full` (sobre o `sc-full.wasm`);
-- `test-session-wasm` (ses-, seq-, crash-, mem-), contra a
+**New targets in the Makefile:**
+- `$(B)/sc-engine-wasm` (on `sc.wasm`) and
+  `$(B)/sc-engine-wasm-full` (on `sc-full.wasm`);
+- `test-session-wasm` (ses-, seq-, crash-, mem-), against
   `session-base`;
 - `test-split-wasm`;
-- `test-session-wasm-warn`, contra a `session-wev-base`.
+- `test-session-wasm-warn`, against `session-wev-base`.
 
-**Critério do passo 4:**
-- `test-session-wasm` e `test-split-wasm` com 0 ruins, no `sc-full.wasm` e
-  no `sc.wasm`.
-- `test-session` e `test-split` nativos com 0 ruins contra as bases
-  congeladas.
-- As exceções conhecidas são listadas com o motivo, como os `KNOWN`:
-  - os estouros de pilha, porque o limite de pilha do wasm não é o do
-    nativo (§1.2);
-  - as diferenças de texto do trap.
+**Criterion for step 4:**
+- `test-session-wasm` and `test-split-wasm` with 0 bad, on `sc-full.wasm`
+  and on `sc.wasm`.
+- Native `test-session` and `test-split` with 0 bad against the frozen
+  bases.
+- The known exceptions are listed with the reason, like the `KNOWN`:
+  - the stack overflows, because the wasm stack limit is not the native
+    one (§1.2);
+  - the differences in the trap's text.
 
-#### Passo 5. Cortes do wasm com a sessão
+#### Step 5. Wasm cuts with the session
 
-Um resultado ruim no `sc.wasm` que não aparece no `sc-full.wasm` é uma
-função cortada. No wasm, a função cortada é um `unreachable`, sem o
-`sc_cut_called` do nativo. O nome só aparece no backtrace do trap, e o
-`sc.wasm` não tem a seção de nomes (o `wasm-opt --strip-debug` a tira).
-Então:
-- as fatias rodam também sobre o `sc-cut.wasm`, que tem os nomes, num
+A bad result on `sc.wasm` that does not show on `sc-full.wasm` is a cut
+function. In the wasm, the cut function is an `unreachable`, without the
+native `sc_cut_called`. The name shows only in the trap's backtrace, and
+`sc.wasm` has no name section (`wasm-opt --strip-debug` removes it).
+So:
+- the slices also run on `sc-cut.wasm`, which has the names, in an
   `sc-engine-wasm-cut`;
-- o host escreve o trap com o backtrace no stderr;
-- o `session.py` e o `learn_session.py` leem o frame 0 `__wrap_X`, além
-  da linha `sc: cut function called:`.
+- the host writes the trap with the backtrace to stderr;
+- `session.py` and `learn_session.py` read frame 0 `__wrap_X`, besides
+  the line `sc: cut function called:`.
 
-Os casos aparecem onde o código do wasm difere do nativo (`#ifdef __wasi__`
-no LLVM, a libc).
-- Primeiro, rodar e contar.
-- Se houver casos, o `learn_session.py` ganha um `--wasm`: liga com o
-  `link.py` sem `--native`, usa o `sc-engine-wasm-cut` e escreve na mesma
-  lista.
-- Se não houver, nada muda, e isso fica registrado.
+The cases show up where the wasm code differs from the native code
+(`#ifdef __wasi__` in LLVM, the libc).
+- First, run and count.
+- If there are cases, `learn_session.py` gains a `--wasm`. It links with
+  `link.py` without `--native`, uses `sc-engine-wasm-cut` and writes to
+  the same list.
+- If there are none, nothing changes, and that goes on record.
 
-#### Passo 6. Medidas
+#### Step 6. Measurements
 
-- **Tamanho:** `sc.wasm` cru e zstd contra os 5.641.258 da fase 4.
-  Orçamento: +1% (§5.1).
-- **`mem-`:** a inclinação do `memory.size` (limite de 64 KB/célula, §4) e
-  o tempo por célula no wasm, contra os 33 ms em C e 41 ms em C++ do
-  nativo cortado.
-- **Snapshot**, para a fase 6 decidir se o navegador recupera um
-  `SC_ERROR` por snapshot ou por repasse.
-  - Mede o custo de copiar a memória linear depois de 100 células, em MB e
-    em ms.
-  - O que um snapshot precisa, segundo a revisão:
-    - a memória linear;
-    - o `__stack_pointer`, exportado com `--export`, o que foi verificado.
-      Depois de um trap, ele fica onde o trap aconteceu e precisa ser
-      restaurado;
-    - a memória só cresce: ao restaurar, o trecho que cresceu é zerado;
-    - os arquivos abertos na célula ficam abertos na `WasiCtx`, um
-      vazamento pequeno.
-- **Tempo** do `make test`, para ver se o módulo maior pesa no
+- **Size:** raw and zstd `sc.wasm` against the 5,641,258 of phase 4.
+  Budget: +1% (§5.1).
+- **`mem-`:** the slope of `memory.size` (limit of 64 KB/cell, §4) and the
+  time per cell in the wasm, against the 33 ms in C and 41 ms in C++ of
+  the cut native engine.
+- **Snapshot**, so that phase 6 can decide whether the browser recovers
+  from an `SC_ERROR` by snapshot or by replay.
+  - It measures the cost of copying the linear memory after 100 cells, in
+    MB and in ms.
+  - What a snapshot needs, according to the review:
+    - the linear memory;
+    - `__stack_pointer`, exported with `--export`, which was checked.
+      After a trap, it stays where the trap happened and has to be
+      restored;
+    - the memory only grows. On restore, the host zeroes the part that
+      grew;
+    - the files opened in the cell stay open in the `WasiCtx`, a small
+      leak.
+- **Time** of `make test`, to see whether the larger module weighs on
   `wasmtime compile`.
 
-#### Passo 7. Documentação
+#### Step 7. Documentation
 
-- NOTES.md §48: o reactor, as bases congeladas, as exports, o host de
-  teste, a receita do fork, as medidas e os cortes.
+- NOTES.md §48: the reactor, the frozen bases, the exports, the test host,
+  the fork recipe, the measurements and the cuts.
 - README:
-  - o `sc.wasm` como reactor e as exports;
-  - o `_initialize` uma vez por instância;
-  - o `chdir` e o `/tmp`;
-  - o contorno do `node:wasi`.
-- `bench/cc.mjs`: o contorno do `node:wasi`.
-- AGENTS: os alvos novos, e a regra de que `test-session-wasm` não mostra
-  diferenças.
-- Makefile: `.PHONY` e `clean`.
-- O §1.2 passa a apontar para cá.
+  - `sc.wasm` as a reactor, and the exports;
+  - `_initialize` once per instance;
+  - `chdir` and `/tmp`;
+  - the `node:wasi` workaround.
+- `bench/cc.mjs`: the `node:wasi` workaround.
+- AGENTS: the new targets, and the rule that `test-session-wasm` shows no
+  differences.
+- Makefile: `.PHONY` and `clean`.
+- §1.2 now points here.
 
-**Critério de saída da fase 5:**
-- os critérios dos passos 3 e 4;
-- tamanho dentro do orçamento.
+**Exit criterion for phase 5:**
+- the criteria of steps 3 and 4;
+- size within the budget.
 
-**Feita** (NOTES.md §48). O que mudou em relação a este plano:
-- o `sc.wasm` é ligado também com `-lc-printscan-long-double`: o
-  demangler do `wasm-ld` imprime literais `long double`, e o `printf` do
-  wasi-libc sem eles aborta;
-- as fatias no wasm são comparadas com as bases do `sc-engine-wasm-full`
-  (`session-wasm-base` e `session-wasm-wev-base`), e o `ses-` e o
-  `crash-` decidem pelo one-shot wasm, e não pela `session-base` nativa:
-  onde o nativo cai, o wasm nem sempre cai;
-- o host compila o módulo com `--precompile`, em vez do cache do
-  wasmtime, e escreve ele mesmo a linha `sc: cut function called:`;
-- o learn no wasm é o alvo `learn-session-wasm`. Achou uma função;
-- o `loader/Cargo.lock` não precisou mudar;
-- o `ses-` do `dcl.decomp/p3` com `-Weverything` caía às vezes: a
-  limpeza da célula com erro lia depois da tabela de lookup, um bug de
-  antes da fase 5. Corrigido pelo `llvm/incremental-remove-decl.patch`
+**Done** (NOTES.md §48). What changed with respect to this plan:
+- `sc.wasm` also links with `-lc-printscan-long-double`. The `wasm-ld`
+  demangler prints `long double` literals, and wasi-libc's `printf`
+  without them aborts;
+- the wasm slices are compared with the bases of `sc-engine-wasm-full`
+  (`session-wasm-base` and `session-wasm-wev-base`), and `ses-` and
+  `crash-` decide by the wasm one-shot, and not by the native
+  `session-base`. Where the native engine crashes, the wasm does not
+  always crash;
+- the host compiles the module with `--precompile`, instead of wasmtime's
+  cache, and writes the line `sc: cut function called:` itself;
+- the learn step in the wasm is the `learn-session-wasm` target. It found
+  one function;
+- `loader/Cargo.lock` did not need to change;
+- the `ses-` of `dcl.decomp/p3` with `-Weverything` sometimes crashed.
+  The cleanup of the cell with an error read past the lookup table, a bug
+  from before phase 5. `llvm/incremental-remove-decl.patch` fixed it
   (NOTES.md §48).
+### 5.3 Phase 6a in detail: the minimal loader
 
-### 5.3 Fase 6a em detalhe: o loader mínimo
-
-**Ponto de partida.** Quase tudo do §1.4 já está no `loader/`, desde as
-fases E+N e o protótipo do `sc`:
-- as tags `__cpp_exception` e `__c_longjmp` são criadas uma vez e
-  compartilhadas, e a exceção não capturada vira o `std::terminate`
+**Starting point.** Almost all of §1.4 is already in `loader/`, since
+phases E+N and the `sc` prototype:
+- the tags `__cpp_exception` and `__c_longjmp` are created once and
+  shared, and an uncaught exception becomes `std::terminate`
   (`Loader::uncaught`);
-- o `epoch_interruption` existe e é ligado só no REPL interativo
-  (`Loader::arm`, `Loader::on_ctrl_c`). O `sc FILE` e o `scload` rodam sem ele.
+- `epoch_interruption` exists and is on only in the interactive REPL
+  (`Loader::arm`, `Loader::on_ctrl_c`). `sc FILE` and `scload` run without it.
 
-Falta o wasmtime mínimo. Hoje o `loader/Cargo.toml` usa as features
-padrão: o `scload` tem 27,5 MB e o `sc` 28,8 MB. A fase troca isso pelo
-mínimo que o loader usa, mede cada feature e registra o tamanho.
+The minimal wasmtime is missing. Today `loader/Cargo.toml` uses the default
+features. `scload` is 27.5 MB and `sc` is 28.8 MB. The phase replaces them
+with the minimum the loader uses, measures each feature and records the size.
 
-**O que o loader usa do wasmtime** (lido em `loader/src`):
+**What the loader uses of wasmtime** (read in `loader/src`):
 
-| feature | uso | |
+| feature | use | |
 | --- | --- | --- |
-| `runtime`, `std`, `cranelift` | rodar e compilar as células | fica |
-| `gc`, `gc-drc` | a proposta de exceções só é ligada com `gc` (`config.rs:2551`); `Tag`, `ThrownException`. Sem `gc` o loader compila e só falha ao rodar. O `gc-null` nunca libera: um laço que lança acabaria com o heap | fica |
-| `cache` | `Cache::from_file`, para as bibliotecas do sysroot | a decidir (passo 3) |
-| `parallel-compilation` | implícito: o rayon compila as funções de um módulo em paralelo | a decidir (passo 3) |
-| `wat` | os dois módulos gerados em texto: o calço do WASI (`wasi_shim`) e os stubs de `call_indirect` (`stubs`) | sai (passo 2) |
-| `addr2line`, `demangle` | não: o loader lê o DWARF com o próprio `gimli` e demangla com o `cpp_demangle` (`wasm_backtrace_details` desligado) | sai |
-| `backtrace` | não: é o `std::backtrace` do Rust dentro do `wasmtime::Error`. O `WasmBacktrace` (`keep_stacks`, `blamed`) não depende de feature | sai |
-| `async`, `component-model` | só porque o `wasmtime-wasi` `p1` liga o `p2`, que liga os dois | ficam, à força |
-| `pooling-allocator`, `profiling`, `coredump`, `threads`, `stack-switching`, `debug*`, `gc-copying`, `gc-null`, `wit-parser`, `compile-time-builtins`, `anyhow` | nenhum | saem |
+| `runtime`, `std`, `cranelift` | run and compile the cells | stays |
+| `gc`, `gc-drc` | the exceptions proposal is on only with `gc` (`config.rs:2551`); `Tag`, `ThrownException`. Without `gc` the loader compiles and fails only at run time. `gc-null` never frees, so a loop that throws would use up the heap | stays |
+| `cache` | `Cache::from_file`, for the sysroot's libraries | to decide (step 3) |
+| `parallel-compilation` | implicit. rayon compiles the functions of a module in parallel | to decide (step 3) |
+| `wat` | the two modules generated as text, the WASI shim (`wasi_shim`) and the `call_indirect` stubs (`stubs`) | goes (step 2) |
+| `addr2line`, `demangle` | no. The loader reads the DWARF with its own `gimli` and demangles with `cpp_demangle` (`wasm_backtrace_details` off) | goes |
+| `backtrace` | no. It is Rust's `std::backtrace` inside `wasmtime::Error`. `WasmBacktrace` (`keep_stacks`, `blamed`) depends on no feature | goes |
+| `async`, `component-model` | only because `wasmtime-wasi` `p1` turns on `p2`, which turns on both | stay, by force |
+| `pooling-allocator`, `profiling`, `coredump`, `threads`, `stack-switching`, `debug*`, `gc-copying`, `gc-null`, `wit-parser`, `compile-time-builtins`, `anyhow` | none | go |
 
-O `wasmtime-wasi` fica com `default-features = false, features = ["p1"]`.
-O `sc-proto` não traz as features padrão de volta: ele só usa o wasmtime
-na feature `wasm`, que o `repl` não liga (conferido com `cargo tree -e
-features`). Um `cargo check` com esse conjunto compila o `scload` e o `sc`.
+`wasmtime-wasi` gets `default-features = false, features = ["p1"]`.
+`sc-proto` does not bring the default features back. It uses wasmtime only
+in the `wasm` feature, which `repl` does not turn on (checked with `cargo tree -e
+features`). A `cargo check` with this set compiles `scload` and `sc`.
 
-**O coletor muda.** Com as features padrão, o `Collector::Auto` escolhe o
-`Copying` (`config.rs:3620`), que a documentação do wasmtime diz "not yet
-functional". As bases rodaram com ele. Só com o `gc-drc`, o `Auto` escolhe
-o DRC. É uma mudança de comportamento: um teste novo lança e pega uma
-exceção num laço longo, para ver o heap do GC não acabar.
+**The collector changes.** With the default features, `Collector::Auto` picks
+`Copying` (`config.rs:3620`), which the wasmtime documentation calls "not yet
+functional". The baselines ran with it. With `gc-drc` alone, `Auto` picks
+DRC. This is a change in behaviour. A new test throws and catches an
+exception in a long loop, to see that the GC heap does not run out.
 
-**Medido antes da fase** (`sc FILE`, load ~54, features padrão):
+**Measured before the phase** (`sc FILE`, load ~54, default features):
 
-| programa | cache quente | cache frio |
+| program | warm cache | cold cache |
 | --- | ---: | ---: |
-| C, `puts` | 0,09 s | 0,41 s |
-| C++, `vector::at` com exceção | 2,65 s | 3,72 s |
+| C, `puts` | 0.09 s | 0.41 s |
+| C++, `vector::at` with an exception | 2.65 s | 3.72 s |
 
-O cache frio custa a compilação da `libc.so` (1,9 MB) e da `libc++.so`
-(0,9 MB) pelo Cranelift, em paralelo.
+The cold cache costs the compilation of `libc.so` (1.9 MB) and of `libc++.so`
+(0.9 MB) by Cranelift, in parallel.
 
-**Passos** (todos feitos, NOTES.md §49):
+**Steps** (all done, NOTES.md §49):
 
-1. **Features.** `default-features = false` no `wasmtime` com `runtime`,
-   `std`, `cranelift`, `gc`, `gc-drc`, `cache`, `parallel-compilation` e
-   `wat`. O `loader/Cargo.lock` muda (o Makefile usa `--locked`) e vai no
-   commit. Medir o `scload`: tamanho e os tempos da tabela acima. Depois
-   tirar uma por vez as três a decidir e medir de novo. Uma tabela no
-   NOTES.md com o custo de cada uma.
-2. **Sem `wat`.** Os dois módulos gerados passam a ser montados pelo
-   `wasm-encoder`, que o compilador do wasmtime já traz. O `wat_sig` some.
-   O ganho foi de 0,86 MB depois do LTO.
-3. **`cache` e `parallel-compilation`.** Decididos pela tabela do passo 1.
-   O padrão é manter os dois: o cache paga a `libc++.so` uma vez por
-   máquina, e sem o rayon o cache frio fica serial.
-4. **Perfil de release.** `lto = true`, `codegen-units = 1`,
-   `strip = true`, e `opt-level` medido: o `z` do §1.4 deixa o binário
-   menor, mas o Cranelift fica mais lento, e isso pesa no cache frio e em
-   cada célula. Medir `3`, `s` e `z` no cache frio do C++ e no
-   `make test-small`. `panic = "abort"` só se nada depender de unwind:
-   não há `catch_unwind` no loader. O wasmtime retoma o panic de uma
-   função do host, sem transformá-lo em erro (conferido, NOTES.md §49).
-   Feito no perfil `dist` (`make dist`). O `release`, que as baterias
-   usam, ficou sem LTO para compilar rápido.
-5. **`epoch_interruption` e o coletor.** Um alvo novo, `make
-   test-loader` (`cargo test` no loader, com o `wat` como
-   dev-dependency se o passo 2 o tirar): um laço infinito, `arm`, e o
-   `increment_epoch` chamado de um handler de sinal, como o Ctrl-C do
-   `sc` (`machine.rs:94-101`); o laço tem de parar com `Trap::Interrupt`.
-   E o laço que lança do coletor. E medir o custo das checagens no laço de 3·10⁸
-   iterações do §1.4, para confirmar que o `sc FILE` sem elas faz
-   sentido. Medido: abaixo de 1%, então desligá-las não economiza nada
-   que se veja.
-6. **O `proto/`.** O `sc-engine-wasm` é só host de teste e fica com as
-   features padrão. Registrar isso no NOTES.md.
+1. **Features.** `default-features = false` on `wasmtime` with `runtime`,
+   `std`, `cranelift`, `gc`, `gc-drc`, `cache`, `parallel-compilation` and
+   `wat`. `loader/Cargo.lock` changes (the Makefile uses `--locked`) and goes
+   in the commit. Measure `scload`, its size and the times of the table above.
+   Then remove the three undecided ones one at a time and measure again. A
+   table in NOTES.md with the cost of each one.
+2. **Without `wat`.** The `wasm-encoder`, which wasmtime's compiler already
+   brings, now assembles the two generated modules. `wat_sig` goes.
+   The saving was 0.86 MB after LTO.
+3. **`cache` and `parallel-compilation`.** Decided by the table of step 1.
+   The default is to keep both. The cache pays for `libc++.so` once per
+   machine, and without rayon the cold cache is serial.
+4. **Release profile.** `lto = true`, `codegen-units = 1`,
+   `strip = true`, and a measured `opt-level`. The `z` of §1.4 makes the
+   binary smaller, but Cranelift gets slower, and that weighs on the cold
+   cache and on each cell. Measure `3`, `s` and `z` on the cold cache of C++
+   and on `make test-small`. `panic = "abort"` only if nothing depends on
+   unwinding. The loader has no `catch_unwind`. Wasmtime resumes the panic of
+   a host function, without turning it into an error (checked, NOTES.md §49).
+   Done in the `dist` profile (`make dist`). The `release` profile, which the
+   batteries use, has no LTO, so that it compiles fast.
+5. **`epoch_interruption` and the collector.** A new target, `make
+   test-loader` (`cargo test` in the loader, with `wat` as a
+   dev-dependency if step 2 removes it): an infinite loop, `arm`, and
+   `increment_epoch` called from a signal handler, like the Ctrl-C of
+   `sc` (`machine.rs:94-101`). The loop has to stop with `Trap::Interrupt`.
+   Also the collector's loop that throws. Also measure the cost of the checks
+   in the loop of 3·10⁸ iterations of §1.4, to confirm that `sc FILE` without
+   them makes sense. Measured below 1%, so turning them off saves nothing
+   visible.
+6. **`proto/`.** `sc-engine-wasm` is only a test host and keeps the
+   default features. Record this in NOTES.md.
 
-**Critério de saída:**
+**Exit criterion:**
 - `make test`, `test-warn`, `test-native`, `test-split`, `test-split-wasm`,
-  `test-session*`, `test-aluno` e `test-checks` sem diferença. Todos rodam
-  pelo `scload` ou pelo `sc` com as features novas;
-- o `make test-loader` verde;
-- as bases não são refeitas: o `$(SCLOAD)` é só de ordem nas regras das
-  bases, que guardam a saída do loader antigo para comparar;
-- tamanho do `scload` e do `sc` e tempos de cache frio e quente no
-  NOTES.md (§49), comparados com os 5,7 MB do §1.4.
+  `test-session*`, `test-aluno` and `test-checks` with no difference. All of
+  them run through `scload` or `sc` with the new features;
+- `make test-loader` green;
+- the baselines are not redone. `$(SCLOAD)` is order-only in the baselines'
+  rules, which keep the output of the old loader to compare against;
+- the size of `scload` and `sc` and the cold and warm cache times in
+  NOTES.md (§49), compared with the 5.7 MB of §1.4.
 
-**Riscos:**
-- uma feature tirada que só falta num caminho raro. A falta aparece como
-  erro do wasmtime na hora, não como saída diferente, mas só no caminho
-  que a usa. As baterias passam pelas exceções, pelo `setjmp`, pelos traps
-  e pelos vazamentos;
-- `opt-level` menor deixar o Cranelift lento demais: o passo 4 mede antes
-  de escolher.
+**Risks:**
+- a removed feature that is missing only on a rare path. The lack shows up
+  at once as a wasmtime error, not as different output, but only on the path
+  that uses the feature. The batteries go through exceptions, `setjmp`, traps
+  and leaks;
+- a lower `opt-level` making Cranelift too slow. Step 4 measures before it
+  chooses.
 
-### 5.4 Fase 7 em detalhe: um binário só (proposta)
+### 5.4 Phase 7 in detail: one binary (proposal)
 
-**Objetivo.** O `sc` é um arquivo só. Copiado para qualquer lugar, ou para
-outra máquina do mesmo sistema, ele roda sem árvore ao lado, sem extrair
-nada para um diretório temporário e sem cache em disco. A solução não pode
-depender de recursos só do Linux: o alvo inclui o Windows.
+**Goal.** `sc` is a single file. Copied anywhere, or to another machine
+with the same system, it runs with no tree next to it, without extracting
+anything to a temporary directory and without a cache on disk. The solution
+cannot depend on features that only Linux has. The target includes Windows.
 
-**O que o `sc` lê hoje em tempo de execução** (medido em 2026-10-21):
+**What `sc` reads at run time today** (measured on 2026-10-21):
 
-| o quê | quem lê | onde está | tamanho |
+| what | who reads it | where it is | size |
 | --- | --- | --- | --- |
-| os `.args` da sessão (`<lang>-<nível>[-file].args`, um argumento por linha) | `Machine::new` (`machine.rs`) | `build/repl`, achado por `build_dir()` (`SC_BUILD` ou o primeiro ancestral do binário com `repl/`) | 40 KB (68 KB em disco) |
-| os cabeçalhos: sysroot e os do clang (`-internal-isystem`, `-internal-externc-isystem`) | o clang da sessão, pelo VFS criado em `sc_session.cpp:685` | `build/sysroot/include`, `build/wasi-sdk-*/lib/clang/21/include` | 18 MB + 7,8 MB (4,3 MB deles são intrínsecos de x86 e ARM) |
-| a ignorelist dos sanitizadores (`-fsanitize-ignorelist`, só em `strict`) | o clang, pelo mesmo VFS (`NoSanitizeList`, `clang/lib/Basic/NoSanitizeList.cpp:24`, com o VFS do `FileManager`) | `build/sysroot/share/sc/ignorelist.txt` | 659 bytes |
-| as `.so` para o link de cada célula (`-L` e `-l`) e o `libclang_rt.builtins.a` | o wasm-ld, por `findFile` (`fs::exists`, `lld/wasm/Driver.cpp:227`), `readFile` (`MemoryBuffer::getFile`, `lld/wasm/InputFiles.cpp:68`) e, para o `.a`, um `fs::exists` do `.imports` ao lado (`Driver.cpp:312`, que dá falso) | `build/sysroot/lib/wasm32-wasip1`, `build/wasi-sdk-*/lib/clang/21/lib/...` | 2,9 MB + 0,45 MB |
-| as `.so` carregadas no wasmtime (`libc`, `libc++`, `libc++abi`, `libsc_rt`, `libsetjmp` e as que elas pedem) | `Loader::find` e `collect` (`loader.rs:317`, `std::fs::read`). Os bytes servem também ao `dylink` e ao DWARF (`debug`) | `build/sysroot/lib/wasm32-wasip1` | as mesmas |
-| o código compilado pelo Cranelift (as `.so`, e também cada célula e os shims) | `Cache::from_file(None)` do wasmtime (`loader.rs:291`), que lê `~/.config/wasmtime/config.toml` se existir | `~/.cache/wasmtime` | gravado no primeiro uso |
+| the session's `.args` (`<lang>-<level>[-file].args`, one argument per line) | `Machine::new` (`machine.rs`) | `build/repl`, found by `build_dir()` (`SC_BUILD` or the first ancestor of the binary with `repl/`) | 40 KB (68 KB on disk) |
+| the headers, from the sysroot and from clang (`-internal-isystem`, `-internal-externc-isystem`) | the session's clang, through the VFS created in `sc_session.cpp:685` | `build/sysroot/include`, `build/wasi-sdk-*/lib/clang/21/include` | 18 MB + 7.8 MB (4.3 MB of them are x86 and ARM intrinsics) |
+| the sanitizers' ignorelist (`-fsanitize-ignorelist`, only in `strict`) | clang, through the same VFS (`NoSanitizeList`, `clang/lib/Basic/NoSanitizeList.cpp:24`, with the VFS of `FileManager`) | `build/sysroot/share/sc/ignorelist.txt` | 659 bytes |
+| the `.so` files for the link of each cell (`-L` and `-l`) and `libclang_rt.builtins.a` | wasm-ld, through `findFile` (`fs::exists`, `lld/wasm/Driver.cpp:227`), `readFile` (`MemoryBuffer::getFile`, `lld/wasm/InputFiles.cpp:68`) and, for the `.a`, an `fs::exists` of the `.imports` next to it (`Driver.cpp:312`, which returns false) | `build/sysroot/lib/wasm32-wasip1`, `build/wasi-sdk-*/lib/clang/21/lib/...` | 2.9 MB + 0.45 MB |
+| the `.so` files loaded in wasmtime (`libc`, `libc++`, `libc++abi`, `libsc_rt`, `libsetjmp` and the ones they ask for) | `Loader::find` and `collect` (`loader.rs:317`, `std::fs::read`). The bytes also serve `dylink` and the DWARF (`debug`) | `build/sysroot/lib/wasm32-wasip1` | the same |
+| the code compiled by Cranelift (the `.so` files, and also each cell and the shims) | wasmtime's `Cache::from_file(None)` (`loader.rs:291`), which reads `~/.config/wasmtime/config.toml` if it exists | `~/.cache/wasmtime` | written on first use |
 
-Não entram: um `std.pcm` (os `.args` do `sc` não têm `-fmodule-file`, e
-`import std;` no `sc` dá "module 'std' not found"; só o `test/session.py`
-constrói o seu, de 38 MB), um `-resource-dir`, os `crt` (o link é
-`-shared`), os `.ctype` e `.setjmp` (carimbos do make) e o código-fonte
-das bibliotecas. Fora do build, o `sc` lê o tema
-(`~/.config/sc/config`) e o histórico (`~/.local/share/sc/history`),
-que ficam como estão.
+These do not count: a `std.pcm` (the `.args` of `sc` have no `-fmodule-file`,
+and `import std;` in `sc` gives "module 'std' not found"; only
+`test/session.py` builds its own, of 38 MB), a `-resource-dir`, the `crt`
+files (the link is `-shared`), the `.ctype` and `.setjmp` files (make's
+stamps) and the source code of the libraries. Outside the build, `sc` reads
+the theme (`~/.config/sc/config`) and the history
+(`~/.local/share/sc/history`), which stay as they are.
 
-Em tar, as cinco primeiras linhas somam 26 MB: 2,5 MB em `zstd -19`
-e 2,3 MB em `xz -9e`. Com um quadro zstd por arquivo, são 3,9 MB sem os
-intrínsecos (2,9 MB de cabeçalhos e 1,0 MB de bibliotecas). O squashfs
-que a proposta pede fica perto do tar (a tabela no fim desta seção). O
-`sc` de dist tem hoje 34 MB.
+In a tar, the first five rows add up to 26 MB. That is 2.5 MB with `zstd -19`
+and 2.3 MB with `xz -9e`. With one zstd frame per file, it is 3.9 MB without
+the intrinsics (2.9 MB of headers and 1.0 MB of libraries). The squashfs
+that the proposal asks for stays close to the tar (the table at the end of
+this section). The dist `sc` is 34 MB today.
 
-O `sc` também grava num diretório temporário, mas não para extrair nada: é
-o `.o` e o `.so` de cada célula (`sc_api.cpp`, `createUniqueDirectory`).
-Isso não entra nesta fase, ver "Fora da fase".
+`sc` also writes to a temporary directory, but not to extract anything. It
+writes the `.o` and the `.so` of each cell (`sc_api.cpp`,
+`createUniqueDirectory`). This is not part of this phase, see "Outside the
+phase".
 
-**A proposta.** Um pacote embutido no binário, lido em memória por
-três leitores: o VFS do clang, um gancho no wasm-ld e o loader.
+**The proposal.** A pack embedded in the binary and read in memory by
+three readers: clang's VFS, a hook in wasm-ld and the loader.
 
-1. **O pacote.**
-   - **É um squashfs com zstd -19 e blocos de 128 KB** (decidido em
-     2026-10-21). O índice traz os diretórios e o tamanho original de
-     cada arquivo, que o `status` pede. Os arquivos pequenos ficam juntos
-     em blocos ("fragments"), e ler um cabeçalho descomprime só o bloco
-     dele; o `backhand` guarda os blocos já abertos. Um tar.zst inteiro
-     não serve: obrigaria a descomprimir tudo para ler um cabeçalho. É
-     um formato padrão (o `unsquashfs` e o 7-Zip o abrem), e o menor dos
-     medidos, com o leitor incluído (a tabela no fim desta seção). O zip
-     comprime cada arquivo sozinho e não tem dicionário; com um
-     dicionário nosso dentro dele (entradas "stored" com quadros zstd),
-     ficaria 260 KB maior, e só o `sc` o leria.
-   - Entram os cabeçalhos (sem os intrínsecos de x86 e ARM), a
-     ignorelist, as `.so`, o `libclang_rt.builtins.a`, os `.args` e os
-     `.cwasm` (item 6).
-   - Quem o monta é o `build.rs`, com o crate `backhand` como
-     dependência de build (o mesmo `build.rs` que gera os `.cwasm`, item
-     6), a partir do que o `sc-deps` já produz. A raiz da imagem tem
-     `sysroot/` e `res/`, que o `sc` vê como `/sc/sysroot` e `/sc/res`.
-     O `sc` a embute com
-     `include_bytes!`, que funciona igual no Windows. O pacote fica no
-     binário `sc` (`src/bin/sc`), não na biblioteca, para o `scload` não
-     crescer.
-   - Os caminhos dentro do pacote ficam sob um prefixo virtual fixo,
-     com uma raiz para o sysroot e outra para o diretório do clang:
-     `/sc/sysroot/...` e `/sc/res/...`. Uma raiz só (`/sc/include`) não
-     serve: os dois têm `limits.h`, `stdint.h`, `float.h` e outros, que
-     se encadeiam por `#include_next`.
-2. **Os `.args` sem caminhos da máquina.** O `scripts/flags.py` já escreve
-   os caminhos numa visão virtual (`/sysroot`, `/res`, `/m/std.pcm`), que
-   `real()` troca pelos do build. O `--session` passa a trocá-los por
-   `/sc/sysroot` e `/sc/res` no lugar de `$(CURDIR)/build/...`, e o
-   `Machine::new` lê o `.args` do pacote, não do disco.
-   - O `build_dir()` sai do `sc`: ele só achava os `.args` e o sysroot, e
-     servia ao `frames` (item 8). Nenhum teste passa `SC_BUILD` ao `sc`
-     (só o `test/corpus.py` o lê, para si).
-3. **O clang: um `llvm::vfs::FileSystem` sobre o pacote, sem patch no LLVM.**
-   - Em `sc_session.cpp:685`, o `getRealFileSystem()` vira um FS que
-     responde por `/sc/` a partir do pacote e passa o resto ao FS real,
-     para o `#include "meu.h"` do aluno e para o `sc FILE`. A forma mais
-     simples é uma subclasse de `ProxyFileSystem` sobre o FS real. Um
-     `OverlayFileSystem` também serve, mas o `getRealPath` e o `isLocal`
-     dele perguntam primeiro ao FS de baixo (`VirtualFileSystem.cpp:532`
-     e `:539`), o que vai ao disco atrás de `/sc/...`, e o
-     `setCurrentWorkingDirectory` dele exige que o FS do pacote aceite o
-     diretório.
-   - O FS do pacote implementa `status`, `openFileForRead` e `dir_begin`
-     (a busca de cabeçalhos pede `status` de diretórios). Diretórios são
-     implícitos: os prefixos dos caminhos do índice.
-   - Esse código fica em `engine/` (um `sc_files.cpp`), mas a
-     descompressão fica do lado do Rust. O `status` precisa do tamanho
-     sem descomprimir, e o índice é o do squashfs, que só o Rust lê. O C++
-     recebe funções do Rust: uma que diz se um caminho é arquivo ou
-     diretório e o tamanho, uma que lista um diretório (para o
-     `dir_begin`) e uma que devolve os bytes, num
-     `sc_set_files(const struct sc_files *)`.
-     Os bytes que o `read` devolve valem até o fim do processo (o Rust os
-     guarda), porque o clang e o lld guardam ponteiros para eles.
-   - O C++ não precisa de zstd. Sem leitor registrado, tudo continua indo
-     ao FS real: é o caso do `sc.wasm`, que não exporta o `sc_set_files`,
-     e o `src/engine/wasm.rs` (o `sc` com a feature `wasm`) o implementa
-     como nada.
-4. **O wasm-ld: um patch pequeno, `llvm/lld-files.patch`.** O lld não usa
-   o VFS, então o patch põe um gancho global com a mesma função de
-   leitura em `readFile` (`InputFiles.cpp:68`), antes do
-   `MemoryBuffer::getFile`, e em `findFile` (`Driver.cpp:227`), antes do
-   `fs::exists`. O `fs::exists` do `.imports` (`Driver.cpp:312`) pode
-   ficar: dá falso para `/sc/...`, só aparece no `strace`.
-   - Não há outro acesso do lld aos arquivos de entrada deste link: os
-     membros do `.a` saem do buffer (o `libclang_rt.builtins.a` não é
-     thin), arquivos de resposta só com `@` (`Driver.cpp:249`, o `sc` não
-     passa nenhum), e a saída (`tryCreateFile`, `Driver.cpp:1366`) é o
-     diretório das células.
-   - Por que um patch e não um corte: não há outro caminho de entrada no
-     lld. A alternativa seria passar os arquivos ao lld por caminhos
-     reais, o que obriga a extrair.
-   - O patch tem umas 10 a 15 linhas (o gancho, a declaração e as duas
-     chamadas), em funções que mudam pouco entre versões. Ele entra
-     também no `sc.wasm`, com o gancho nulo: `make test` e o orçamento do
-     §5.1.
-5. **O loader.** O `libdirs: Vec<PathBuf>` vira uma função que devolve,
-   pelo nome, os bytes da biblioteca e, se houver, o `.cwasm` dela. Os
-   bytes da `.so` continuam necessários com o `.cwasm`: o `dylink.0` e o
-   DWARF saem deles (`loader.rs:327` e `:338`), não do módulo compilado.
-   O `sc` passa o pacote, e o `scload` e os `tests/` continuam com os
-   diretórios (`-L`).
-6. **O código das `.so` pré-compilado.**
-   - O pacote leva um `.cwasm` de cada `.so`, e em tempo de execução o
-     `Module::deserialize` os carrega sem compilar. As células e os shims
-     (`wasi_shim`, `stubs`) continuam compilados na hora pelo Cranelift
-     (`Module::new`), como hoje: a `Cache` nunca os reaproveitou. A
-     feature `cache` sai do wasmtime (`Cargo.toml:16`, usada só em
-     `loader.rs:291`), e com ela as gravações em `~/.cache`.
-   - Medido com o `wasmtime compile` 48: 4,7 MB (1,35 MB em zstd, um
-     quadro por arquivo). Compilar é rápido aqui (0,03 a 0,14 s por
-     biblioteca em 56 núcleos), mas não numa máquina de aluno, e hoje o
-     primeiro uso grava no `~/.cache`.
-   - **Decidido em 2026-10-21: embutir, sem cache.** Manter a `.so` ao
-     lado não custa nada: o wasm-ld a lê para ligar cada célula. O que
-     custa são os `.cwasm`, 1,34 MB comprimidos (4,62 MB crus, contra
-     2,96 MB das `.so`, 894 KB comprimidas). Preencher um cache no
-     primeiro uso pouparia esses 1,34 MB, mas a primeira célula de cada
-     máquina e de cada versão pagaria a compilação, e o `sc` voltaria a
-     gravar em disco. A `Cache` do wasmtime não serve para isso: guarda
-     todo módulo, células inclusive, e a limpeza é feita de vez em quando
-     por uma thread que os processos curtos não esperam. Aqui o
-     `~/.cache/wasmtime` tem 1007 MB em 138 mil arquivos, acima dos
-     limites padrão (512 MiB, 65.536 arquivos). Um cache só das cinco
-     bibliotecas, por versão, seria limitado por construção, mas embutir
-     é mais simples.
-   - **O DWARF da libc sai do pacote.** São 1,32 MB dos 1,91 MB da
-     `libc.so`, e o `frames()` já esconde as linhas `wasisdk://`. Sem ele
-     (`wasm-tools strip -d '.debug.*'`), a libc comprimida cai de 646 KB
-     para 287 KB: 359 KB a menos, um quarto do que os `.cwasm` custam. As outras bibliotecas quase não têm DWARF (libc++ 15 KB).
-   - **Quem compila.** Os `.cwasm` têm de existir antes de o `sc` ser
-     compilado (`include_bytes!`), então não podem sair do próprio `sc`,
-     como o `--precompile` do `sc-wasm` (`src/engine/wasm.rs:34`), que
-     grava um arquivo ao lado do binário. A saída é o `build.rs` compilar
-     com o wasmtime 48.0.3 como dependência de build, com as mesmas
-     features do `Cargo.toml:16`. O custo: o wasmtime compilado duas
-     vezes, e em `opt-level` 0 se o perfil não tiver `build-override`.
-   - **Cuidado:** o `Module::deserialize` confere (`wasmtime`,
-     `engine/serialization.rs:204`) a versão do wasmtime, a arquitetura e
-     o sistema, as flags do Cranelift, os `Tunables` (entre eles o
-     `epoch_interruption`) e as features de wasm (as do módulo têm de
-     estar no `Engine`). Hoje o `epoch_interruption` muda entre o REPL
-     interativo e o `sc FILE` (`Loader::new(..., interactive)`). As
-     saídas são:
-     - ligar o epoch sempre no `sc`. O §5.3 mediu o custo das checagens:
-       abaixo de 1%. O `sc FILE` não registra o Ctrl-C, então o epoch
-       nunca avança e o `arm()` de cada chamada não muda nada;
-     - ou compilar duas variantes, o que dobra os 4,7 MB.
-     A proposta é ligar sempre.
-   - **A CPU.** Um `Config::target(...)` explícito desliga a detecção das
-     extensões da máquina que compila (`isa_builder.rs:33` do
-     `wasmtime-internal-cranelift`): sai o código da CPU base. Na carga,
-     uma flag de CPU ligada no módulo tem de existir na máquina
-     (`engine.rs:529`); uma desligada sempre serve. No `build.rs`, o
-     alvo é o `TARGET` do cargo, o que também serve a um build cruzado
-     para o Windows.
-   - O `Module::deserialize` é `unsafe` porque confia nos bytes. Aqui os
-     bytes vêm do próprio binário, gerados no mesmo build, então isso é
-     aceitável.
-7. **O filho `sc --engine`** é o mesmo binário, então já tem o pacote: o
-   `main` do modo `--engine` chama o `sc_set_files` antes de abrir a
-   sessão. Os filhos do `--replay` são o mesmo `sc --engine`.
-8. **As linhas da pilha.** O `frames` (`machine.rs`) trata como do aluno
-   um arquivo do DWARF que não começa pelo diretório de build e não tem
-   `://`. O prefixo esconde o código dos cabeçalhos compilado dentro da
-   célula (funções inline e templates da libc++, que vêm de
-   `build/sysroot/include`). Os quadros das bibliotecas já se escondem
-   de outro jeito: a `libc.so` e as `wasi-emulated` têm caminhos
-   `wasisdk://`, e a libc++, a libc++abi e a `libsc_rt` não têm DWARF
-   próprio (medido com `llvm-dwarfdump`). Por isso o critério não pode
-   ser o módulo do quadro: um `std::vector` da célula é código da célula.
-   - O prefixo passa a ser o `/sc/` fixo, e o `build_dir()` sai.
-   - Junto, o `/src/`: o compiler-rt dentro da `libc.so` e da `libc++.so`
-     tem `DW_AT_comp_dir` `/src/build/sysroot/compiler-rt-...`, do build
-     do wasi-sdk. Hoje um trap num `__divti3` apareceria como código do
-     aluno. O projeto não usa `-ffile-prefix-map` em lugar nenhum.
+1. **The pack.**
+   - **It is a squashfs with zstd -19 and 128 KB blocks** (decided on
+     2026-10-21). The index holds the directories and the original size of
+     each file, which `status` asks for. The small files sit together
+     in blocks ("fragments"), and reading a header decompresses only its
+     block. `backhand` keeps the blocks it has already opened. A whole
+     tar.zst does not work, because it would force decompressing everything
+     to read one header. It is a standard format (`unsquashfs` and 7-Zip open
+     it), and the smallest of the ones measured, reader included (the table at
+     the end of this section). Zip compresses each file alone and has no
+     dictionary. With a dictionary of our own inside it ("stored" entries
+     with zstd frames), it would be 260 KB larger, and only `sc` would read
+     it.
+   - The pack holds the headers (without the x86 and ARM intrinsics), the
+     ignorelist, the `.so` files, `libclang_rt.builtins.a`, the `.args` and
+     the `.cwasm` files (item 6).
+   - `build.rs` assembles it, with the `backhand` crate as a build
+     dependency (the same `build.rs` that generates the `.cwasm` files, item
+     6), from what `sc-deps` already produces. The root of the image has
+     `sysroot/` and `res/`, which `sc` sees as `/sc/sysroot` and `/sc/res`.
+     `sc` embeds it with
+     `include_bytes!`, which works the same on Windows. The pack goes in the
+     `sc` binary (`src/bin/sc`), not in the library, so that `scload` does
+     not grow.
+   - The paths inside the pack sit under a fixed virtual prefix,
+     with one root for the sysroot and another for clang's directory:
+     `/sc/sysroot/...` and `/sc/res/...`. A single root (`/sc/include`) does
+     not work. Both have `limits.h`, `stdint.h`, `float.h` and others, which
+     chain through `#include_next`.
+2. **The `.args` without the machine's paths.** `scripts/flags.py` already
+   writes the paths in a virtual view (`/sysroot`, `/res`, `/m/std.pcm`),
+   which `real()` replaces with the build's. `--session` now replaces them
+   with `/sc/sysroot` and `/sc/res` in place of `$(CURDIR)/build/...`, and
+   `Machine::new` reads the `.args` from the pack, not from disk.
+   - `build_dir()` leaves `sc`. It only found the `.args` and the sysroot,
+     and served `frames` (item 8). No test passes `SC_BUILD` to `sc`
+     (only `test/corpus.py` reads it, for itself).
+3. **Clang: an `llvm::vfs::FileSystem` over the pack, with no patch to LLVM.**
+   - In `sc_session.cpp:685`, `getRealFileSystem()` becomes an FS that
+     answers for `/sc/` from the pack and passes the rest to the real FS,
+     for the student's `#include "meu.h"` and for `sc FILE`. The simplest
+     form is a subclass of `ProxyFileSystem` over the real FS. An
+     `OverlayFileSystem` also works, but its `getRealPath` and `isLocal`
+     ask the lower FS first (`VirtualFileSystem.cpp:532`
+     and `:539`), which goes to disk looking for `/sc/...`, and its
+     `setCurrentWorkingDirectory` requires the pack's FS to accept the
+     directory.
+   - The pack's FS implements `status`, `openFileForRead` and `dir_begin`
+     (the header search asks for `status` of directories). Directories are
+     implicit. They are the prefixes of the paths in the index.
+   - This code lives in `engine/` (an `sc_files.cpp`), but the
+     decompression stays on the Rust side. `status` needs the size
+     without decompressing, and the index is the squashfs one, which only Rust
+     reads. The C++ receives functions from Rust in an
+     `sc_set_files(const struct sc_files *)`. One says whether a path is a
+     file or a directory and gives its size, one lists a directory (for
+     `dir_begin`) and one returns the bytes.
+     The bytes that `read` returns stay valid until the process ends (Rust
+     keeps them), because clang and lld keep pointers to them.
+   - The C++ does not need zstd. With no reader registered, everything still
+     goes to the real FS. This is the case of `sc.wasm`, which does not export
+     `sc_set_files`, and `src/engine/wasm.rs` (`sc` with the `wasm` feature)
+     implements it as nothing.
+4. **Wasm-ld: a small patch, `llvm/lld-files.patch`.** Lld does not use
+   the VFS, so the patch puts a global hook with the same read function
+   in `readFile` (`InputFiles.cpp:68`), before
+   `MemoryBuffer::getFile`, and in `findFile` (`Driver.cpp:227`), before
+   `fs::exists`. The `fs::exists` of the `.imports` (`Driver.cpp:312`) can
+   stay. It returns false for `/sc/...` and shows up only in `strace`.
+   - Lld has no other access to the input files of this link. The
+     members of the `.a` come from the buffer (`libclang_rt.builtins.a` is not
+     thin), response files come only with `@` (`Driver.cpp:249`, and `sc`
+     passes none), and the output (`tryCreateFile`, `Driver.cpp:1366`) is the
+     cells' directory.
+   - Why a patch and not a cut. Lld has no other input path. The
+     alternative would be to pass the files to lld by real paths, which
+     forces extraction.
+   - The patch has some 10 to 15 lines (the hook, the declaration and the two
+     calls), in functions that change little between versions. It also goes
+     into `sc.wasm`, with a null hook, so `make test` and the budget of
+     §5.1 apply.
+5. **The loader.** `libdirs: Vec<PathBuf>` becomes a function that returns,
+   by name, the bytes of the library and, if there is one, its `.cwasm`. The
+   bytes of the `.so` are still needed with the `.cwasm`. The `dylink.0` and
+   the DWARF come from them (`loader.rs:327` and `:338`), not from the
+   compiled module. `sc` passes the pack, and `scload` and `tests/` keep the
+   directories (`-L`).
+6. **The code of the `.so` files, precompiled.**
+   - The pack carries a `.cwasm` of each `.so`, and at run time
+     `Module::deserialize` loads them without compiling. The cells and the
+     shims (`wasi_shim`, `stubs`) are still compiled on the spot by Cranelift
+     (`Module::new`), as today. The `Cache` never reused them. The
+     `cache` feature leaves wasmtime (`Cargo.toml:16`, used only in
+     `loader.rs:291`), and the writes to `~/.cache` go with it.
+   - Measured with `wasmtime compile` 48: 4.7 MB (1.35 MB in zstd, one
+     frame per file). Compiling is fast here (0.03 to 0.14 s per
+     library on 56 cores), but not on a student's machine, and today the
+     first use writes to `~/.cache`.
+   - **Decided on 2026-10-21: embed, with no cache.** Keeping the `.so`
+     alongside costs nothing, because wasm-ld reads it to link each cell.
+     The cost is in the `.cwasm` files, 1.34 MB compressed (4.62 MB raw,
+     against 2.96 MB for the `.so` files, 894 KB compressed). Filling a cache
+     on first use would save those 1.34 MB, but the first cell on each
+     machine and for each version would pay for the compilation, and `sc`
+     would write to disk again. Wasmtime's `Cache` does not fit this. It keeps
+     every module, cells included, and a thread cleans it now and then, which
+     the short processes do not wait for. Here `~/.cache/wasmtime` holds
+     1007 MB in 138 thousand files, above the default limits (512 MiB, 65,536
+     files). A cache of only the five libraries, per version, would be bounded
+     by construction, but embedding is simpler.
+   - **The libc's DWARF leaves the pack.** It is 1.32 MB of the 1.91 MB of
+     `libc.so`, and `frames()` already hides the `wasisdk://` lines. Without
+     it (`wasm-tools strip -d '.debug.*'`), the compressed libc drops from
+     646 KB to 287 KB. That is 359 KB less, a quarter of what the `.cwasm`
+     files cost. The other libraries have almost no DWARF (libc++ 15 KB).
+   - **Who compiles.** The `.cwasm` files have to exist before `sc` is
+     compiled (`include_bytes!`), so they cannot come from `sc` itself,
+     like the `--precompile` of `sc-wasm` (`src/engine/wasm.rs:34`), which
+     writes a file next to the binary. The way out is for `build.rs` to
+     compile them with wasmtime 48.0.3 as a build dependency, with the same
+     features as `Cargo.toml:16`. The cost is wasmtime compiled twice, and at
+     `opt-level` 0 if the profile has no `build-override`.
+   - **Careful:** `Module::deserialize` checks (`wasmtime`,
+     `engine/serialization.rs:204`) the wasmtime version, the architecture and
+     the system, the Cranelift flags, the `Tunables` (among them
+     `epoch_interruption`) and the wasm features (the module's have to
+     be in the `Engine`). Today `epoch_interruption` differs between the
+     interactive REPL and `sc FILE` (`Loader::new(..., interactive)`). The
+     ways out are:
+     - always turn the epoch on in `sc`. §5.3 measured the cost of the
+       checks, below 1%. `sc FILE` does not register Ctrl-C, so the epoch
+       never advances and the `arm()` of each call changes nothing;
+     - or compile two variants, which doubles the 4.7 MB.
+     The proposal is to always turn it on.
+   - **The CPU.** An explicit `Config::target(...)` turns off the detection
+     of the extensions of the compiling machine (`isa_builder.rs:33` of
+     `wasmtime-internal-cranelift`). The output is code for the base CPU. At
+     load time, a CPU flag that is on in the module has to exist on the
+     machine (`engine.rs:529`). A flag that is off always works. In
+     `build.rs`, the target is cargo's `TARGET`, which also works for a cross
+     build for Windows.
+   - `Module::deserialize` is `unsafe` because it trusts the bytes. Here the
+     bytes come from the binary itself, generated in the same build, so this
+     is acceptable.
+7. **The child `sc --engine`** is the same binary, so it already has the
+   pack. The `main` of the `--engine` mode calls `sc_set_files` before it
+   opens the session. The children of `--replay` are the same `sc --engine`.
+8. **The stack lines.** `frames` (`machine.rs`) treats as the student's
+   a DWARF file that does not start with the build directory and has no
+   `://`. The prefix hides the header code compiled inside the
+   cell (inline functions and templates of libc++, which come from
+   `build/sysroot/include`). The libraries' frames already hide in
+   another way. `libc.so` and the `wasi-emulated` ones have
+   `wasisdk://` paths, and libc++, libc++abi and `libsc_rt` have no DWARF
+   of their own (measured with `llvm-dwarfdump`). So the criterion cannot
+   be the module of the frame. A `std::vector` in the cell is the cell's code.
+   - The prefix becomes the fixed `/sc/`, and `build_dir()` goes.
+   - Along with it, `/src/`. The compiler-rt inside `libc.so` and `libc++.so`
+     has `DW_AT_comp_dir` `/src/build/sysroot/compiler-rt-...`, from the
+     wasi-sdk build. Today a trap in a `__divti3` would show up as the
+     student's code. The project uses `-ffile-prefix-map` nowhere.
 
-**O que muda para quem usa.**
-- Uma nota de diagnóstico mostra `/sc/sysroot/include/...` em vez de
-  `.../build/sysroot/include/...`. Fica mais curto e igual em toda
-  máquina.
-- As bases não mudam sozinhas. O `ses-`, o `seq-`, o `crash-` e o
-  `split-` passam os próprios argumentos ao `sc --replay`, com os
-  caminhos reais (`flags.session(...)`, `test/session.py:105`,
-  `test/split.py:78`), e o FS real continua por baixo. O `test-aluno` e
-  o `test-checks` usam os `.args` do `sc`, mas o `expected.txt` deles não
-  tem nenhum caminho do build.
-- O `sc` cresce uns 4,3 MB: 4,01 MB do squashfs e 302 KB do leitor
-  (o `backhand` sem as features padrão, só `zstd`, e o `zstd-sys`, em C,
-  que o build do engine já sabe compilar; com a `cache` fora do wasmtime,
-  só o pacote o usa). Medido em 2026-10-21 com o pacote inteiro (2.035
-  arquivos, 23,4 MB crus: cabeçalhos, `.args`, ignorelist, `.so` com a
-  libc sem DWARF, builtins e `.cwasm`). O leitor é o aumento de um
-  binário de teste com o perfil `dist` sobre um sem leitor; os três
-  leram os 23.371.456 bytes certos.
+**What changes for the user.**
+- A diagnostic note shows `/sc/sysroot/include/...` instead of
+  `.../build/sysroot/include/...`. It is shorter and the same on every
+  machine.
+- The baselines do not change by themselves. `ses-`, `seq-`, `crash-` and
+  `split-` pass their own arguments to `sc --replay`, with the
+  real paths (`flags.session(...)`, `test/session.py:105`,
+  `test/split.py:78`), and the real FS is still underneath. `test-aluno` and
+  `test-checks` use the `.args` of `sc`, but their `expected.txt` has no
+  build path.
+- `sc` grows by some 4.3 MB, 4.01 MB for the squashfs and 302 KB for the
+  reader (`backhand` without the default features, only `zstd`, and
+  `zstd-sys`, in C, which the engine's build already knows how to compile;
+  with `cache` out of wasmtime, only the pack uses it). Measured on
+  2026-10-21 with the whole pack (2,035 files, 23.4 MB raw: headers,
+  `.args`, ignorelist, `.so` files with the libc without DWARF, builtins and
+  `.cwasm` files). The reader is the growth of a test binary with the `dist`
+  profile over one without a reader. All three read the right 23,371,456
+  bytes.
 
-  | | pacote | leitor | total |
+  | | pack | reader | total |
   | --- | --- | --- | --- |
-  | squashfs, zstd -19, blocos de 128 KB (`backhand`) | 4,01 MB | 302 KB | **4,31 MB** |
-  | zip "stored" com quadros zstd e dicionário (`zip` + `zstd`) | 4,38 MB | 187 KB | 4,57 MB |
-  | o mesmo, com o `ruzstd` | 4,38 MB | 178 KB | 4,56 MB |
-  | zip com zstd, método 93, sem dicionário | 5,29 MB | ~190 KB | ~5,48 MB |
+  | squashfs, zstd -19, 128 KB blocks (`backhand`) | 4.01 MB | 302 KB | **4.31 MB** |
+  | "stored" zip with zstd frames and a dictionary (`zip` + `zstd`) | 4.38 MB | 187 KB | 4.57 MB |
+  | the same, with `ruzstd` | 4.38 MB | 178 KB | 4.56 MB |
+  | zip with zstd, method 93, without a dictionary | 5.29 MB | ~190 KB | ~5.48 MB |
 
-  O zip perde 403 KB só nos cabeçalhos das 2.035 entradas (cada nome
-  duas vezes, sem compressão). O dicionário, treinado nos cabeçalhos,
-  não muda as bibliotecas nem os `.cwasm` (1,988 MB contra 1,990 MB). Só
-  os cabeçalhos, por arquivo: 3,42 MB em zip deflate, 2,91 MB em zstd,
-  1,88 MB com dicionário, 1,95 MB em squashfs.
+  Zip loses 403 KB in the headers of the 2,035 entries alone (each name
+  twice, uncompressed). The dictionary, trained on the headers, does not
+  change the libraries or the `.cwasm` files (1.988 MB against 1.990 MB).
+  The headers alone, per file: 3.42 MB in zip deflate, 2.91 MB in zstd,
+  1.88 MB with a dictionary, 1.95 MB in squashfs.
 
-**Passos.**
-1. `flags.py` com `/sc/sysroot` e `/sc/res`; o squashfs (`build.rs` e
-   embutido), sem leitores ainda. Conferir o tamanho com a tabela acima.
-   **Feito em 2026-10-21** (NOTES.md §52): os `.args` do pacote ficam em
-   `build/pack/repl`, e o pacote sem os `.cwasm` tem 2,61 MB.
-2. O VFS do clang e o `sc_set_files`. Rodar `test-aluno` e `test-checks`,
-   que são os que passam pelos `.args` do `sc`, com o `sc` copiado para
-   fora do checkout. O `test-session` e o `test-split` passam aos `.args`
-   com `/sc/` (decidido abaixo) e refazem as bases uma vez.
-3. O patch do lld; o link das células sem o disco. `make test` (o patch
-   entra no `sc.wasm`).
-4. O loader lendo do pacote; os `.cwasm` pelo `build.rs`; o epoch sempre
-   ligado; a `cache` fora. `make test-loader`.
-   **Os passos 2 e 3 e o loader do 4 foram feitos juntos em 2026-10-21**
-   (NOTES.md §53): sem o gancho do lld e sem o loader no pacote, os
-   `.args` com `/sc/` não ligam nem carregam as células. Com eles saíram
-   o `build_dir()` e o `build/repl`, e o `frames` passou a usar `/sc/`.
-   O resto do 4 foi feito em 2026-10-22 (NOTES.md §54), com o 5 e o 6.
-5. O `frames` com `/sc/` e `/src/`, sem o `build_dir()`. Feito com os
-   prefixos exatos do compiler-rt (`/src/src/llvm-project/` e
-   `/src/build/`): um `/src/` inteiro esconderia o código de um aluno que
-   trabalha em `/src`, comum num container.
-6. Docs: README (instalar é copiar o `sc`), AGENTS, NOTES.md.
+**Steps.**
+1. `flags.py` with `/sc/sysroot` and `/sc/res`; the squashfs (`build.rs` and
+   embedded), with no readers yet. Check the size against the table above.
+   **Done on 2026-10-21** (NOTES.md §52). The pack's `.args` live in
+   `build/pack/repl`, and the pack without the `.cwasm` files is 2.61 MB.
+2. Clang's VFS and `sc_set_files`. Run `test-aluno` and `test-checks`,
+   which are the ones that go through the `.args` of `sc`, with `sc` copied
+   outside the checkout. `test-session` and `test-split` switch to the
+   `.args` with `/sc/` (decided below) and redo the baselines once.
+3. The lld patch; the link of the cells without the disk. `make test` (the
+   patch goes into `sc.wasm`).
+4. The loader reading from the pack; the `.cwasm` files from `build.rs`; the
+   epoch always on; `cache` out. `make test-loader`.
+   **Steps 2 and 3 and the loader of 4 were done together on 2026-10-21**
+   (NOTES.md §53). Without the lld hook and without the loader on the pack,
+   the `.args` with `/sc/` neither link nor load the cells. With them,
+   `build_dir()` and `build/repl` went, and `frames` switched to `/sc/`.
+   The rest of 4 was done on 2026-10-22 (NOTES.md §54), with 5 and 6.
+5. `frames` with `/sc/` and `/src/`, without `build_dir()`. Done with the
+   exact prefixes of compiler-rt (`/src/src/llvm-project/` and
+   `/src/build/`). A whole `/src/` would hide the code of a student who
+   works in `/src`, which is common in a container.
+6. Docs: README (installing is copying `sc`), AGENTS, NOTES.md.
 
-**Critério de saída.**
-- O `build/cargo/dist/sc` copiado para um diretório vazio, com o checkout
-  inacessível (renomeado), roda C, C++ com exceções, o REPL e um trap com
-  a linha da pilha.
-- `strace -f -e trace=%file` não mostra nenhum caminho do checkout e
-  nenhum `/sc/...` no disco, fora o `stat` do `.imports` do lld. O que
-  pode aparecer: as bibliotecas do sistema (`libstdc++.so.6`, `libc`), o
-  `/proc/self/exe`, o tema e o histórico, os `#include "..."` do aluno e
-  o diretório das células.
-- `make test-dist` sem diferença.
-- Tamanho do `sc` e tempo da primeira execução (antes e depois) no NOTES.md.
+**Exit criterion.**
+- `build/cargo/dist/sc`, copied to an empty directory, with the checkout
+  out of reach (renamed), runs C, C++ with exceptions, the REPL and a trap
+  with the stack line.
+- `strace -f -e trace=%file` shows no path of the checkout and
+  no `/sc/...` on disk, apart from lld's `stat` of the `.imports`. What
+  may show up: the system libraries (`libstdc++.so.6`, `libc`),
+  `/proc/self/exe`, the theme and the history, the student's
+  `#include "..."` and the cells' directory.
+- `make test-dist` with no difference.
+- The size of `sc` and the time of the first run (before and after) in
+  NOTES.md.
 
-**Riscos.**
-- **Windows.** O LLVM junta caminhos com o separador nativo
-  (`path::append`), então o clang e o `findFile` do lld pedem
-  `/sc/sysroot/include\stdio.h`. O leitor do pacote, que o clang e o lld
-  compartilham, tem de aceitar os dois separadores. E `/sc/...` não é
-  absoluto no Windows (falta a unidade): o `makeAbsolute` do VFS o
-  completa com a unidade do diretório atual (`C:\sc\...`), que o FS do
-  pacote também teria de reconhecer, ou o prefixo vira um com letra de
-  unidade. Isso só será verificado quando houver build para Windows. O
-  pacote não é o maior obstáculo: o `fork` de cada célula
-  (`session.rs:398`), o SIGIO do filho (`session.rs:350`) e o SIGINT do
-  loader (`loader.rs:870`) são só Unix (NOTES.md §51).
-- **Um leitor esquecido.** Algum arquivo que o clang ou o lld abra por
-  fora do VFS ou do gancho só aparece fora do checkout. O `strace` do
-  critério acha isso.
-- **`.cwasm` incompatível.** Se o `Module::deserialize` falhar (outra
-  CPU, outra `Config`), compilar o `.so` do pacote na hora em vez de
-  abortar. Os bytes da `.so` estão no pacote de qualquer forma.
-- **O sistema.** Um arquivo só não quer dizer sem dependências: o `sc` de
-  dist liga dinamicamente a `libstdc++.so.6` (até `GLIBCXX_3.4.29`) e a
-  glibc (até `GLIBC_2.39`). "Outra máquina do mesmo sistema" quer dizer
-  uma glibc 2.39 ou mais nova. Um `-static-libstdc++` é uma decisão à
-  parte.
+**Risks.**
+- **Windows.** LLVM joins paths with the native separator
+  (`path::append`), so clang and lld's `findFile` ask for
+  `/sc/sysroot/include\stdio.h`. The pack's reader, which clang and lld
+  share, has to accept both separators. And `/sc/...` is not
+  absolute on Windows (the drive is missing). The VFS's `makeAbsolute`
+  completes it with the drive of the current directory (`C:\sc\...`), which
+  the pack's FS would also have to recognize, or else the prefix becomes one
+  with a drive letter. This will be checked only once there is a Windows
+  build. The pack is not the biggest obstacle. The `fork` of each cell
+  (`session.rs:398`), the child's SIGIO (`session.rs:350`) and the loader's
+  SIGINT (`loader.rs:870`) are Unix only (NOTES.md §51).
+- **A forgotten reader.** A file that clang or lld opens outside the VFS
+  or the hook shows up only outside the checkout. The `strace` of the
+  criterion finds it.
+- **An incompatible `.cwasm`.** If `Module::deserialize` fails (another
+  CPU, another `Config`), compile the pack's `.so` on the spot instead of
+  aborting. The bytes of the `.so` are in the pack anyway.
+- **The system.** A single file does not mean no dependencies. The dist `sc`
+  links `libstdc++.so.6` (up to `GLIBCXX_3.4.29`) and glibc (up to
+  `GLIBC_2.39`) dynamically. "Another machine with the same system" means
+  a glibc 2.39 or newer. A `-static-libstdc++` is a separate decision.
 
-**Fora da fase.**
-- O diretório temporário das células. Feito depois, em 2026-10-22
-  (NOTES.md §58): o lld lê o `.o` e grava o `.so` em memória.
-- Os modos one-shot `sc --cc1` e `sc --ld` (`sc_main.cpp:61`, FS real):
-  são dos testes (`test-native`, `learn-native`) e continuam no disco.
-- O host JS (6b, §5.5), que fornece os mesmos arquivos ao `sc.wasm`.
-  Feito depois, em 2026-10-22: pelos imports `sc_files` (NOTES.md §58).
-- `import std;` no `sc` (decidido em 2026-10-21: fica fora). Hoje não
-  funciona. Embutido, o `std.pcm` (38 MB sem comprimir, feito com as
-  flags da sessão) passaria de longe o resto do pacote. Construído no
-  primeiro uso, voltaria a gravar em disco. Fica para uma fase própria,
-  junto com o PCH.
-- Um PCH dos cabeçalhos para acelerar a primeira célula: seria mais um
-  arquivo no pacote. É uma decisão à parte.
+**Outside the phase.**
+- The cells' temporary directory. Done later, on 2026-10-22
+  (NOTES.md §58). Lld reads the `.o` and writes the `.so` in memory.
+- The one-shot modes `sc --cc1` and `sc --ld` (`sc_main.cpp:61`, real FS).
+  They belong to the tests (`test-native`, `learn-native`) and stay on disk.
+- The JS host (6b, §5.5), which gives the same files to `sc.wasm`.
+  Done later, on 2026-10-22, through the `sc_files` imports (NOTES.md §58).
+- `import std;` in `sc` (decided on 2026-10-21: it stays out). Today it does
+  not work. Embedded, the `std.pcm` (38 MB uncompressed, built with the
+  session's flags) would far exceed the rest of the pack. Built on
+  first use, it would bring back the writes to disk. It waits for a phase of
+  its own, together with the PCH.
+- A PCH of the headers to speed up the first cell. It would be one more
+  file in the pack. It is a separate decision.
 
-**Decisões.**
-- **Decidido em 2026-10-21:** o `test-session` e o `test-split` passam a
-  usar `/sc/` (o `sc-full` e o `build/sc` lendo do pacote), para o corpus
-  exercitar o pacote. Um leitor esquecido no clang ou no lld só aparece
-  fora do checkout, e o corpus é a única bateria grande o bastante para
-  pegá-lo. As bases do `session-*` e do `split-` mudam uma vez (57
-  resultados do `session-base` e 10 do `split` citam `build/sysroot`), e
-  a mudança fica no NOTES.md como intencional. O `sc-wasm` continua com os
-  caminhos reais: o `sc.wasm` não tem leitor.
-- **Decidido em 2026-10-21:** os `.cwasm` saem do `build.rs`, com o
-  wasmtime 48.0.3 como dependência de build e um
-  `[profile.*.build-override] opt-level = 2`. O `cargo build` sozinho
-  continua fazendo o `sc`, e o `Config` do `Engine` sai de uma função só,
-  usada pelo `build.rs` e pelo loader. Um passo à parte no make
-  compilaria o wasmtime uma vez, mas o `cargo build` deixaria de bastar e
-  a ordem ficaria circular (os `.cwasm` vão dentro do `sc`). O tempo a
-  mais do build se mede no passo 4.
-- **Decidido em 2026-10-21:** o pacote é um squashfs (item 1), gravado
-  e lido pelo `backhand`. Foi o menor dos medidos com o leitor incluído
-  (4,31 MB), e é um formato padrão. O zip foi considerado: sem
-  dicionário, 5,5 MB; com um dicionário nosso dentro dele, 4,57 MB e
-  legível só pelo `sc`.
+**Decisions.**
+- **Decided on 2026-10-21:** `test-session` and `test-split` switch to
+  `/sc/` (`sc-full` and `build/sc` reading from the pack), so that the corpus
+  exercises the pack. A forgotten reader in clang or lld shows up only
+  outside the checkout, and the corpus is the only battery large enough to
+  catch it. The baselines of `session-*` and of `split-` change once (57
+  results of `session-base` and 10 of `split` mention `build/sysroot`), and
+  NOTES.md records the change as intended. `sc-wasm` keeps the
+  real paths, because `sc.wasm` has no reader.
+- **Decided on 2026-10-21:** the `.cwasm` files come from `build.rs`, with
+  wasmtime 48.0.3 as a build dependency and a
+  `[profile.*.build-override] opt-level = 2`. `cargo build` alone
+  still makes `sc`, and the `Config` of the `Engine` comes from a single
+  function, which `build.rs` and the loader both use. A separate step in make
+  would compile wasmtime once, but `cargo build` would no longer be enough and
+  the order would be circular (the `.cwasm` files go inside `sc`). Step 4
+  measures the extra build time.
+- **Decided on 2026-10-21:** the pack is a squashfs (item 1), written
+  and read by `backhand`. It was the smallest of the ones measured with the
+  reader included (4.31 MB), and it is a standard format. Zip was considered.
+  Without a dictionary it is 5.5 MB. With a dictionary of our own inside it,
+  it is 4.57 MB and only `sc` can read it.
 
-### 5.5 O host JS (proposta)
+### 5.5 The JS host (proposal)
 
-O REPL no navegador, documentado na fase 6b e ainda não feito. Ele
-substitui as duas metades do `sc` nativo:
-- o compilador (`sc --engine`) vira o `sc.wasm` como biblioteca;
-- o loader (`src/loader.rs`) vira um loader em JS.
+The REPL in the browser, documented in phase 6b and not done yet. It
+replaces the two halves of the native `sc`:
+- the compiler (`sc --engine`) becomes `sc.wasm` as a library;
+- the loader (`src/loader.rs`) becomes a loader in JS.
 
-Este plano junta o que as fases 5 a 7 deixaram anotado (§1.2, §1.5, §3.6
-e NOTES.md §25 e §48).
+This plan gathers what phases 5 to 7 left noted (§1.2, §1.5, §3.6
+and NOTES.md §25 and §48).
 
-**Dois Web Workers.** A página só mostra o prompt e a saída.
-- O worker do compilador tem o `sc.wasm`. Uma compilação longa não trava
-  a página, e o `terminate` para qualquer uma.
-- O worker do programa tem o loader e os `.so`. O V8 não tem epoch, e um
-  laço infinito do aluno só para com o `terminate` do worker.
+**Two Web Workers.** The page only shows the prompt and the output.
+- The compiler's worker has `sc.wasm`. A long compilation does not freeze
+  the page, and `terminate` stops any of them.
+- The program's worker has the loader and the `.so` files. V8 has no epoch,
+  and an infinite loop of the student's stops only with the worker's
+  `terminate`.
 
-Os dois conversam por `postMessage`. O `.so` da célula vai do compilador
-ao programa como `ArrayBuffer` transferido, sem cópia.
+The two talk through `postMessage`. The cell's `.so` goes from the compiler
+to the program as a transferred `ArrayBuffer`, with no copy.
 
-**Os arquivos.** Decidido e feito em 2026-10-22 (NOTES.md §58 e §59): os do
-nativo, sem um FS no shim WASI.
-- O pacote do §5.4 (headers, bibliotecas, ignorelist, builtins e os
-  `.args`) está no próprio `sc.wasm`, um squashfs sem compressão que a
-  biblioteca do squashfuse lê (`engine/sc_pack.cpp`, NOTES.md §59). O
-  host só chama o `sc_pack("/sc")` exportado. A sessão lê pelo VFS do
-  clang e pelo gancho do lld, como no nativo, e os `.args` do `sc` nativo
-  servem sem mudança. A página baixa só o módulo, que o servidor comprime.
-- A sessão liga as células em memória: não há `/tmp`. O WASI do worker
-  só precisa de stdout, stderr, relógio e argumentos.
-- Os `.cwasm` não servem no navegador. O V8 compila os `.so` e guarda o
-  código do `WebAssembly.compileStreaming` no cache HTTP dele.
+**The files.** Decided and done on 2026-10-22 (NOTES.md §58 and §59). They
+are the native ones, with no FS in the WASI shim.
+- The pack of §5.4 (headers, libraries, ignorelist, builtins and the
+  `.args`) is in `sc.wasm` itself, an uncompressed squashfs that the
+  squashfuse library reads (`engine/sc_pack.cpp`, NOTES.md §59). The
+  host only calls the exported `sc_pack("/sc")`. The session reads through
+  clang's VFS and lld's hook, as in the native build, and the `.args` of the
+  native `sc` work unchanged. The page downloads only the module, which the
+  server compresses.
+- The session links the cells in memory. There is no `/tmp`. The worker's
+  WASI only needs stdout, stderr, a clock and arguments.
+- The `.cwasm` files do not work in the browser. V8 compiles the `.so` files
+  and keeps the code of `WebAssembly.compileStreaming` in its HTTP cache.
 
-**A sessão.** O contrato é o do README, o mesmo do `src/engine/wasm.rs`:
-1. instanciar e chamar o `_initialize` uma vez;
-2. chamar o `chdir` (o guest começa em `/`);
-3. pôr os argumentos com o `malloc` e chamar o `sc_session_new`;
-4. a cada célula, `sc_session_cell` e as partes por `sc_result_ptr` e
-   `sc_result_len`, lidas do `memory.buffer`.
+**The session.** The contract is the README's, the same as `src/engine/wasm.rs`'s:
+1. instantiate and call `_initialize` once;
+2. call `chdir` (the guest starts in `/`);
+3. put the arguments in place with `malloc` and call `sc_session_new`;
+4. for each cell, `sc_session_cell` and the parts through `sc_result_ptr` and
+   `sc_result_len`, read from `memory.buffer`.
 
-O `Repl` do `src/engine/child.rs` vira JS, com o log das células aceitas
-e o repasse depois de um `SC_LOST` (§3.6).
+The `Repl` of `src/engine/child.rs` becomes JS, with the log of the accepted
+cells and the replay after an `SC_LOST` (§3.6).
 
-**A célula que falha, sem `fork`** (NOTES.md §25). A recomendação é o
-snapshot da memória linear antes de cada célula, restaurado se ela falha
-ou se o engine dá trap. No V8 ele custa (NOTES.md §48, depois de 100
-células):
+**The cell that fails, without `fork`** (NOTES.md §25). The recommendation is
+a snapshot of the linear memory before each cell, restored if the cell fails
+or if the engine traps. In V8 it costs (NOTES.md §48, after 100
+cells):
 
-| memória | copiar | restaurar |
+| memory | copy | restore |
 | --- | ---: | ---: |
-| 19 MB (C) | 3,7 ms | 2,5 ms |
-| 42 MB (C++) | 16,9 ms | 4,4 ms |
+| 19 MB (C) | 3.7 ms | 2.5 ms |
+| 42 MB (C++) | 16.9 ms | 4.4 ms |
 
-São de 15% a 50% de uma célula. A outra opção, repassar o log a cada
-erro, custou ~2 s por erro na sessão medida (NOTES.md §25).
+That is 15% to 50% of a cell. The other option, replaying the log on each
+error, cost ~2 s per error in the measured session (NOTES.md §25).
 
-O snapshot precisa também de:
-- o `__stack_pointer`, que vai para a lista `EXPORTS` do
-  `scripts/link.py`. Depois de um trap, ele fica onde o trap aconteceu;
-- zerar o trecho que a memória cresceu na célula, porque a memória não
-  encolhe;
-- fechar no shim os arquivos que a célula deixou abertos. Sem FS no
-  shim (NOTES.md §58), não há nenhum.
+The snapshot also needs:
+- `__stack_pointer`, which goes into the `EXPORTS` list of
+  `scripts/link.py`. After a trap, it stays where the trap happened;
+- zeroing the stretch by which the memory grew in the cell, because the
+  memory does not shrink;
+- closing in the shim the files the cell left open. With no FS in the
+  shim (NOTES.md §58), there are none.
 
-**Feito em 2026-10-22, no Node (NOTES.md §56).** O `__stack_pointer` é
-exportado. O `test/node/engine.mjs` é o filho `sc --engine` com o
-snapshot e a restauração, e a bateria inteira passa nele (`make
-test-session-node`). Uma célula custa 11 ms em C e 23 ms em C++, contra 17
-e 29 ms do wasmtime com `fork`. O pacote veio depois, pelos imports
-`sc_files` (NOTES.md §58).
+**Done on 2026-10-22, in Node (NOTES.md §56).** `__stack_pointer` is
+exported. `test/node/engine.mjs` is the child `sc --engine` with the
+snapshot and the restore, and the whole battery passes on it (`make
+test-session-node`). A cell costs 11 ms in C and 23 ms in C++, against 17
+and 29 ms for wasmtime with `fork`. The pack came later, through the
+`sc_files` imports (NOTES.md §58).
 
-**Os limites.**
-- **Timeout e Ctrl-C da compilação:** `terminate` do worker, um worker
-  novo e o repasse do log, como o `SC_LOST`.
-- **Memória:** a válvula de 1 GB do nativo vira um teste do
-  `memory.buffer.byteLength` depois de cada célula. Durante a célula, o
-  limite é o da memória wasm32, 4 GB.
-- **Pilha:** o V8 fixa a pilha do wasm (~1 MB, §1.2). Os 16 casos de
-  "call stack exhausted" do corpus continuam falhando no navegador.
+**The limits.**
+- **Timeout and Ctrl-C of the compilation:** the worker's `terminate`, a new
+  worker and the replay of the log, like `SC_LOST`.
+- **Memory:** the native 1 GB valve becomes a test of
+  `memory.buffer.byteLength` after each cell. During the cell, the
+  limit is that of wasm32 memory, 4 GB.
+- **Stack:** V8 fixes the wasm stack (~1 MB, §1.2). The 16 cases of
+  "call stack exhausted" in the corpus still fail in the browser.
 
-**O loader em JS.** Ele segue o `src/loader.rs`:
-- uma `WebAssembly.Memory` e uma `WebAssembly.Table` para todos os
-  módulos;
-- o `dylink.0` lido dos bytes;
-- os GOT como `WebAssembly.Global` mutáveis;
-- os stubs pela tabela;
-- o `__cpp_exception` e o `__c_longjmp` como um `WebAssembly.Tag` só.
-  Pede exnref (§1.5).
+**The loader in JS.** It follows `src/loader.rs`:
+- one `WebAssembly.Memory` and one `WebAssembly.Table` for all the
+  modules;
+- `dylink.0` read from the bytes;
+- the GOT entries as mutable `WebAssembly.Global` objects;
+- the stubs through the table;
+- `__cpp_exception` and `__c_longjmp` as a single `WebAssembly.Tag`.
+  It needs exnref (§1.5).
 
-Os stubs e o shim WASI do loader nativo são gerados com o `wasm-encoder`.
-Em JS eles são funções do host, ou módulos pequenos montados em bytes.
+The native loader's stubs and WASI shim are generated with `wasm-encoder`.
+In JS they are host functions, or small modules assembled as bytes.
 
-Uma exceção não capturada é tratada como no loader nativo (§1.5): o
-`WebAssembly.Exception.getArg` com a tag `__cpp_exception`, depois o
-`__cxa_begin_catch` e o `std::terminate`.
+The JS loader handles an uncaught exception as the native loader does (§1.5):
+`WebAssembly.Exception.getArg` with the `__cpp_exception` tag, then
+`__cxa_begin_catch` and `std::terminate`.
 
-O arquivo e a linha de um trap (`frames`) dependem do DWARF dos `.so` e
-da pilha do `Error`. O V8 dá a pilha com os offsets das funções; o resto
-é o `Loader::symbols` em JS, ou fica sem linha.
+The file and line of a trap (`frames`) depend on the DWARF of the `.so` files
+and on the stack of the `Error`. V8 gives the stack with the offsets of the
+functions. The rest is `Loader::symbols` in JS, or the trap goes without a
+line.
 
-**Feito em 2026-10-22, no Node (NOTES.md §57).** O
-`test/node/loader.mjs` carrega os `.so` como o `src/loader.rs`, sem o ASan
-e sem o DWARF. O `make test-split-node` passa com 0 diferenças, e o `make
-test-session-node` roda nele os programas. Os tipos dos imports vêm dos
-bytes, e os stubs são módulos montados em bytes. Um `exit` vira um trap,
-que o wasm não captura.
+**Done on 2026-10-22, in Node (NOTES.md §57).**
+`test/node/loader.mjs` loads the `.so` files like `src/loader.rs`, without
+ASan and without the DWARF. `make test-split-node` passes with 0 differences,
+and `make test-session-node` runs the programs on it. The types of the
+imports come from the bytes, and the stubs are modules assembled as bytes.
+An `exit` becomes a trap, which wasm does not catch.
 
-**A decidir** (§8):
-- O laço infinito do aluno. Com o `terminate`, o estado das células se
-  perde, e os `.so` aceitos são carregados de novo, o que roda outra vez
-  os statements do topo. A outra opção é um passo nosso que insere
-  `check_interrupt` nos laços (NOTES.md §7.2), lido de um
+**To decide** (§8):
+- The student's infinite loop. With `terminate`, the state of the cells is
+  lost, and the accepted `.so` files are loaded again, which runs the
+  top-level statements once more. The other option is a pass of our own that
+  inserts `check_interrupt` into the loops (NOTES.md §7.2), read from a
   `SharedArrayBuffer`.
-- O stdin do aluno. Num worker, ele precisa de `Atomics.wait` sobre um
-  `SharedArrayBuffer`, e isso exige a página isolada (COOP e COEP).
+- The student's stdin. In a worker, it needs `Atomics.wait` on a
+  `SharedArrayBuffer`, and that requires an isolated page (COOP and COEP).
 
-## 6. Testes
+## 6. Tests
 
-| fatia | o que é | oráculo |
+| slice | what it is | oracle |
 | --- | --- | --- |
-| `ses-` | **todos** os arquivos do corpus, inclusive os com erro (exercitam `CleanUpPTU`), como uma célula numa sessão | base do mesmo modo no engine sem cortes |
-| `split-` | os ~1.743 programas executados, cortados em uma célula por declaração do topo | **critério principal:** saída e código de saída iguais aos do `pic-` one-shot (T-M3, C-M2) |
-| `seq-` | sequências geradas: [erro, boa], [boa, undo, boa], [`static`/namespace anônimo entre células], [`import std;` depois de `#include`] | saída esperada fixa |
-| `crash-` | os 36 fatais e os estouros de pilha como células, seguidos de uma célula boa | o REPL vivo; a célula boa funciona; os símbolos após o repasse batem com os sem crash |
-| `repl-` | o atual (`.so` explícitos, testa a redefinição no loader) | sem mudança |
-| `mem-` | 1.000 células | limites do §4 |
+| `ses-` | **all** the files of the corpus, including the ones with errors (they exercise `CleanUpPTU`), as one cell in a session | the baseline of the same mode on the uncut engine |
+| `split-` | the ~1,743 executed programs, split into one cell per top-level declaration | **main criterion:** output and exit code equal to those of the one-shot `pic-` (T-M3, C-M2) |
+| `seq-` | generated sequences: [error, good], [good, undo, good], [`static`/anonymous namespace across cells], [`import std;` after `#include`] | fixed expected output |
+| `crash-` | the 36 fatal ones and the stack overflows as cells, followed by a good cell | the REPL alive; the good cell works; the symbols after the replay match the ones without a crash |
+| `repl-` | the current one (explicit `.so` files, tests redefinition in the loader) | no change |
+| `mem-` | 1,000 cells | the limits of §4 |
 
-- O `make learn` passa a dirigir o mesmo `build/sc-engine repl`, então os caminhos
-  raros (`CleanUpPTU`, undo, repasse) entram no `symbols.used` (T-M1).
-- O `ses-` usa uma amostra dos testes do clang, não o corpus inteiro, para
-  não dobrar o tempo do learn (T-M2).
-- **Feito na fase 4 de outro jeito (NOTES.md §47):** o wasm só tem a
-  sessão na fase 5, então quem aprende é o `make learn-session`, no
-  nativo, e o resultado vai para o `cuts/symbols.session.used`, que os dois
-  engines mantêm. O `ses-` roda o corpus inteiro: o learn refaz só o que
-  difere.
+- `make learn` now drives the same `build/sc-engine repl`, so the rare
+  paths (`CleanUpPTU`, undo, replay) get into `symbols.used` (T-M1).
+- `ses-` uses a sample of clang's tests, not the whole corpus, so as
+  not to double the time of learn (T-M2).
+- **Done in phase 4 in another way (NOTES.md §47):** the wasm has the
+  session only in phase 5, so the learning is done by `make learn-session`,
+  on the native build, and the result goes into `cuts/symbols.session.used`,
+  which both engines keep. `ses-` runs the whole corpus. Learn redoes only
+  what differs.
 
-## 7. Decisões do professor
+## 7. The teacher's decisions
 
-1. Redefinição na v1: **rejeitar** (§3.4).
-2. Pacote: **um binário só, `sc`**, com o REPL, o loader e o engine; o filho é `sc --engine` (§1.1).
-3. Padrão da linguagem: **os mais novos**, gnu23 e gnu++26 (§1.6).
+1. Redefinition in v1: **reject** (§3.4).
+2. Pack: **a single binary, `sc`**, with the REPL, the loader and the engine; the child is `sc --engine` (§1.1).
+3. Language standard: **the newest**, gnu23 and gnu++26 (§1.6).
 
-## 8. Fora do escopo deste plano (T-M8)
+## 8. Outside the scope of this plan (T-M8)
 
-O front end do REPL:
-- divisão das células;
-- quando roda `main`;
+The REPL's front end:
+- splitting into cells;
+- when `main` runs;
 - stdin;
-- ordem entre statements do topo e `constructor`;
-- política quando o código do aluno dá trap;
-- interrupção de laço infinito: no nativo, `epoch_interruption` do wasmtime; no navegador, `check_interrupt` (NOTES.md §7.2) ou matar o worker (§5.5).
+- the order between top-level statements and `constructor`;
+- the policy when the student's code traps;
+- interrupting an infinite loop: in the native build, wasmtime's `epoch_interruption`; in the browser, `check_interrupt` (NOTES.md §7.2) or killing the worker (§5.5).
 
-Eles afetam a premissa de que "o estado do aluno vive no loader" e precisam
-de um plano próprio antes da fase 6.
+They affect the premise that "the student's state lives in the loader" and
+need a plan of their own before phase 6.
 
-O protótipo `sc` (NOTES.md §26) tomou uma decisão provisória para cada
-um deles, para que o REPL possa ser usado antes da fase 6b.
+The `sc` prototype (NOTES.md §26) made a provisional decision for each
+of them, so that the REPL can be used before phase 6b.

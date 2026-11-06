@@ -1,759 +1,766 @@
-# Plano: verificações para o aluno
+# Plan: checks for the student
 
-Versão 2 (2026-10-15), com as decisões do professor (§11). A versão 1 foi revisada por três revisores
-adversários, e cada mudança cita o achado que a motivou:
+Version 2 (2026-10-15), with the teacher's decisions (§11). Three
+adversarial reviewers reviewed version 1, and each change cites the finding
+behind it:
 
-- **W:** avisos e a experiência do aluno;
-- **R:** runtime, wasm e loader;
-- **T:** engine, cortes, testes e fases.
+- **W:** warnings and the student's experience;
+- **R:** runtime, wasm and loader;
+- **T:** engine, cuts, tests and phases.
 
-Os experimentos estão no scratchpad da sessão (`rev-avisos`, `rev-runtime`,
+The experiments are in the session's scratchpad (`rev-avisos`, `rev-runtime`,
 `rev-engine`).
 
-O plano cobre o que o `sc` verifica no código do aluno:
+The plan covers what `sc` checks in the student's code:
 
-- os avisos do clang (`-W`);
-- os sanitizers (`-fsanitize`);
-- o hardening da libc++;
-- a inicialização das variáveis locais;
-- os traps do wasm.
+- clang's warnings (`-W`);
+- the sanitizers (`-fsanitize`);
+- libc++'s hardening;
+- the initialization of local variables;
+- wasm's traps.
 
-Ele agrupa as verificações em conjuntos, propõe quais ficam ligadas por
-padrão e diz como desligá-las.
+It groups the checks into sets, proposes which ones are on by default and
+says how to turn them off.
 
-## 0. Princípios
+## 0. Principles
 
-- **Ligado por padrão.** O aluno vê o erro onde ele está, com a linha e em
-  palavras. Um erro que passa em silêncio é o pior caso.
-- **Desligável.** Com as verificações desligadas, o professor mostra que o
-  mesmo programa "funciona", dá um resultado diferente ou corrompe dados.
-  É o que acontece num compilador comum. O nível `off` desliga todas as
-  verificações de tempo de execução.
-- **Sem falso positivo no nível padrão.** Um aviso que dispara em código
-  correto ensina o aluno a ignorar o `sc`. O que pode errar fica no
-  estrito. Os falsos positivos medidos pelos revisores tiraram vários
-  avisos do padrão (§4).
-- **Uma mensagem por erro, e o programa para.** A mensagem diz o tipo do
-  erro, o arquivo, a linha e a pilha (`-fno-sanitize-recover=all`). No REPL,
-  só a célula termina.
-- **As regras do projeto.**
-  - O engine não muda os seus padrões: quem escolhe as verificações é o
-    `sc`.
-  - O corpus passa a rodar também com os níveis (§9).
-  - Uma opção nova em `sc_inv.cpp` exige `make checkinv` SAME.
+- **On by default.** The student sees the error where it is, with the line
+  and in words. An error that goes by in silence is the worst case.
+- **Can be turned off.** With the checks off, the teacher shows that the
+  same program "works", gives a different result or corrupts data. That is
+  what happens with an ordinary compiler. The `off` level turns off every
+  run-time check.
+- **No false positive at the default level.** A warning that fires on
+  correct code teaches the student to ignore `sc`. What can be wrong stays
+  in strict. The false positives the reviewers measured took several
+  warnings out of the default (§4).
+- **One message per error, and the program stops.** The message gives the
+  kind of error, the file, the line and the stack
+  (`-fno-sanitize-recover=all`). In the REPL, only the cell ends.
+- **The project's rules.**
+  - The engine does not change its defaults. `sc` chooses the checks.
+  - The corpus also runs with the levels (§9).
+  - A new option in `sc_inv.cpp` requires `make checkinv` SAME.
 
-## 1. O que o aluno vê hoje
+## 1. What the student sees today
 
-Medido com `sc FILE` e `sc check` no commit a0f2310, em 2026-10-15:
+Measured with `sc FILE` and `sc check` at commit a0f2310, on 2026-10-15:
 
-| Programa | Avisos hoje (`-Wall -Wextra`) | Execução hoje |
+| Program | Warnings today (`-Wall -Wextra`) | Run today |
 |---|---|---|
-| `int *p = NULL; *p = 3;` | nada | **nada**: escreve no endereço 0 |
-| `p[0]` em memória já liberada | nada | **nada**: imprime o valor antigo |
-| `free(p); free(p);` | nada | **nada** |
-| `malloc` de 4 `int`, escrita em `p[4]` | nada | **nada** |
-| `int a[3]; ... a[i] = 0` com `i` até 3 | nada | **nada**: escreve em outra variável |
-| `strcpy(a, "hello world")` com `char a[4]` | `-Wfortify-source` (W-A5) | **roda**: escreve em `b` |
-| `x = INT_MAX; x + 1` | nada; só `INT_MAX + 1` literal dá `-Winteger-overflow` (W-A5) | **nada**: imprime -2147483648 |
-| `int s; s += i` | `-Wuninitialized` | imprime um valor qualquer |
-| função `int` sem `return` | `-Wreturn-type` | imprime 0 |
-| retorno de `&x` local | `-Wreturn-stack-address` | **nada**: imprime 5 |
-| `printf("%d", 2.5)` | `-Wformat` | imprime 0 |
-| `v[5]` num `vector` de 3 | nada | `aborted`, sem dizer onde |
-| `*o` num `optional` vazio, `s[10]` | nada | `aborted` |
-| `1/z` com `z == 0` | nada | `wasm trap: integer divide by zero`, sem a linha |
-| recursão sem fim | `-Winfinite-recursion` | `stack overflow`, sem a linha |
+| `int *p = NULL; *p = 3;` | nothing | **nothing**: writes to address 0 |
+| `p[0]` in memory already freed | nothing | **nothing**: prints the old value |
+| `free(p); free(p);` | nothing | **nothing** |
+| `malloc` of 4 `int`, write to `p[4]` | nothing | **nothing** |
+| `int a[3]; ... a[i] = 0` with `i` up to 3 | nothing | **nothing**: writes to another variable |
+| `strcpy(a, "hello world")` with `char a[4]` | `-Wfortify-source` (W-A5) | **runs**: writes to `b` |
+| `x = INT_MAX; x + 1` | nothing; only a literal `INT_MAX + 1` gives `-Winteger-overflow` (W-A5) | **nothing**: prints -2147483648 |
+| `int s; s += i` | `-Wuninitialized` | prints an arbitrary value |
+| `int` function without `return` | `-Wreturn-type` | prints 0 |
+| return of a local `&x` | `-Wreturn-stack-address` | **nothing**: prints 5 |
+| `printf("%d", 2.5)` | `-Wformat` | prints 0 |
+| `v[5]` in a `vector` of 3 | nothing | `aborted`, without saying where |
+| `*o` on an empty `optional`, `s[10]` | nothing | `aborted` |
+| `1/z` with `z == 0` | nothing | `wasm trap: integer divide by zero`, without the line |
+| endless recursion | `-Winfinite-recursion` | `stack overflow`, without the line |
 
-Os avisos existem, mas o programa roda mesmo assim. Os erros de memória
-passam em silêncio.
+The warnings exist, but the program runs anyway. The memory errors go by in
+silence.
 
-## 2. As camadas
+## 2. The layers
 
-| Camada | O que pega | Custo | Onde |
+| Layer | What it catches | Cost | Where |
 |---|---|---|---|
-| 0. Traps do wasm | acesso fora da memória, divisão inteira por zero e `INT_MIN/-1`, pilha de chamadas esgotada, chamada indireta com tipo errado, função ainda indefinida, `unreachable` | nenhum, já existe | host: mensagem e local |
-| 1. Avisos | o que dá para ver sem rodar | nenhum em execução | flags do `sc` |
-| 2. UBSan | nulo, nulo com deslocamento, overflow com sinal, shift, índice de array de tamanho conhecido, `bool`/`enum` inválido, `float`→`int` fora da faixa, `return` faltando (C++) | código 1,35–2,15×, conforme o modo (§5.1) | flags + handlers |
-| 3. ASan | heap, pilha e globais fora dos limites, uso depois do `free` e depois do escopo, `free` duplo ou inválido, `str*` do aluno | código 1,5×; *shadow* de 512 MiB | passe novo no engine + `libsc_rt` + loader |
-| 4. libc++ | `vector[]`, `string[]`, `optional`, `span` e iteradores | só nos acessos | macros + um `std.pcm` por modo |
-| 5. Inicialização | a local não inicializada tem um valor fixo | um `store` por variável | `-ftrivial-auto-var-init=pattern` |
-| 6. Local | arquivo, linha e coluna de cada frame | código 1,2× (DWARF) | `-gline-tables-only` + wasmtime |
+| 0. wasm traps | access outside memory, integer division by zero and `INT_MIN/-1`, exhausted call stack, indirect call with the wrong type, function still undefined, `unreachable` | none, it already exists | host: message and location |
+| 1. Warnings | what can be seen without running | none at run time | `sc`'s flags |
+| 2. UBSan | null, null with offset, signed overflow, shift, index into an array of known size, invalid `bool`/`enum`, out-of-range `float`→`int`, missing `return` (C++) | code 1.35–2.15×, depending on the mode (§5.1) | flags + handlers |
+| 3. ASan | heap, stack and globals out of bounds, use after `free` and after scope, double or invalid `free`, the student's `str*` | code 1.5×; *shadow* of 512 MiB | new pass in the engine + `libsc_rt` + loader |
+| 4. libc++ | `vector[]`, `string[]`, `optional`, `span` and iterators | only on the accesses | macros + one `std.pcm` per mode |
+| 5. Initialization | an uninitialized local has a fixed value | one `store` per variable | `-ftrivial-auto-var-init=pattern` |
+| 6. Location | file, line and column of each frame | code 1.2× (DWARF) | `-gline-tables-only` + wasmtime |
 
-A camada 6 serve a todas: os traps das camadas 0 e 4 e os relatos do ASan
-só dizem onde ocorreram por ela. O UBSan tem o local nos dados do handler e
-não depende dela (T6).
+Layer 6 serves all the others. The traps of layers 0 and 4 and the ASan
+reports say where they occurred only through it. UBSan has the location in
+the handler's data and does not depend on it (T6).
 
-## 3. Níveis e controle
+## 3. Levels and control
 
-Há três níveis:
+There are three levels:
 
-| | `off` | `on` (padrão) | `strict` |
+| | `off` | `on` (default) | `strict` |
 |---|---|---|---|
-| avisos | padrão do clang | `-Wall -Wextra` − R + A (§4) | + R + S + P, `-Wpedantic` |
-| erros | os do clang | + E (§4.1) | + E |
-| UBSan | — | U (§5.1) | U + U-estrito |
-| ASan | — | sim (F3) | + vazamentos no fim do `sc FILE` |
+| warnings | clang's default | `-Wall -Wextra` − R + A (§4) | + R + S + P, `-Wpedantic` |
+| errors | clang's | + E (§4.1) | + E |
+| UBSan | — | U (§5.1) | U + U-strict |
+| ASan | — | yes (F3) | + leaks at the end of `sc FILE` |
 | libc++ | `NONE` | `EXTENSIVE` | `DEBUG` |
-| locais | sem inicialização | `pattern` | `pattern` |
-| local do erro | sim | sim | sim |
+| locals | no initialization | `pattern` | `pattern` |
+| error location | yes | yes | yes |
 
-- **Linha de comando.** `sc --safety=off|on|strict FILE` e
-  `sc repl --safety=...`. O `check` aceita a opção, mas só os avisos e os
-  erros importam para ele.
-- **No REPL, o nível vale para a sessão inteira (T7).**
-  - O `restart` de hoje refaz o log só com parse e IR
-    (`proto/src/child.rs:185-193`), sem gerar `.so` nem executar.
-  - Trocar de nível exigiria recompilar e **reexecutar** todas as células.
-    Isso repetiria os prints, consumiria a stdin e mudaria `rand` e `time`.
-  - Uma célula aceita no `off` pode ser recusada no `on` por causa do E.
-  - Por isso `:safety NÍVEL` recomeça a sessão **vazia**, com um aviso. O
-    nível também pode ser escolhido na partida (`sc repl --safety=off`).
-- **No `off`, o E volta a ser aviso.** Assim o exemplo de comportamento
-  indefinido roda.
-- **O local do erro vale em todos os níveis.** Ele só muda a mensagem.
-- **Ajuste fino**, para o professor: `sc ... -- -Wno-shadow -fno-sanitize=alignment`.
-  - Isso exige que o engine **recuse** a flag que não conhece. Hoje o
-    `scParseArgs` (`sc_inv.cpp:190-227`) ignora em silêncio tudo o que não é
-    `-W` (T2).
-  - Até lá, o `sc` só repassa `-W…`.
+- **Command line.** `sc --safety=off|on|strict FILE` and
+  `sc repl --safety=...`. `check` accepts the option, but only the warnings
+  and the errors matter to it.
+- **In the REPL, the level holds for the whole session (T7).**
+  - Today's `restart` redoes the log with parse and IR only
+    (`proto/src/child.rs:185-193`), without generating a `.so` or running.
+  - Changing the level would require recompiling and **rerunning** every
+    cell. That would repeat the prints, consume stdin and change `rand` and
+    `time`.
+  - A cell accepted at `off` can be rejected at `on` because of E.
+  - So `:safety LEVEL` restarts the session **empty**, with a warning. The
+    level can also be chosen at startup (`sc repl --safety=off`).
+- **At `off`, E goes back to being a warning.** That way the undefined
+  behaviour example runs.
+- **The error location holds at every level.** It only changes the message.
+- **Fine tuning**, for the teacher: `sc ... -- -Wno-shadow -fno-sanitize=alignment`.
+  - This requires the engine to **reject** a flag it does not know. Today
+    `scParseArgs` (`sc_inv.cpp:190-227`) silently ignores everything that is
+    not `-W` (T2).
+  - Until then, `sc` only passes on `-W…`.
 
-## 4. Avisos
+## 4. Warnings
 
-**Os números.**
+**The numbers.**
 
-- Com `-Weverything`, o clang 23.1.3 do pin liga 2265 diagnósticos
+- With `-Weverything`, the pin's clang 23.1.3 turns on 2265 diagnostics
   (`diagtool show-enabled`, wasm32-wasip1).
-- 1450 ficam ligados sem flag nenhuma. O `-Wall` acrescenta 59, e o
-  `-Wextra` mais 19.
-- Os 737 restantes ficam em **343 grupos** desligados por padrão. O
-  apêndice A classifica cada um deles.
+- 1450 are on without any flag. `-Wall` adds 59, and `-Wextra` 19 more.
+- The other 737 are in **343 groups** that are off by default. Appendix A
+  classifies each one of them.
 
-**Os conjuntos:**
+**The sets:**
 
-| Conjunto | Critério | Nível |
+| Set | Criterion | Level |
 |---|---|---|
-| **E**: erro | comportamento indefinido certo, ou erro sem uso legítimo, sem falso positivo medido | `on`, `strict` |
-| **D**: padrão | o padrão do clang, `-Wall` e `-Wextra`, menos R | todos (o `off` fica no padrão do clang) |
-| **R**: retirado | do `-Wall` ou do `-Wextra`, mas ruído em código correto de iniciante | `strict` |
-| **A**: acrescentado | desligado no clang; pega erro comum de aluno, sem falso positivo medido | `on`, `strict` |
-| **L**: tempo de vida | `-Wlifetime-safety-*`, novo no clang 23 | §4.4 |
-| **S**: estrito | estilo, conversões, portabilidade | `strict` |
-| **P**: pedante | extensões GNU e clang (`-Wpedantic`) | `strict` |
-| **N**: nunca | compatibilidade com padrões antigos, ABI, estilo de projeto grande (`-Wunsafe-buffer-usage`) | — |
-| **X**: não se aplica | ObjC, CUDA, HLSL, OpenMP, Microsoft, módulos, *thread safety*, Doxygen | — |
+| **E**: error | certain undefined behaviour, or an error with no legitimate use, with no measured false positive | `on`, `strict` |
+| **D**: default | clang's default, `-Wall` and `-Wextra`, minus R | all (`off` stays at clang's default) |
+| **R**: removed | from `-Wall` or `-Wextra`, but noise on a beginner's correct code | `strict` |
+| **A**: added | off in clang; catches a common student error, with no measured false positive | `on`, `strict` |
+| **L**: lifetime | `-Wlifetime-safety-*`, new in clang 23 | §4.4 |
+| **S**: strict | style, conversions, portability | `strict` |
+| **P**: pedantic | GNU and clang extensions (`-Wpedantic`) | `strict` |
+| **N**: never | compatibility with old standards, ABI, large project style (`-Wunsafe-buffer-usage`) | — |
+| **X**: does not apply | ObjC, CUDA, HLSL, OpenMP, Microsoft, modules, *thread safety*, Doxygen | — |
 
-**`-Werror=G` vale também para os subgrupos de G (W-A1).** Cada entrada do
-E diz o que ela tira com `-Wno-error=`.
+**`-Werror=G` also applies to the subgroups of G (W-A1).** Each entry of E
+says what it takes out with `-Wno-error=`.
 
-### 4.1 E: avisos que viram erro
+### 4.1 E: warnings that become errors
 
-Todos já estão ligados no clang ou no `-Wall`:
+All of them are already on in clang or in `-Wall`:
 
-| Erro | Sem os subgrupos | Motivo |
+| Error | Without the subgroups | Reason |
 |---|---|---|
-| `-Wuninitialized` | `-Wno-error=sometimes-uninitialized`, `-Wno-error=uninitialized-const-pointer` | o `sometimes` rejeita `if (x>0) r=1; else if (x<=0) r=2;` (W-A1) |
-| `-Wreturn-type` | — | rejeita também um `if/else if` que cobre todos os casos; a correção é trivial (W-A13) |
+| `-Wuninitialized` | `-Wno-error=sometimes-uninitialized`, `-Wno-error=uninitialized-const-pointer` | `sometimes` rejects `if (x>0) r=1; else if (x<=0) r=2;` (W-A1) |
+| `-Wreturn-type` | — | also rejects an `if/else if` that covers every case; the fix is trivial (W-A13) |
 | `-Wreturn-stack-address`, `-Wdangling` | — | |
-| `-Warray-bounds` | — | índice constante |
-| `-Wdivision-by-zero`, `-Wshift-count-overflow`, `-Wshift-count-negative`, `-Winteger-overflow` | — | constantes (W-A5) |
-| `-Wfortify-source` | — | `strcpy` que certamente estoura (W-A5) |
-| `-Wformat` | `-Wno-error=format-security`, `-Wno-error=format-extra-args`, `-Wno-error=format-zero-length` | `scanf("%d", x)` roda dentro da libc, que nem o ASan vê. O aviso é a única defesa. `%d` com `sizeof` é UB, e a correção, `%zu`, é o que se ensina (W-A6). O `-Wnonnull` é subgrupo dele |
-| `-Wstring-compare` | — | `nome == "ana"` (W-A5) |
-| `-Wunsequenced` | — | `i = i++ + 1` em C. Em C++17 é definido e não dispara (W-A13) |
-| `-Wmismatched-new-delete`, `-Wdelete-abstract-non-virtual-dtor`, `-Wfree-nonheap-object` | — | O caso não abstrato (`delete d` com o tipo exato) é correto e fica como aviso (W-A4) |
+| `-Warray-bounds` | — | constant index |
+| `-Wdivision-by-zero`, `-Wshift-count-overflow`, `-Wshift-count-negative`, `-Winteger-overflow` | — | constants (W-A5) |
+| `-Wfortify-source` | — | a `strcpy` that certainly overflows (W-A5) |
+| `-Wformat` | `-Wno-error=format-security`, `-Wno-error=format-extra-args`, `-Wno-error=format-zero-length` | `scanf("%d", x)` runs inside libc, which not even ASan sees. The warning is the only defence. `%d` with `sizeof` is UB, and the fix, `%zu`, is what we teach (W-A6). `-Wnonnull` is a subgroup of it |
+| `-Wstring-compare` | — | `name == "ana"` (W-A5) |
+| `-Wunsequenced` | — | `i = i++ + 1` in C. In C++17 it is defined and does not fire (W-A13) |
+| `-Wmismatched-new-delete`, `-Wdelete-abstract-non-virtual-dtor`, `-Wfree-nonheap-object` | — | The non-abstract case (`delete d` with the exact type) is correct and stays a warning (W-A4) |
 
-**Saem do E da versão 1:**
+**Out of version 1's E:**
 
-- `-Wnull-dereference`: só pega `*(int*)0`, e a mensagem confunde. O UBSan
-  cobre o caso (W-A13).
+- `-Wnull-dereference`: it only catches `*(int*)0`, and the message
+  confuses. UBSan covers the case (W-A13).
 - `-Wdelete-non-abstract-non-virtual-dtor` (W-A4).
 
-**Já são erro no clang 23:**
+**Already errors in clang 23:**
 
 - `-Wint-conversion`, `-Wincompatible-pointer-types`;
 - `-Wimplicit-function-declaration`, `-Wimplicit-int`.
 
-### 4.2 R: retirar do padrão
+### 4.2 R: remove from the default
 
-- `-Wunused-parameter`: dispara em `main(int argc, char *argv[])` e em
+- `-Wunused-parameter`: fires on `main(int argc, char *argv[])` and on
   callbacks.
-- `-Wmissing-field-initializers`: `struct S s = {1}` zera o resto.
-- `-Wsign-compare`: é o aviso mais frequente em código correto de
-  iniciante, com `i < v.size()` e `i < strlen(s)`. Foi o único aviso do
-  `-Wall` no programa C++ típico.
-  - A justificativa da versão 1 estava errada: `-1 < 1u` com literais não
-    dispara o aviso. Só a forma com variáveis dispara (W-A10).
-  - Pelo princípio do §0, vai para o R (decisão 2, §11).
+- `-Wmissing-field-initializers`: `struct S s = {1}` zeroes the rest.
+- `-Wsign-compare`: it is the most frequent warning in a beginner's correct
+  code, with `i < v.size()` and `i < strlen(s)`. It was the only `-Wall`
+  warning in the typical C++ program.
+  - Version 1's justification was wrong. `-1 < 1u` with literals does not
+    fire the warning. Only the form with variables fires it (W-A10).
+  - By the principle of §0, it goes to R (decision 2, §11).
 
-### 4.3 A: acrescentar ao padrão
+### 4.3 A: add to the default
 
-O número entre parênteses é a quantidade de programas do corpus em que o
-aviso dispara com `-Weverything`. O corpus não é de aluno, então o número só
-indica o ruído.
+The number in parentheses is the number of corpus programs in which the
+warning fires with `-Weverything`. The corpus is not student code, so the
+number only indicates the noise.
 
-- **Conversões:**
+- **Conversions:**
   - `-Wfloat-overflow-conversion` (1), `-Wfloat-zero-conversion`;
-  - `-Wstring-conversion`: `"abc"` como `bool`;
+  - `-Wstring-conversion`: `"abc"` as `bool`;
   - `-Wshift-bool`;
-  - `-Wshift-sign-overflow` (8): só em C; em C++20, `1 << 31` é definido
+  - `-Wshift-sign-overflow` (8): only in C. In C++20, `1 << 31` is defined
     (W-A13).
-  - O `int i = 2.7;` já é pego por padrão (`-Wliteral-conversion`).
-  - O `-Wfloat-conversion` foi para o S: `int lim = sqrt(n)` é comum e
-    intencional (W-A9; decisão 3, §11).
-- **Comparações e laços:**
+  - `int i = 2.7;` is already caught by default (`-Wliteral-conversion`).
+  - `-Wfloat-conversion` went to S. `int lim = sqrt(n)` is common and
+    intentional (W-A9; decision 3, §11).
+- **Comparisons and loops:**
   - `-Wtautological-unsigned-zero-compare` (9):
     `for (size_t i = n - 1; i >= 0; i--)`;
   - `-Wtautological-unsigned-enum-zero-compare`;
   - `-Wtautological-value-range-compare` (13);
-  - `-Wunreachable-code` (75), com os subgrupos `-loop-increment` (7) e
-    `-fallthrough`. As formas `-break` e `-return` ficam de fora com
-    `-Wno-` (W-A12).
-- **Fluxo:** `-Wimplicit-fallthrough` (18) e o subgrupo `-per-function`
+  - `-Wunreachable-code` (75), with the subgroups `-loop-increment` (7) and
+    `-fallthrough`. The `-break` and `-return` forms stay out with `-Wno-`
+    (W-A12).
+- **Flow:** `-Wimplicit-fallthrough` (18) and the subgroup `-per-function`
   (W-A12).
-- **Nomes:**
-  - `-Wshadow` (54), **só em C e só no `sc FILE`**. Em C++, o setter
-    `this->x = x` dispara, e o clang não tem um grupo só para locais (W-A7).
-  - No REPL, uma global de uma célula anterior faria todo `for (int i …)`
-    avisar.
+- **Names:**
+  - `-Wshadow` (54), **only in C and only in `sc FILE`**. In C++, the setter
+    `this->x = x` fires, and clang has no group for locals alone (W-A7).
+  - In the REPL, a global from an earlier cell would make every
+    `for (int i …)` warn.
   - `-Wshadow-field-in-constructor-modified`.
   - `-Wcomma` (57).
 - **C:** `-Wdefault-const-init-var` (6), `-Wdefault-const-init-field`,
-  `-Wmain` (4), `-Wmain-return-type`. O `-Wmain-return-type` já dispara em
+  `-Wmain` (4), `-Wmain-return-type`. `-Wmain-return-type` already fires on
   `void main()` (W-A12).
 - **C++:**
   - `-Wnon-virtual-dtor` (1);
-  - `-Wdeprecated-copy-with-user-provided-dtor` (regra dos três). Depois da
-    F3, ele vai para o S: dispara na aula de ciclo de vida, e o ASan pega o
-    `free` duplo real com uma mensagem melhor (W-A11).
+  - `-Wdeprecated-copy-with-user-provided-dtor` (rule of three). After F3,
+    it goes to S. It fires in the lifecycle class, and ASan catches the real
+    double `free` with a better message (W-A11).
   - `-Warray-bounds-pointer-arithmetic`.
-- **Foram para o S:**
-  - `-Wconditional-uninitialized`: 5 falsos positivos em 6 funções corretas
-    (W-A8). O `pattern` mostra o erro real na execução.
-  - `-Wclass-varargs`: o caso do `std::string` já é erro por
+- **Went to S:**
+  - `-Wconditional-uninitialized`: 5 false positives in 6 correct functions
+    (W-A8). `pattern` shows the real error at run time.
+  - `-Wclass-varargs`: the `std::string` case is already an error through
     `-Wnon-pod-varargs` (W-A12).
 
-### 4.4 L: tempo de vida (só C++)
+### 4.4 L: lifetime (C++ only)
 
-- **`-Wlifetime-safety-permissive` vai para o A.** Ele pegou todos os bugs
-  do teste, sem falso positivo em listas encadeadas, `unique_ptr::get` e
-  `static` local (W-A2). Inclui:
+- **`-Wlifetime-safety-permissive` goes to A.** It caught every bug in the
+  test, with no false positive on linked lists, `unique_ptr::get` and local
+  `static` (W-A2). It includes:
   - `use-after-scope`;
   - `return-stack-addr`;
   - `use-after-free`.
-- **`invalidation` vai para o S.** Ele dispara em
-  `for (auto &row : g) row.push_back(1)` e em `string &f = v[0]; f += "!"`
+- **`invalidation` goes to S.** It fires on
+  `for (auto &row : g) row.push_back(1)` and on `string &f = v[0]; f += "!"`
   (W-A2).
-- **`dangling-field` e `dangling-global`** ficam para medir na F1.
-- **Em C**, a análise só roda com `-fexperimental-lifetime-safety-c` (cc1),
-  e mesmo assim não vê `free(p); *p` (W-A3). Fica fora até o ASan.
+- **`dangling-field` and `dangling-global`** remain to be measured in F1.
+- **In C**, the analysis only runs with `-fexperimental-lifetime-safety-c`
+  (cc1), and even then it does not see `free(p); *p` (W-A3). It stays out
+  until ASan.
 
-### 4.5 Diferenças por modo
+### 4.5 Differences by mode
 
-O §29 do NOTES.md já tira do REPL os avisos de fim de unidade.
+§29 of NOTES.md already takes the end-of-unit warnings out of the REPL.
 
-Nesta proposta, só `-Wshadow` muda por modo: fica no `sc FILE` em C. O E vale
-nos dois modos.
+In this proposal, only `-Wshadow` changes by mode. It stays in `sc FILE` in
+C. E holds in both modes.
 
-Um erro numa função esconde os avisos de análise das funções seguintes
-(W-A14). Por isso cada programa do `test/checks` tem um bug só.
+An error in one function hides the analysis warnings of the functions that
+follow (W-A14). That is why each program in `test/checks` has a single bug.
 
-## 5. Verificações em tempo de execução
+## 5. Run-time checks
 
 ### 5.1 UBSan
 
-| Verificação | Pega | Decisão |
+| Check | Catches | Decision |
 |---|---|---|
-| `null` | acesso por ponteiro nulo, inclusive `s->campo` (testado, R3) | **U** |
-| `pointer-overflow` | `p[1000]` com `p` nulo (testado, R3), aritmética que dá a volta | **U** |
-| `alignment` | acesso desalinhado; o wasm aceita, mas é UB | **U** |
-| `array-bounds` | índice fora de um array de tamanho conhecido | **U** |
+| `null` | access through a null pointer, including `s->field` (tested, R3) | **U** |
+| `pointer-overflow` | `p[1000]` with a null `p` (tested, R3), arithmetic that wraps around | **U** |
+| `alignment` | misaligned access; wasm accepts it, but it is UB | **U** |
+| `array-bounds` | index out of an array of known size | **U** |
 | `signed-integer-overflow` | `INT_MAX + 1`, `-INT_MIN` | **U** |
-| `integer-divide-by-zero` | `/` e `%` por 0, com a linha | **U** |
+| `integer-divide-by-zero` | `/` and `%` by 0, with the line | **U** |
 | `shift-base`, `shift-exponent` | `1 << 40`, `x << -1` | **U** |
-| `vla-bound` | VLA com tamanho ≤ 0 | **U** |
-| `return` (C++) | fim de uma função não `void` sem `return` | **U** |
-| `unreachable` | `__builtin_unreachable()` alcançado | **U** |
-| `bool`, `enum` | valor inválido carregado | **U** |
+| `vla-bound` | VLA with size ≤ 0 | **U** |
+| `return` (C++) | end of a non-`void` function without `return` | **U** |
+| `unreachable` | `__builtin_unreachable()` reached | **U** |
+| `bool`, `enum` | invalid value loaded | **U** |
 | `builtin` | `__builtin_clz(0)` | **U** |
 | `float-cast-overflow` | `(int)1e10` | **U** |
-| `nonnull-attribute`, `returns-nonnull-attribute` | `NULL` para um parâmetro `nonnull` da libc | **U** |
-| `local-bounds` | — | não emite nada a `-O0` (medido) |
-| `object-size` | — | não tem efeito a `-O0` (o clang avisa) |
-| `unsigned-integer-overflow`, `unsigned-shift-base`, `implicit-conversion`, `float-divide-by-zero` | volta de `unsigned`, truncamento implícito, `1.0/0` | **U-estrito**: disparam nos geradores dos headers e nas macros da `ctype.h`, que ficam de fora (NOTES.md §40) |
-| `nullability-*` | — | só com `_Nonnull` |
-| `function` | — | não suportado no wasm, e o wasm já faz trap |
-| `vptr` | — | só no Emscripten, precisa de um runtime C++ |
+| `nonnull-attribute`, `returns-nonnull-attribute` | `NULL` for a `nonnull` parameter of libc | **U** |
+| `local-bounds` | — | emits nothing at `-O0` (measured) |
+| `object-size` | — | has no effect at `-O0` (clang warns) |
+| `unsigned-integer-overflow`, `unsigned-shift-base`, `implicit-conversion`, `float-divide-by-zero` | `unsigned` wraparound, implicit truncation, `1.0/0` | **U-strict**: they fire in the headers' generators and in the macros of `ctype.h`, which stay out (NOTES.md §40) |
+| `nullability-*` | — | only with `_Nonnull` |
+| `function` | — | not supported on wasm, and wasm already traps |
+| `vptr` | — | only in Emscripten, needs a C++ runtime |
 
-**Os três modos (R6).** A decisão sai da medida na F2:
+**The three modes (R6).** The measurement in F2 makes the decision:
 
-| Modo | `c1_basics.cpp` | O que o aluno vê |
+| Mode | `c1_basics.cpp` | What the student sees |
 |---|---|---|
-| handlers completos | 200 520 bytes (2,15×) | a linha, mais os valores dos operandos e os tipos (`2147483647 + 1 cannot be represented in type 'int'`) |
-| minimal runtime | 134 499 (1,44×) | o tipo do erro; a linha vem da pilha (F0) |
-| `-fsanitize-trap` | 125 988 (1,35×) | o tipo do erro, que vai no DWARF (`__clang_trap_msg$Undefined Behavior Sanitizer$signed integer addition overflow in 'a + b'`); a linha vem da F0 |
+| full handlers | 200,520 bytes (2.15×) | the line, plus the values of the operands and the types (`2147483647 + 1 cannot be represented in type 'int'`) |
+| minimal runtime | 134,499 (1.44×) | the kind of error; the line comes from the stack (F0) |
+| `-fsanitize-trap` | 125,988 (1.35×) | the kind of error, which goes in the DWARF (`__clang_trap_msg$Undefined Behavior Sanitizer$signed integer addition overflow in 'a + b'`); the line comes from F0 |
 
-Com o `trap`, não há runtime nenhum. Os valores dos operandos são o único
-ganho dos handlers.
+With `trap`, there is no runtime at all. The values of the operands are the
+only saving of the handlers.
 
-**Se forem handlers, eles ficam em C, na `libsc_rt` (T10).**
+**If they are handlers, they stay in C, in `libsc_rt` (T10).**
 
-- Assim eles servem ao `sc`, ao `scload` do corpus, ao wasmtime CLI e ao
-  navegador.
-- Eles chamam um único import do host, para a pilha e o trap.
-- Os símbolos emitidos com o U (R6):
+- That way they serve `sc`, the corpus's `scload`, the wasmtime CLI and the
+  browser.
+- They call a single host import, for the stack and the trap.
+- The symbols emitted with U (R6):
   - `add/sub/mul/negate_overflow`, `divrem_overflow`, `shift_out_of_bounds`;
   - `out_of_bounds`, `type_mismatch_v1`, `pointer_overflow`;
   - `vla_bound_not_positive`, `load_invalid_value`, `float_cast_overflow`;
   - `invalid_builtin`, `nonnull_arg`, `nonnull_return_v1`;
-  - `alignment_assumption`, que vem dos headers da libc++.
+  - `alignment_assumption`, which comes from libc++'s headers.
 
-  Cada um tem a forma `_abort`, menos `builtin_unreachable` e
-  `missing_return`. O `SourceLocation` é {ptr, u32, u32}, e um operando com
-  mais de 32 bits chega por ponteiro.
+  Each one has the `_abort` form, except `builtin_unreachable` and
+  `missing_return`. `SourceLocation` is {ptr, u32, u32}, and an operand
+  wider than 32 bits comes by pointer.
 
 ### 5.2 ASan
 
-| Item | Decisão |
+| Item | Decision |
 |---|---|
 | `address`, `use-after-scope` | **on** |
-| `use-after-return` | `=never`: precisa da *fake stack*, e o `-Wreturn-stack-address` pega o caso comum |
-| `pointer-compare`, `pointer-subtract` | não: o driver recusa no wasm |
-| `leak` | **strict**, no fim do `sc FILE`; o `:leaks` no `on` e no `strict`. Só o bloco que nada alcança (NOTES.md §37) |
-| `init-order` | não. `__asan_before_dynamic_init` e `__asan_after_dynamic_init` são emitidos mesmo assim e viram no-op (R7) |
+| `use-after-return` | `=never`: it needs the *fake stack*, and `-Wreturn-stack-address` catches the common case |
+| `pointer-compare`, `pointer-subtract` | no: the driver rejects them on wasm |
+| `leak` | **strict**, at the end of `sc FILE`; `:leaks` at `on` and at `strict`. Only the block that nothing reaches (NOTES.md §37) |
+| `init-order` | no. `__asan_before_dynamic_init` and `__asan_after_dynamic_init` are emitted anyway and become no-ops (R7) |
 
-**O passe precisa entrar no engine (T1).**
+**The pass has to go into the engine (T1).**
 
-- O `engine/sc_backend.cpp` substitui o `BackendUtil.cpp` e roda só o
-  AlwaysInliner, as corrotinas e o codegen. O `addSanitizers` não existe em
-  nenhum dos engines.
-- O `sc_backend` passa a rodar o `AddressSanitizerPass` no novo PM, como o
+- `engine/sc_backend.cpp` replaces `BackendUtil.cpp` and runs only the
+  AlwaysInliner, the coroutines and the codegen. `addSanitizers` exists in
+  neither engine.
+- `sc_backend` now runs `AddressSanitizerPass` in the new PM, like
   `runCoroPasses` (NOTES.md §16).
-- Com `-asan-use-stack-safety=0`. Sem isso, o `StackSafetyGlobalAnalysis`
-  puxa o ScalarEvolution (436 KB, cortado hoje).
-- As opções `-asan-*` são `cl::opt`. O `sc_inv` as fixa em `LLVMArgs`
-  (`sc_inv.cpp:173`), e o `checkinv` as cobre.
+- With `-asan-use-stack-safety=0`. Without it, `StackSafetyGlobalAnalysis`
+  pulls in ScalarEvolution (436 KB, cut today).
+- The `-asan-*` options are `cl::opt`. `sc_inv` sets them in `LLVMArgs`
+  (`sc_inv.cpp:173`), and `checkinv` covers them.
 
-**Layout da memória (R2, R3).**
+**Memory layout (R2, R3).**
 
-- A pilha continua primeiro, em [16, 1 MiB). Assim o estouro continua dando
-  trap abaixo de 0.
-  - A versão 1 punha a pilha depois da *shadow* com uma zona de guarda.
-    Isso não funciona: o prólogo de cada frame instrumentado reescreve a
-    *shadow* do próprio frame e apaga o veneno da guarda (R2).
-- A *shadow* sai do endereço 0 com `-mllvm -asan-mapping-offset=S`.
-  - S não pode ser potência de 2: com potência de 2, o passe usa OR
+- The stack still comes first, in [16, 1 MiB). That way an overflow still
+  traps below 0.
+  - Version 1 put the stack after the *shadow* with a guard zone. That does
+    not work. The prologue of each instrumented frame rewrites the frame's
+    own *shadow* and erases the guard's poison (R2).
+- The *shadow* moves away from address 0 with `-mllvm -asan-mapping-offset=S`.
+  - S cannot be a power of 2. With a power of 2, the pass uses OR
     (`AddressSanitizer.cpp:624-627`).
-  - Por exemplo, S = 0x110000. A *shadow* fica em [S, S + 512 MiB) e o
-    programa começa depois dela.
-- A memória já nasce com S + 512 MiB. Toda leitura da *shadow* precisa
-  estar dentro da memória, inclusive a de um endereço indefinido acima de
+  - For example, S = 0x110000. The *shadow* sits in [S, S + 512 MiB) and the
+    program starts after it.
+- The memory starts out with S + 512 MiB. Every read of the *shadow* has to
+  be inside the memory, including the read for an undefined address above
   3 GiB (R12).
-- **Nada de regiões envenenadas grandes.** Envenenar [3 GiB, 4 GiB) e
-  [0, 64 MiB) custaria 192 MiB gravados, que viram RSS de verdade (R3).
-  - O nulo com deslocamento já é pego pelo UBSan.
-  - O símbolo indefinido já funciona: a leitura da *shadow* cai na memória,
-    o acesso dá trap, e `undefined_at` dá o nome.
+- **No large poisoned regions.** Poisoning [3 GiB, 4 GiB) and
+  [0, 64 MiB) would cost 192 MiB of writes, which become real RSS (R3).
+  - UBSan already catches null with an offset.
+  - The undefined symbol already works. The *shadow* read falls inside the
+    memory, the access traps, and `undefined_at` gives the name.
 
-**O runtime, `libsc_rt.so`.** É C, PIC, e o loader o carrega antes da libc.
+**The runtime, `libsc_rt.so`.** It is C, PIC, and the loader loads it before
+libc.
 
-- **A ABI** (R7):
-  - `__asan_init` e `__asan_version_mismatch_check_v8`;
-  - `__asan_report_{load,store}{1,2,4,8,16,N}`, que podem ser funções do
-    host;
-  - `__asan_set_shadow_00`, `__asan_alloca_poison` e
+- **The ABI** (R7):
+  - `__asan_init` and `__asan_version_mismatch_check_v8`;
+  - `__asan_report_{load,store}{1,2,4,8,16,N}`, which can be host
+    functions;
+  - `__asan_set_shadow_00`, `__asan_alloca_poison` and
     `__asan_allocas_unpoison` (VLA);
-  - `__asan_memcpy`, `__asan_memset` e `__asan_memmove`. O `memcpy` do aluno
-    vira esses, então eles não precisam de interceptor.
-  - `__asan_register_globals` e `__asan_unregister_globals`;
+  - `__asan_memcpy`, `__asan_memset` and `__asan_memmove`. The student's
+    `memcpy` becomes these, so they need no interceptor.
+  - `__asan_register_globals` and `__asan_unregister_globals`;
   - `__asan_handle_no_return`.
 
-  Cada global exporta `__odr_asan_gen_<nome>`, e esses nomes são filtrados.
-- **O alocador (R8).**
-  - É um invólucro do `malloc` da libc, com zonas vermelhas, cabeçalho e
-    uma quarentena FIFO.
-  - A `libc.so` chama o próprio `malloc` direto, com 61 `call` internos. A
-    `libc++.so` e a `libc++abi.so` importam `malloc`, `free`, `realloc`,
-    `aligned_alloc` e `_Znwm`. O loader as resolve para o invólucro, então o
-    `new` também ganha zonas vermelhas.
-  - Um ponteiro da libc, como o de `strdup`, não tem cabeçalho, e o `free`
-    o repassa.
-  - `getline` e `getdelim` são interceptados, porque dão `realloc` num
-    ponteiro do aluno.
-  - **O loader** aloca os dados de cada célula com `aligned_alloc`
-    (`lib.rs:222-230`). Ele passa a usar o `__real_aligned_alloc`. Senão os
-    globais virariam blocos do heap, e `free(&global)` passaria.
-  - **A quarentena** desenvenena o bloco ao devolvê-lo à libc. Senão o
-    `strdup` seguinte acusaria um falso positivo.
-- **Interceptores:** `strcpy`, `strncpy`, `strcat`, `strncat`, `sprintf`,
-  `snprintf`, `fgets`, `fread` e `read`.
-  - O loader entrega a libc ao runtime como `__real_*`.
-  - Uma chamada de dentro da libc não é interceptada.
-  - `scanf("%s")` ficou para a F4 (NOTES.md §39).
-- **Exceções e `longjmp` (R9).**
-  - O `__asan_handle_no_return` é emitido antes do `__cxa_throw` do aluno e
-    do `longjmp` (testado).
-  - Os `throw` de dentro da `libc++.so`, como `at` e `stoi`, não passam por
-    ele. O loader encaminha os `__cxa_throw` e `__cxa_rethrow` importados
-    pela `libc++.so` a um invólucro no runtime.
-  - O risco é menor do que parecia: o prólogo reescreve a *shadow* do frame.
-- **Os relatos.**
-  - O host lê a *shadow* para classificar o erro: heap, pilha, global,
-    liberado, escopo.
-  - A pilha da alocação são só os frames do topo, compactos (módulo e
-    offset), capturados no host. O custo vai ser medido com um programa que
-    usa `std::map` (R12).
-- **REPL.** Depois de um trap, a máquina restaura o *stack pointer* e limpa
-  a *shadow* da pilha abandonada.
+  Each global exports `__odr_asan_gen_<name>`, and these names are filtered
+  out.
+- **The allocator (R8).**
+  - It is a wrapper around libc's `malloc`, with red zones, a header and a
+    FIFO quarantine.
+  - `libc.so` calls its own `malloc` directly, with 61 internal `call`s.
+    `libc++.so` and `libc++abi.so` import `malloc`, `free`, `realloc`,
+    `aligned_alloc` and `_Znwm`. The loader resolves them to the wrapper, so
+    `new` also gets red zones.
+  - A pointer from libc, like the one from `strdup`, has no header, and
+    `free` passes it on.
+  - `getline` and `getdelim` are intercepted, because they call `realloc` on
+    a student pointer.
+  - **The loader** allocates each cell's data with `aligned_alloc`
+    (`lib.rs:222-230`). It now uses `__real_aligned_alloc`. Otherwise the
+    globals would become heap blocks, and `free(&global)` would pass.
+  - **The quarantine** unpoisons the block when it gives it back to libc.
+    Otherwise the next `strdup` would report a false positive.
+- **Interceptors:** `strcpy`, `strncpy`, `strcat`, `strncat`, `sprintf`,
+  `snprintf`, `fgets`, `fread` and `read`.
+  - The loader hands libc to the runtime as `__real_*`.
+  - A call from inside libc is not intercepted.
+  - `scanf("%s")` was left for F4 (NOTES.md §39).
+- **Exceptions and `longjmp` (R9).**
+  - `__asan_handle_no_return` is emitted before the student's `__cxa_throw`
+    and before `longjmp` (tested).
+  - The `throw`s from inside `libc++.so`, like `at` and `stoi`, do not go
+    through it. The loader forwards the `__cxa_throw` and `__cxa_rethrow`
+    that `libc++.so` imports to a wrapper in the runtime.
+  - The risk is smaller than it looked. The prologue rewrites the frame's
+    *shadow*.
+- **The reports.**
+  - The host reads the *shadow* to classify the error: heap, stack, global,
+    freed, scope.
+  - The allocation stack is only the top frames, compact (module and
+    offset), captured in the host. The cost will be measured with a program
+    that uses `std::map` (R12).
+- **REPL.** After a trap, the machine restores the *stack pointer* and
+  clears the *shadow* of the abandoned stack.
 
-**Para depois: a libc instrumentada.** Construir a wasi-libc com ASan e
-`MALLOC_IMPL=none` pegaria `scanf` e `printf("%s")` dentro da libc. Isso exige
-construir a libc a partir do fonte. Na F4, ficou nos interceptores das
-funções que leem (NOTES.md §41).
+**For later: the instrumented libc.** Building wasi-libc with ASan and
+`MALLOC_IMPL=none` would catch `scanf` and `printf("%s")` inside libc. That
+requires building libc from source. In F4, it stayed with the interceptors
+of the functions that read (NOTES.md §41).
 
 ### 5.3 libc++ (R4, R5)
 
-- O sysroot já tem `LIBCXX_HARDENING_MODE=fast`. A semântica dele é
-  `QUICK_ENFORCE`: um trap sem mensagem, o `aborted` de hoje.
-- **`on`:** `EXTENSIVE`, ainda com `QUICK_ENFORCE`.
-  - Com `-g`, a mensagem do trap já está no DWARF:
+- The sysroot already has `LIBCXX_HARDENING_MODE=fast`. Its semantics is
+  `QUICK_ENFORCE`. That is a trap with no message, today's `aborted`.
+- **`on`:** `EXTENSIVE`, still with `QUICK_ENFORCE`.
+  - With `-g`, the trap's message is already in the DWARF:
     `__clang_trap_msg$libc++$vector.h:414: libc++ Hardening assertion __n < size() failed: vector[] index out of bounds`
     (R4).
-  - A F0 mostra essa mensagem e a linha do aluno. O wasmtime CLI não
-    mostrou o frame inline do `__clang_trap_msg`, então a F0 lê o DWARF com
-    o `addr2line` direto, se preciso (R10).
-- **`strict`:** `DEBUG`, que já usa `ENFORCE`, com `verbose_abort` e a
-  mensagem.
+  - F0 shows that message and the student's line. The wasmtime CLI did not
+    show the inline frame of `__clang_trap_msg`, so F0 reads the DWARF with
+    `addr2line` directly, if needed (R10).
+- **`strict`:** `DEBUG`, which already uses `ENFORCE`, with `verbose_abort`
+  and the message.
 - **`off`:** `NONE`.
-- **Fora:** `_LIBCPP_ASSERTION_SEMANTIC`. Ele é experimental, dá `#error`
-  sem `-fexperimental-library`, e essa flag muda o `.pcm`.
-- **Um `std.pcm` por modo é obrigatório.** O módulo aceita uma macro
-  diferente sem reclamar e usa o valor de quando foi construído (R5,
-  testado com `-DFOO`). Sem um `.pcm` por modo, o hardening não teria efeito
-  com `import std`.
-  - `-fsanitize`, `-g` e `pattern` não conflitam com o `.pcm` (testado).
-  - Misturar células de modos diferentes é seguro: cada modo tem uma
-    assinatura ODR própria (T7).
+- **Out:** `_LIBCPP_ASSERTION_SEMANTIC`. It is experimental, gives `#error`
+  without `-fexperimental-library`, and that flag changes the `.pcm`.
+- **One `std.pcm` per mode is mandatory.** The module accepts a different
+  macro without complaint and uses the value from when it was built (R5,
+  tested with `-DFOO`). Without one `.pcm` per mode, the hardening would
+  have no effect with `import std`.
+  - `-fsanitize`, `-g` and `pattern` do not conflict with the `.pcm`
+    (tested).
+  - Mixing cells of different modes is safe. Each mode has its own ODR
+    signature (T7).
 
-### 5.4 Inicialização das locais (R1)
+### 5.4 Initialization of locals (R1)
 
-**`on` e `strict`:** `-ftrivial-auto-var-init=pattern`. No wasm32, ponteiros
-de 32 bits fazem o `PatternInit.cpp:17-20` escolher `0xFF…`:
+**`on` and `strict`:** `-ftrivial-auto-var-init=pattern`. On wasm32,
+32-bit pointers make `PatternInit.cpp:17-20` choose `0xFF…`:
 
-| Tipo | Valor |
+| Type | Value |
 |---|---|
-| inteiro | -1 |
-| ponteiro | 0xFFFFFFFF; acima dos 3 GiB, então dá trap já na F2, sem ASan |
+| integer | -1 |
+| pointer | 0xFFFFFFFF; above 3 GiB, so it already traps in F2, without ASan |
 | `double` | NaN |
-| `char[]` | `\xFF` repetido |
+| `char[]` | `\xFF` repeated |
 
-O -1 é menos visível que um padrão. Um patch de uma linha poria 0xAAAAAAAA
-nos inteiros e deixaria o ponteiro em 0xFFFFFFFF. Ele fica para depois de
-medir. **Medido e feito** (NOTES.md §42): o contador que o aluno esqueceu
-de zerar saía com um a menos; o `llvm/pattern-init.patch` põe 0xAA… nos
-inteiros, sem mudar o tamanho do código.
+-1 is less visible than a pattern. A one-line patch would put 0xAAAAAAAA in
+the integers and leave the pointer at 0xFFFFFFFF. It waits until after a
+measurement. **Measured and done** (NOTES.md §42). The counter the student
+forgot to zero came out one short. `llvm/pattern-init.patch` puts 0xAA… in
+the integers, without changing the code size.
 
-**O trap perto de 0xFFFFFFxx é ambíguo.** Pode ser um ponteiro não
-inicializado ou o estouro da pilha linear abaixo de 0. O `runtime_error`
-separa os dois casos pelo `stack_pointer()`: se ele deu a volta, é estouro.
+**A trap near 0xFFFFFFxx is ambiguous.** It can be an uninitialized pointer
+or the overflow of the linear stack below 0. `runtime_error` tells the two
+cases apart by `stack_pointer()`. If it wrapped around, it is an overflow.
 
-**`off`:** a local fica com o que estava na pilha.
+**`off`:** the local keeps whatever was on the stack.
 
-**Descartados:**
+**Discarded:**
 
-- o `zero`, que esconde o erro;
-- o MSan, que precisa da libc e da libc++ instrumentadas e não tem suporte
-  no wasm.
+- `zero`, which hides the error;
+- MSan, which needs an instrumented libc and libc++ and has no support on
+  wasm.
 
-### 5.5 Sanitizers fora do escopo
+### 5.5 Sanitizers out of scope
 
-| Sanitizer | Por quê |
+| Sanitizer | Why |
 |---|---|
 | `memory` | §5.4 |
-| `thread` | o REPL não tem threads |
-| `hwaddress`, `memtag-*`, `kernel-*` | hardware ou kernel |
-| `cfi-*`, `kcfi`, `safe-stack`, `shadow-call-stack` | o wasm já verifica a chamada indireta e separa a pilha de retorno |
-| `type` | *strict aliasing* não muda nada a `-O0` |
-| `dataflow`, `numerical`, `realtime`, `fuzzer`, `scudo`, `alloc-token` | outro propósito |
-| `-fstack-protector`, `_FORTIFY_SOURCE` | o ASan é melhor; a wasi-libc não tem *fortify* |
+| `thread` | the REPL has no threads |
+| `hwaddress`, `memtag-*`, `kernel-*` | hardware or kernel |
+| `cfi-*`, `kcfi`, `safe-stack`, `shadow-call-stack` | wasm already checks the indirect call and keeps the return stack separate |
+| `type` | *strict aliasing* changes nothing at `-O0` |
+| `dataflow`, `numerical`, `realtime`, `fuzzer`, `scudo`, `alloc-token` | another purpose |
+| `-fstack-protector`, `_FORTIFY_SOURCE` | ASan is better; wasi-libc has no *fortify* |
 
-**Observação para o professor.** No wasm, estourar um array local corrompe
-outras variáveis, mas nunca o endereço de retorno. No `off`, o
-*stack smashing* clássico não derruba o programa como no x86.
+**Note for the teacher.** On wasm, overflowing a local array corrupts other
+variables, but never the return address. At `off`, classic
+*stack smashing* does not bring the program down as it does on x86.
 
-### 5.6 O local do erro (camada 6; T6, R10)
+### 5.6 The error location (layer 6; T6, R10)
 
-O wasmtime já faz quase tudo:
+wasmtime already does almost everything:
 
-- `Config::wasm_backtrace_details(Enable)`, com a feature `addr2line`
-  padrão, dá arquivo, linha e coluna por frame. O padrão só lê
+- `Config::wasm_backtrace_details(Enable)`, with the default `addr2line`
+  feature, gives file, line and column per frame. The default only reads
   `WASMTIME_BACKTRACE_DETAILS`.
-- O `.debug_line` de um `.so` PIC é relativo ao módulo. O revisor viu
-  `d.c:2:22` num `.so` carregado pelo `scload`.
-- O host formata os frames do aluno com `frame.symbols()`.
+- The `.debug_line` of a PIC `.so` is relative to the module. The reviewer
+  saw `d.c:2:22` in a `.so` loaded by `scload`.
+- The host formats the student's frames with `frame.symbols()`.
 
-**Armadilhas:**
+**Pitfalls:**
 
-- O wasmtime demangla `f` como `float`. Usar o nome cru, e demanglar só os
-  nomes `_Z`, como o loader já faz.
-- O padrão é 20 frames: na recursão, juntar os frames repetidos.
-- **Na sessão incremental, o DWARF nunca foi exercitado (T8).** Cada célula
-  é um módulo novo, com o nome `cell_N`. Um passe do `test-split` com
-  `-gline-tables-only` entra na F0.
+- wasmtime demangles `f` as `float`. Use the raw name, and demangle only the
+  `_Z` names, as the loader already does.
+- The default is 20 frames. In a recursion, merge the repeated frames.
+- **In the incremental session, the DWARF has never been exercised (T8).**
+  Each cell is a new module, named `cell_N`. A `test-split` pass with
+  `-gline-tables-only` goes into F0.
 
-**As mensagens dos traps:**
+**The trap messages:**
 
-| Trap | Mensagem |
+| Trap | Message |
 |---|---|
-| `out of bounds memory access` | `invalid memory access` ou `stack overflow`, pelo `stack_pointer()` (§5.4) |
+| `out of bounds memory access` | `invalid memory access` or `stack overflow`, by `stack_pointer()` (§5.4) |
 | `integer divide by zero` | `division by zero` |
 | `integer overflow` | `INT_MIN / -1` |
 | `call stack exhausted` | `stack overflow (infinite recursion?)` |
 | `indirect call type mismatch` | `call through a function pointer of the wrong type` |
-| `uninitialized element` | `call through a null function pointer`, ou `undefined symbol` se for o slot de `reserve_slot` (R11) |
+| `uninitialized element` | `call through a null function pointer`, or `undefined symbol` if it is the slot of `reserve_slot` (R11) |
 
-## 6. Arquitetura
+## 6. Architecture
 
 - **Flags.**
-  - Os conjuntos ficam em `scripts/flags.py`, numa função
+  - The sets live in `scripts/flags.py`, in a function
     `safety(level, cxx, mode)`.
-  - O `flags.py --session` recebe o nível e gera
-    `build/repl/<linguagem>-<nível>.args`. Hoje é um arquivo por linguagem
-    (`machine.rs:86`) (T3).
+  - `flags.py --session` receives the level and generates
+    `build/repl/<lang>-<level>.args`. Today there is one file per
+    language (`machine.rs:86`) (T3).
 - **`sc_inv.cpp`.**
-  - **Parse estrito (T2).** O `scParseArgs` passa a recusar com erro a
-    flag que não conhece.
-  - **Flags novas:** `-D`, para as macros da libc++; hoje não há código de
-    `PreprocessorOptions`.
-  - **Flags novas:** `-fsanitize=`, `-fsanitize-recover=`, `-fsanitize-trap=`,
+  - **Strict parse (T2).** `scParseArgs` now rejects with an error a flag it
+    does not know.
+  - **New flags:** `-D`, for libc++'s macros; today there is no
+    `PreprocessorOptions` code.
+  - **New flags:** `-fsanitize=`, `-fsanitize-recover=`, `-fsanitize-trap=`,
     `-fsanitize-merge=`, `-fsanitize-address-use-after-scope`,
     `-fsanitize-address-globals-dead-stripping`.
-  - **Flags novas:** `-ftrivial-auto-var-init=`, `-debug-info-kind=`,
+  - **New flags:** `-ftrivial-auto-var-init=`, `-debug-info-kind=`,
     `-dwarf-version=`, `-debugger-tuning=`.
   - **`-mllvm -asan-*`.**
-  - **`sc_inv.cpp:107-108`** hoje fixa os padrões contrários de
-    `SanitizeMemoryParamRetval` e `UseOdrIndicator`. O `flags.py` decide
-    cada um.
+  - **`sc_inv.cpp:107-108`** today sets the opposite defaults of
+    `SanitizeMemoryParamRetval` and `UseOdrIndicator`. `flags.py` decides
+    each one.
 - **`checkinv` (T3).**
-  - O *round trip* já serializa `Sanitize*`, `DebugInfo` e `-D`.
-  - `TrivialAutoVarInit` entra na comparação campo a campo.
-  - Ele ganha umas 8 linhas: {C pic, C++ pic, C++ pic mod, C++ pcm} ×
+  - The *round trip* already serializes `Sanitize*`, `DebugInfo` and `-D`.
+  - `TrivialAutoVarInit` enters the field by field comparison.
+  - It gains some 8 lines: {C pic, C++ pic, C++ pic mod, C++ pcm} ×
     {on, strict}.
-- **`sc_backend.cpp`:** o passe do ASan (§5.2, T1).
-- **Cortes (T5).**
-  - **O REPL e o `sc FILE` usam o `sc-engine-full`**, nativo e sem cortes
-    (`machine.rs:85`). A F0, a F1 e a F2 no REPL não dependem do `learn`.
-  - O `learn` só importa para o `sc.wasm` e o `build/sc`. Medido nos
-    `engine.map`:
-    - `CGDebugInfo`: 376 KB no completo, 18 KB no cortado;
-    - DWARF do AsmPrinter: 366 KB e 54 KB;
-    - ASan: 95 KB e 0;
-    - UBSan (`EmitCheck*`) e `pattern`: não estão cortados.
-  - O teto é de uns 0,8 MB em 24 MB, cerca de 3%.
+- **`sc_backend.cpp`:** the ASan pass (§5.2, T1).
+- **Cuts (T5).**
+  - **The REPL and `sc FILE` use `sc-engine-full`**, native and without cuts
+    (`machine.rs:85`). F0, F1 and F2 in the REPL do not depend on `learn`.
+  - `learn` only matters for `sc.wasm` and `build/sc`. Measured in the
+    `engine.map` files:
+    - `CGDebugInfo`: 376 KB in the full one, 18 KB in the cut one;
+    - AsmPrinter's DWARF: 366 KB and 54 KB;
+    - ASan: 95 KB and 0;
+    - UBSan (`EmitCheck*`) and `pattern`: not cut.
+  - The ceiling is about 0.8 MB in 24 MB, about 3%.
 - **Loader (`loader/src/lib.rs`).**
-  - Carrega a `libsc_rt.so` primeiro e resolve os imports da libc++ para
-    ela (§5.2).
-  - Entrega a libc como `__real_*`.
-  - Monta a memória com a *shadow*.
-  - Liga `wasm_backtrace_details`.
-  - Fica no `lib.rs`, e não no `sc`, porque o `split.py` e o `corpus.py`
-    rodam pelo `scload` (T9).
-- **Sysroot.** O `make sysroot` passa a construir a `libsc_rt.so` (PIC e
-  estática) e o `std.pcm` de cada modo de hardening.
+  - It loads `libsc_rt.so` first and resolves libc++'s imports to it
+    (§5.2).
+  - It hands libc over as `__real_*`.
+  - It sets up the memory with the *shadow*.
+  - It turns on `wasm_backtrace_details`.
+  - It stays in `lib.rs`, and not in `sc`, because `split.py` and
+    `corpus.py` run through `scload` (T9).
+- **Sysroot.** `make sysroot` now builds `libsc_rt.so` (PIC and static) and
+  the `std.pcm` of each hardening mode.
 
-## 7. Custos
+## 7. Costs
 
-**Medidos** com o clang nativo do pin, que roda o pipeline completo. O
-engine só roda os passes do ASan depois do T1. São objetos wasm32 PIC
-a `-O0`, em bytes:
+**Measured** with the pin's native clang, which runs the full pipeline. The
+engine only runs the ASan passes after T1. They are wasm32 PIC objects at
+`-O0`, in bytes:
 
-| Programa | nada | UBSan (handlers) | ASan | os dois | `-gline-tables-only` |
+| Program | nothing | UBSan (handlers) | ASan | both | `-gline-tables-only` |
 |---|---|---|---|---|---|
-| `test/cxx/c3_stl.cpp` | 442 544 | 1 003 900 (2,27×) | 644 268 (1,46×) | 1 211 950 (2,74×) | 530 941 (1,20×) |
-| `test/cxx/c1_basics.cpp` | 93 205 | 199 129 (2,14×) | 138 593 (1,49×) | 244 068 (2,62×) | — |
+| `test/cxx/c3_stl.cpp` | 442,544 | 1,003,900 (2.27×) | 644,268 (1.46×) | 1,211,950 (2.74×) | 530,941 (1.20×) |
+| `test/cxx/c1_basics.cpp` | 93,205 | 199,129 (2.14×) | 138,593 (1.49×) | 244,068 (2.62×) | — |
 
-O UBSan com handlers pesa mais que o ASan a `-O0`, porque os templates da
-libc++ ganham todas as verificações. No modo `trap`, o fator cai para 1,35×
+UBSan with handlers weighs more than ASan at `-O0`, because libc++'s
+templates get every check. In `trap` mode, the factor drops to 1.35×
 (§5.1).
 
-**A medir:**
+**To measure:**
 
-- a latência por célula no `sc-engine-full`, com o UBSan e o ASan
-  separados (T11);
-- o tempo de execução do corpus em cada nível;
-- a captura da pilha em cada `malloc`;
-- o engine depois do `learn`.
+- the latency per cell in `sc-engine-full`, with UBSan and ASan separately
+  (T11);
+- the run time of the corpus at each level;
+- the stack capture in each `malloc`;
+- the engine after `learn`.
 
-## 8. Fases (reordenadas por T)
+## 8. Phases (reordered by T)
 
-Cada fase fecha com o `make test` com 0 diferenças, o `test-split`, o
-`checkinv` SAME e o registro no NOTES.md.
+Each phase closes with `make test` at 0 differences, `test-split`,
+`checkinv` SAME and the record in NOTES.md.
 
-| Fase | Entrega | Tamanho |
+| Phase | Delivers | Size |
 |---|---|---|
-| **F1** | o parse estrito do `sc_inv` (T2); os níveis no `flags.py`, no `sc` e no `checkinv` (T3); o corpus em vários níveis (T4); os avisos E, R, A e L (§4); medir L e o ruído no corpus de aluno | média |
-| **F0** | `wasm_backtrace_details`; traps em palavras; `-gline-tables-only` no REPL nativo, mais o `test-split` com `-g` (T8) | pequena |
-| **F2** | UBSan com o modo escolhido pela medida (§5.1); libc++ `EXTENSIVE` e um `std.pcm` por modo; `pattern` | média |
-| **F2b** | `learn` para o `sc.wasm`: DWARF e o que mais faltar | pequena |
-| **F3** | o passe do ASan no `sc_backend` (T1); o `libsc_rt`; o layout com offset (R2); o alocador e o loader (R8); o `__cxa_throw` (R9); o relato com pilha | grande |
-| **F4** | `strict`: U-estrito, vazamentos, libc++ `DEBUG`, `scanf("%s")`; opcional: libc instrumentada | média |
+| **F1** | the strict parse of `sc_inv` (T2); the levels in `flags.py`, in `sc` and in `checkinv` (T3); the corpus at several levels (T4); the E, R, A and L warnings (§4); measure L and the noise on the student corpus | medium |
+| **F0** | `wasm_backtrace_details`; traps in words; `-gline-tables-only` in the native REPL, plus `test-split` with `-g` (T8) | small |
+| **F2** | UBSan with the mode the measurement chooses (§5.1); libc++ `EXTENSIVE` and one `std.pcm` per mode; `pattern` | medium |
+| **F2b** | `learn` for `sc.wasm`: DWARF and whatever else is missing | small |
+| **F3** | the ASan pass in `sc_backend` (T1); `libsc_rt`; the layout with an offset (R2); the allocator and the loader (R8); `__cxa_throw` (R9); the report with a stack | large |
+| **F4** | `strict`: U-strict, leaks, libc++ `DEBUG`, `scanf("%s")`; optional: instrumented libc | medium |
 
-**A F1 está feita** (NOTES.md §30).
-- A célula passou a contar como o arquivo principal
-  (`llvm/incremental-main-file.patch`). Antes disso, o `-Wunreachable-code`
-  não disparava, e o `-Wheader-hygiene` dava falso positivo.
-- O `-Wmissing-prototypes` saiu do S para o N: disparava em 16 dos 20
-  programas corretos do `test/aluno` no `strict`.
+**F1 is done** (NOTES.md §30).
+- The cell now counts as the main file
+  (`llvm/incremental-main-file.patch`). Before that, `-Wunreachable-code`
+  did not fire, and `-Wheader-hygiene` gave a false positive.
+- `-Wmissing-prototypes` moved from S to N. It fired on 16 of the 20
+  correct programs of `test/aluno` at `strict`.
 
-**A F0 está feita** (NOTES.md §31): o erro em palavras e os frames do
-aluno, com `-gline-tables-only` em toda sessão; o `test-split` com `-g`
-(T8) e o `make test-checks`.
+**F0 is done** (NOTES.md §31). It has the error in words and the student's
+frames, with `-gline-tables-only` in every session, `test-split` with `-g`
+(T8) and `make test-checks`.
 
-**A F2 está feita** (NOTES.md §32): o UBSan com handlers na `libsc_rt`
-(`rt/`), o `EXTENSIVE` da libc++ com a semântica `enforce` no sysroot, o
-`pattern`, e um `std.pcm` por nível no corpus. Uma célula leva 102 ms no
-`on` contra 61 ms no `off`.
+**F2 is done** (NOTES.md §32). It has UBSan with handlers in `libsc_rt`
+(`rt/`), libc++'s `EXTENSIVE` with the `enforce` semantics in the sysroot,
+`pattern`, and one `std.pcm` per level in the corpus. A cell takes 102 ms
+at `on` against 61 ms at `off`.
 
-**A F2b está feita** (NOTES.md §33): o corpus compila os `pic-`, os
-`repl-` e os níveis com `-gline-tables-only`, e o `learn` devolveu o DWARF
-ao `sc.wasm` (+211 KB).
+**F2b is done** (NOTES.md §33). The corpus compiles the `pic-` and `repl-`
+programs and the levels with `-gline-tables-only`, and `learn` gave the
+DWARF back to `sc.wasm` (+211 KB).
 
-**A F3 está feita** (NOTES.md §34): o passe do ASan no `sc_backend`, o
-runtime em `rt/sc_asan.c`, a *shadow* em 0x110000, o alocador com
-quarentena, os nomes do `--wrap` no loader e o `__cxa_throw`. O
-`llvm/asan-cleanupret.patch` corrige o ASan com as exceções do wasm. O
-`-Wdeprecated-copy-with-user-provided-dtor` foi para o S. Uma célula leva
-115 ms no `on` contra 68 ms no `off`, e o `sc.wasm` cresceu 78 KB.
+**F3 is done** (NOTES.md §34). It has the ASan pass in `sc_backend`, the
+runtime in `rt/sc_asan.c`, the *shadow* at 0x110000, the allocator with a
+quarantine, the `--wrap` names in the loader and `__cxa_throw`.
+`llvm/asan-cleanupret.patch` fixes ASan with wasm exceptions.
+`-Wdeprecated-copy-with-user-provided-dtor` went to S. A cell takes 115 ms
+at `on` against 68 ms at `off`, and `sc.wasm` grew by 78 KB.
 
-**A F3b está feita** (NOTES.md §36). O relato diz onde o bloco foi
-liberado e alocado, com pilhas capturadas pelo loader e simbolizadas por
-ele só no relato. Só os primeiros 20 mil blocos guardam a pilha, e o
-`std::map` de 100 mil chaves fica no tempo de antes (R12). O `sc FILE` com
-`setjmp`/`longjmp` também foi corrigido (§35).
+**F3b is done** (NOTES.md §36). The report says where the block was freed
+and allocated, with stacks that the loader captures and symbolizes only for
+the report. Only the first 20 thousand blocks keep their stack, and a
+`std::map` of 100 thousand keys takes the same time as before (R12).
+`sc FILE` with `setjmp`/`longjmp` was also fixed (§35).
 
-**Os vazamentos da F4 estão feitos** (NOTES.md §37): no fim do `sc FILE`
-no `strict` e no `:leaks` do REPL.
+**F4's leaks are done** (NOTES.md §37). They show at the end of `sc FILE`
+at `strict` and in the REPL's `:leaks`.
 
-**O libc++ `DEBUG` da F4 está feito** (NOTES.md §38): o `strict` pega o
-comparador que não é uma ordem estrita fraca, como o `<=` no `std::sort`.
+**F4's libc++ `DEBUG` is done** (NOTES.md §38). `strict` catches a
+comparator that is not a strict weak order, like `<=` in `std::sort`.
 
-**O `scanf("%s")` da F4 está feito** (NOTES.md §39): no `on` e no
-`strict`, como os outros interceptores.
+**F4's `scanf("%s")` is done** (NOTES.md §39). It works at `on` and at
+`strict`, like the other interceptors.
 
-**O U-estrito da F4 está feito** (NOTES.md §40): no `strict`, fora dos
-headers do sysroot (uma ignorelist), e sem as macros `isdigit`... da musl,
-que dão a volta no código do aluno.
+**F4's U-strict is done** (NOTES.md §40). It works at `strict`, outside the
+sysroot's headers (an ignorelist), and without musl's `isdigit`... macros,
+which wrap around in the student's code.
 
-**A libc instrumentada da F4 ficou nos interceptores** (NOTES.md §41): as
-funções que leem as strings do programa (`strlen`, `strcmp`, `printf("%s")`,
-`puts`, `atoi`...) conferem o que leem, com o `--wrap` de antes, sem uma
-segunda libc. A F4 está feita.
+**F4's instrumented libc stayed with the interceptors** (NOTES.md §41). The
+functions that read the program's strings (`strlen`, `strcmp`,
+`printf("%s")`, `puts`, `atoi`...) check what they read, with the same
+`--wrap` as before, without a second libc. F4 is done.
 
-A F1 vem primeiro, porque é o alicerce:
+F1 comes first, because it is the foundation:
 
-- o `sc_inv` passa a aceitar e conferir as flags;
-- o corpus passa a testar os níveis.
+- `sc_inv` now accepts and checks the flags;
+- the corpus now tests the levels.
 
-## 9. Testes
+## 9. Tests
 
-- **`test/aluno/`: código correto de aluno (T9, W).**
-  - São exercícios de introdução em C e em C++ com STL: laços, vetores,
-    strings, structs, listas, matrizes, grafos, classes, `map`.
-  - **É o portão do nível `on`:** nenhum aviso do E ou do A e nenhum relato
-    em execução.
-  - Os programas corretos do revisor W (`rev-avisos/ok/`) são o começo.
-  - O corpus de hoje não serve para isso. Dos 1947 programas, 1698 são do
-    gcc torture, que tem UB de propósito; o `test/cxx` mais o
-    `test/samples` são só 25 arquivos.
-- **`test/checks/`: um bug por programa (W-A14).** Cada programa traz a
-  saída esperada em cada nível: no `off`, o comportamento silencioso; no
-  `on`, a mensagem e a linha. `make test-checks` compara.
-- **O corpus em vários níveis (T4).**
-  - O `corpus.py` roda cada conjunto de flags na mesma rodada, com os nomes
-    sufixados (`-on`, `-strict`).
-  - A base sai do `sc-full`.
-  - O `learn` aprende a união.
-  - O E é separado dos testes de tempo de execução. Senão, os programas
-    gnu17 do torture param na compilação.
-- **O `test-split` com um nível.** O `split.py` passa o nível a
-  `session(...)`. A diferença com a base sem verificação vira uma lista de
-  relatos para triagem: UB real do teste, ou falso positivo, que derruba a
-  verificação para o estrito.
-- **Os programas estáticos** do corpus, que rodam no wasmtime CLI, se ligam
-  com a `libsc_rt.a` (T10).
+- **`test/aluno/`: correct student code (T9, W).**
+  - These are introductory exercises in C and in C++ with the STL: loops,
+    vectors, strings, structs, lists, matrices, graphs, classes, `map`.
+  - **It is the gate of the `on` level:** no warning from E or A and no
+    report at run time.
+  - The correct programs of reviewer W (`rev-avisos/ok/`) are the start.
+  - Today's corpus does not serve for this. Of its 1947 programs, 1698 come
+    from gcc torture, which has UB on purpose. `test/cxx` plus
+    `test/samples` are only 25 files.
+- **`test/checks/`: one bug per program (W-A14).** Each program carries the
+  expected output at each level. At `off` that is the silent behaviour, and
+  at `on` the message and the line. `make test-checks` compares.
+- **The corpus at several levels (T4).**
+  - `corpus.py` runs each set of flags in the same round, with suffixed
+    names (`-on`, `-strict`).
+  - The base comes from `sc-full`.
+  - `learn` learns the union.
+  - E is kept apart from the run-time tests. Otherwise the gnu17 programs of
+    torture stop at compilation.
+- **`test-split` with a level.** `split.py` passes the level to
+  `session(...)`. The difference from the base without checks becomes a list
+  of reports for triage. Each one is either real UB in the test or a false
+  positive, which moves the check down to strict.
+- **The static programs** of the corpus, which run on the wasmtime CLI,
+  link with `libsc_rt.a` (T10).
 
-## 10. Riscos
+## 10. Risks
 
-1. **O ASan com a ligação dinâmica.** O registro dos globais célula a
-   célula funciona: o `.so` liga e o construtor roda com os metadados
-   relocados (R11). O `SC_SYMS` só tem nomes, então o tamanho dos globais
-   não importa (R11). Sobra testar o undo e o replay com o ASan.
-2. **Os `throw` de dentro da libc++** sem `__asan_handle_no_return` (R9,
-   §5.2).
-3. **O DWARF na sessão incremental** (T8). O teste vai na F0.
-4. **512 MiB de memória.** Ela nasce com a memória e não pode crescer
-   depois (R12).
-   - No nativo, isso é só `mprotect`.
-   - No Windows, a memória comprometida conta.
-   - No navegador pode falhar. Nesse caso, o ASan começa desligado no
+1. **ASan with dynamic linking.** Registering the globals cell by cell
+   works. The `.so` links and the constructor runs with the relocated
+   metadata (R11). `SC_SYMS` has only names, so the size of the globals
+   does not matter (R11). Undo and replay with ASan remain to be tested.
+2. **The `throw`s from inside libc++** without `__asan_handle_no_return`
+   (R9, §5.2).
+3. **DWARF in the incremental session** (T8). The test goes into F0.
+4. **512 MiB of memory.** It comes with the memory from the start and
+   cannot grow later (R12).
+   - On native, that is only `mprotect`.
+   - On Windows, committed memory counts.
+   - In the browser it can fail. In that case, ASan starts off in
      `sc.wasm`.
-5. **A latência do REPL.** Se o `on` deixar a célula lenta demais, o REPL
-   usa o UBSan em modo `trap` e deixa o ASan só para o `sc FILE`. A medida
-   decide (T11).
-6. **Os falsos positivos nos headers da libc++.** O portão é o
-   `test/aluno` em C++ (§9).
+5. **The REPL's latency.** If `on` makes the cell too slow, the REPL uses
+   UBSan in `trap` mode and leaves ASan only for `sc FILE`. The measurement
+   decides (T11).
+6. **False positives in libc++'s headers.** The gate is `test/aluno` in
+   C++ (§9).
 
-O risco 4 da versão 1, o `std.pcm`, foi resolvido: um `.pcm` por modo é
-obrigatório (R5).
+Risk 4 of version 1, the `std.pcm`, is solved. One `.pcm` per mode is
+mandatory (R5).
 
-## 11. Decisões do professor (2026-10-15)
+## 11. The teacher's decisions (2026-10-15)
 
-1. **O E vira erro** nos níveis `on` e `strict`, com `-Wformat` e com as
-   exceções da §4.1. No `off`, volta a ser aviso.
-2. **`-Wsign-compare` sai do padrão** e vai para o R, só no `strict`.
-3. **`-Wfloat-conversion` fica só no `strict`.** No padrão ficam
-   `-Wfloat-overflow-conversion` e `-Wfloat-zero-conversion`.
-4. **O UBSan usa os handlers completos**, se a latência medida na F2
-   permitir. Se não permitir, o REPL usa o modo `trap`, e o `sc FILE` fica
-   com os handlers.
-5. **Os vazamentos aparecem só no `strict`.** O `:leaks` do REPL funciona no
-   `on` e no `strict`: o `off` não tem o alocador que conhece os blocos
-   (2026-10-16). Vazamento é o bloco que nada alcança, como no LSan, e ele
-   muda um status 0 para 1 (NOTES.md §37).
-6. **O `strict` só liga `-Wpedantic`.** O dialeto continua `gnu23` e
+1. **E becomes an error** at the `on` and `strict` levels, with `-Wformat`
+   and with the exceptions of §4.1. At `off`, it goes back to being a
+   warning.
+2. **`-Wsign-compare` leaves the default** and goes to R, only at `strict`.
+3. **`-Wfloat-conversion` stays only at `strict`.** The default keeps
+   `-Wfloat-overflow-conversion` and `-Wfloat-zero-conversion`.
+4. **UBSan uses the full handlers**, if the latency measured in F2 allows
+   it. If it does not, the REPL uses `trap` mode, and `sc FILE` keeps the
+   handlers.
+5. **Leaks show only at `strict`.** The REPL's `:leaks` works at `on` and at
+   `strict`. `off` does not have the allocator that knows the blocks
+   (2026-10-16). A leak is a block that nothing reaches, as in LSan, and it
+   changes a status 0 to 1 (NOTES.md §37).
+6. **`strict` only turns on `-Wpedantic`.** The dialect stays `gnu23` and
    `gnu++26`.
-7. **O controle se chama `--safety=off|on|strict`**, no REPL `:safety
-   NÍVEL`. Ele recomeça a sessão vazia, com um aviso. O nome diz o que se
-   perde ao desligar e não se confunde com o comando `check`.
+7. **The control is called `--safety=off|on|strict`**, in the REPL `:safety
+   LEVEL`. It restarts the session empty, with a warning. The name says what
+   you lose by turning it off and is not confused with the `check` command.
 
-## Apêndice A: os 343 grupos desligados por padrão
+## Appendix A: the 343 groups off by default
 
-Os grupos estão classificados pelos conjuntos da §4. O número entre
-parênteses é a quantidade de programas do corpus em que o grupo dispara; sem
-número, não dispara em nenhum.
+The groups are classified by the sets of §4. The number in parentheses is
+the number of corpus programs in which the group fires. With no number, it
+fires in none.
 
-A lista vem de `diagtool show-enabled` com e sem `-Weverything`, do clang
-nativo do pin. O script é o `classify.py`, no scratchpad da sessão.
+The list comes from `diagtool show-enabled` with and without
+`-Weverything`, from the pin's native clang. The script is `classify.py`, in
+the session's scratchpad.
 
-**A: ligar no nível padrão (`-Wshadow` só em C; `-Wdeprecated-copy-with-user-provided-dtor` volta ao S depois da F3)** (23):
+**A: turn on at the default level (`-Wshadow` only in C; `-Wdeprecated-copy-with-user-provided-dtor` goes back to S after F3)** (23):
 
 `-Warray-bounds-pointer-arithmetic`, `-Wcomma` (57), `-Wdefault-const-init-field`, `-Wdefault-const-init-var` (6), `-Wdeprecated-copy-with-user-provided-dtor`, `-Wfloat-overflow-conversion` (1), `-Wfloat-zero-conversion`, `-Wimplicit-fallthrough` (18), `-Wimplicit-fallthrough-per-function`, `-Wmain` (4), `-Wmain-return-type` (5), `-Wnon-virtual-dtor` (1), `-Wshadow` (54), `-Wshadow-field-in-constructor-modified`, `-Wshift-bool`, `-Wshift-sign-overflow` (8), `-Wstring-conversion`, `-Wtautological-unsigned-enum-zero-compare`, `-Wtautological-unsigned-zero-compare` (9), `-Wtautological-value-range-compare` (13), `-Wunreachable-code` (75), `-Wunreachable-code-fallthrough`, `-Wunreachable-code-loop-increment` (7)
 
-**L: análise de tempo de vida, só C++; a forma `-permissive` (use-after-scope, return-stack-addr, use-after-free) vai para A; dangling-field/global a medir** (9):
+**L: lifetime analysis, C++ only; the `-permissive` form (use-after-scope, return-stack-addr, use-after-free) goes to A; dangling-field/global to be measured** (9):
 
 `-Wlifetime-safety-dangling-field`, `-Wlifetime-safety-dangling-field-moved`, `-Wlifetime-safety-dangling-global`, `-Wlifetime-safety-dangling-global-moved`, `-Wlifetime-safety-return-stack-addr`, `-Wlifetime-safety-return-stack-addr-moved`, `-Wlifetime-safety-use-after-free`, `-Wlifetime-safety-use-after-scope`, `-Wlifetime-safety-use-after-scope-moved`
 
-**S: ligar só no nível estrito** (76):
+**S: turn on only at the strict level** (76):
 
 `-Walloca` (12), `-Wanon-enum-enum-conversion`, `-Wassign-enum` (6), `-Wbad-function-cast` (8), `-Wc++-compat` (68), `-Wc++-hidden-decl` (3), `-Wc++-keyword` (27), `-Wc++-unterminated-string-initialization` (7), `-Wcast-align` (36), `-Wcast-function-type-strict` (7), `-Wcast-qual` (24), `-Wclass-varargs` (21), `-Wconditional-uninitialized` (48), `-Wconversion` (5), `-Wctad-maybe-unsupported`, `-Wdeprecated-copy-with-dtor`, `-Wdouble-promotion` (66), `-Wdtor-name`, `-Wduplicate-decl-specifier`, `-Wduplicate-enum`, `-Wenum-compare-conditional`, `-Wenum-enum-conversion`, `-Wenum-float-conversion`, `-Wexpansion-to-defined`, `-Wextra-semi` (12), `-Wextra-semi-stmt` (42), `-Wfloat-conversion` (58), `-Wfloat-equal` (82), `-Wformat-nonliteral` (1), `-Wformat-signedness` (21), `-Wformat-type-confusion`, `-Wfour-char-constants`, `-Wheader-hygiene`, `-Wignored-base-class-qualifiers`, `-Wimplicit-float-conversion` (29), `-Wimplicit-int-conversion` (203), `-Wimplicit-int-conversion-on-negation` (9), `-Wimplicit-int-enum-cast` (9), `-Wimplicit-int-float-conversion` (22), `-Wimplicit-void-ptr-cast` (110), `-Wincompatible-function-pointer-types-strict` (8), `-Winconsistent-missing-destructor-override`, `-Wjump-misses-init` (9), `-Wkeyword-macro` (2), `-Wlifetime-safety-invalidation`, `-Wmissing-prototypes` (3002), `-Wold-style-cast` (1), `-Wrange-loop-bind-reference`, `-Wreserved-attribute-identifier`, `-Wreserved-identifier` (188), `-Wreserved-macro-identifier` (6), `-Wshadow-field`, `-Wshadow-uncaptured-local`, `-Wshorten-64-to-32` (44), `-Wsign-conversion` (442), `-Wstatic-in-inline` (2), `-Wsuggest-destructor-override`, `-Wsuggest-override`, `-Wswitch-default` (89), `-Wswitch-enum` (8), `-Wtautological-type-limit-compare` (3), `-Wtautological-unsigned-char-zero-compare`, `-Wtentative-definition-compat` (9), `-Wtentative-definition-incomplete-type` (1), `-Wundef` (7), `-Wundefined-internal-type`, `-Wundefined-reinterpret-cast`, `-Wunneeded-member-function`, `-Wunreachable-code-break` (6), `-Wunreachable-code-return` (34), `-Wunused-exception-parameter` (1), `-Wunused-macros` (26), `-Wunused-member-function`, `-Wunused-template`, `-Wvla` (66), `-Wzero-as-null-pointer-constant`
 
-**P: extensões (só no estrito, com -Wpedantic)** (50):
+**P: extensions (only at strict, with -Wpedantic)** (50):
 
 `-Wattribute-preprocessor-tokens`, `-Wauto-decl-extensions`, `-Wbit-int-extension`, `-Wc++20-designator`, `-Wc11-extensions`, `-Wc23-extensions` (73), `-Wc2y-extensions` (15), `-Wc99-designator`, `-Wc99-extensions`, `-Wcomplex-component-init`, `-Wdelimited-escape-sequence-extension`, `-Wdollar-in-identifier-extension`, `-Wembedded-directive`, `-Wempty-translation-unit` (3), `-Wflexible-array-extensions` (4), `-Wformat-non-iso`, `-Wformat-pedantic`, `-Wgnu-anonymous-struct`, `-Wgnu-auto-type`, `-Wgnu-case-range`, `-Wgnu-complex-integer` (21), `-Wgnu-compound-literal-initializer` (1), `-Wgnu-conditional-omitted-operand` (26), `-Wgnu-designator` (15), `-Wgnu-empty-struct` (52), `-Wgnu-flexible-array-initializer` (8), `-Wgnu-flexible-array-union-member`, `-Wgnu-folding-constant`, `-Wgnu-imaginary-constant`, `-Wgnu-include-next`, `-Wgnu-label-as-value` (56), `-Wgnu-line-marker`, `-Wgnu-pointer-arith` (20), `-Wgnu-redeclared-enum`, `-Wgnu-statement-expression` (39), `-Wgnu-statement-expression-from-macro-expansion` (1), `-Wgnu-union-cast` (2), `-Wgnu-zero-line-directive`, `-Wgnu-zero-variadic-macro-arguments`, `-Wimport-preprocessor-directive-pedantic`, `-Wlanguage-extension-token` (118), `-Wnested-anon-types`, `-Woctal-prefix-extension`, `-Woverlength-strings` (2), `-Wpedantic` (28), `-Wpointer-arith` (2), `-Wvariadic-macro-arguments-omitted`, `-Wvariadic-macros` (4), `-Wvla-extension`, `-Wzero-length-array` (23)
 
-**N: nunca (estilo, ABI, compatibilidade com padrões antigos, ruído)** (84):
+**N: never (style, ABI, compatibility with old standards, noise)** (84):
 
 `-Wabstract-vbase-init`, `-Watomic-implicit-seq-cst` (8), `-Wbind-to-temporary-copy`, `-Wbitfield-enum-conversion`, `-Wc++11-compat`, `-Wc++11-compat-reserved-user-defined-literal`, `-Wc++11-extensions`, `-Wc++11-extra-semi`, `-Wc++11-long-long`, `-Wc++11-narrowing`, `-Wc++14-attribute-extensions`, `-Wc++14-binary-literal`, `-Wc++17-attribute-extensions`, `-Wc++17-extensions`, `-Wc++20-attribute-extensions`, `-Wc++20-compat`, `-Wc++20-extensions` (1), `-Wc++23-attribute-extensions`, `-Wc++26-extensions`, `-Wc++98-c++11-compat-binary-literal`, `-Wc++98-compat` (23), `-Wc++98-compat-bind-to-temporary-copy`, `-Wc++98-compat-extra-semi`, `-Wc++98-compat-local-type-template-args` (5), `-Wc++98-compat-pedantic`, `-Wc++98-compat-unnamed-type-template-args`, `-Wc23-compat` (13), `-Wc99-compat`, `-Wcompound-token-split-by-space` (7), `-Wcovered-switch-default` (1), `-Wdate-time`, `-Wdeclaration-after-statement` (143), `-Wdeprecated-dynamic-exception-spec`, `-Wdeprecated-redundant-constexpr-static-def`, `-Wdisabled-macro-expansion` (12), `-Wexit-time-destructors` (1), `-Wexpansion-stmt-missing-braces`, `-Wgcc-compat`, `-Wglobal-constructors` (2), `-Widiomatic-parentheses`, `-Winvalid-utf8`, `-Wlifetime-safety-cross-tu-constructor-suggestions`, `-Wlifetime-safety-cross-tu-misplaced-lifetimebound`, `-Wlifetime-safety-cross-tu-suggestions`, `-Wlifetime-safety-inapplicable-lifetimebound`, `-Wlifetime-safety-intra-tu-constructor-suggestions` (1), `-Wlifetime-safety-intra-tu-misplaced-lifetimebound`, `-Wlifetime-safety-intra-tu-suggestions` (2), `-Wlifetime-safety-lifetimebound-violation`, `-Wlifetime-safety-noescape`, `-Wlong-long`, `-Wmissing-format-attribute` (4), `-Wmissing-noreturn` (90), `-Wmissing-variable-declarations` (1279), `-Wnewline-eof` (3), `-Wnrvo` (2), `-Wover-aligned`, `-Wpacked` (7), `-Wpadded` (244), `-Wpadded-bitfield` (14), `-Wpre-c++14-compat` (6), `-Wpre-c++17-compat` (8), `-Wpre-c++17-compat-pedantic`, `-Wpre-c++20-compat` (4), `-Wpre-c++20-compat-pedantic` (2), `-Wpre-c++23-compat` (1), `-Wpre-c++26-compat` (1), `-Wpre-c11-compat` (3), `-Wpre-c23-compat` (2), `-Wpre-c2y-compat`, `-Wredundant-parens` (4), `-Wshadow-field-in-constructor` (4), `-Wsigned-enum-bitfield`, `-Wstrict-prototypes` (1567), `-Wundefined-func-template`, `-Wunsafe-buffer-usage` (862), `-Wunsafe-buffer-usage-in-container`, `-Wunsafe-buffer-usage-in-format-attr-call`, `-Wunsafe-buffer-usage-in-libc-call` (3), `-Wunsafe-buffer-usage-in-static-sized-array`, `-Wunsafe-buffer-usage-in-unique-ptr-array-access`, `-Wused-but-marked-unused` (1), `-Wweak-template-vtables`, `-Wweak-vtables` (7)
 
-**X: não se aplica (ObjC, CUDA, HLSL, OpenMP, MS, módulos, threads, Doxygen...)** (101):
+**X: does not apply (ObjC, CUDA, HLSL, OpenMP, MS, modules, threads, Doxygen...)** (101):
 
 `-Waarch64-sme-attributes`, `-Wamdgpu-unguarded-builtin-usage`, `-Warc-maybe-repeated-use-of-weak`, `-Warc-repeated-use-of-weak`, `-Wcompletion-handler`, `-Wconsumed`, `-Wcstring-format-directive`, `-Wcuda-compat`, `-Wcustom-atomic-properties`, `-Wdecls-in-multiple-modules`, `-Wdeprecated-implementations`, `-Wdirect-ivar-access`, `-Wdocumentation`, `-Wdocumentation-deprecated-sync`, `-Wdocumentation-html`, `-Wdocumentation-pedantic`, `-Wdocumentation-unknown-command`, `-Wduplicate-header-ownership`, `-Wduplicate-method-arg`, `-Wduplicate-method-match`, `-Wexplicit-ownership-type`, `-Wfunction-effect-redeclarations`, `-Wfunction-effects`, `-Whip-deprecated-builtins`, `-Whlsl-implicit-binding`, `-Wimplicit-atomic-properties`, `-Wimplicit-overflow-behavior-conversion`, `-Wimplicit-overflow-behavior-conversion-assignment`, `-Wimplicit-overflow-behavior-conversion-assignment-pedantic`, `-Wimplicit-overflow-behavior-conversion-function-boundary`, `-Wimplicit-overflow-behavior-conversion-function-boundary-pedantic`, `-Wimplicit-overflow-behavior-conversion-pedantic`, `-Wimplicit-retain-self`, `-Winvalid-or-nonexistent-directory`, `-Wmax-tokens`, `-Wmethod-signatures`, `-Wmicrosoft-anon-tag`, `-Wmicrosoft-charize`, `-Wmicrosoft-comment-paste`, `-Wmicrosoft-cpp-macro`, `-Wmicrosoft-empty-enum`, `-Wmicrosoft-end-of-file`, `-Wmicrosoft-enum-value`, `-Wmicrosoft-exception-spec`, `-Wmicrosoft-fixed-enum`, `-Wmicrosoft-flexible-array`, `-Wmicrosoft-redeclare-static`, `-Wmissing-include-dirs`, `-Wmmap-deprecated-symlink-to-modular-header`, `-Wmodule-file-mapping-mismatch`, `-Wmodule-map-path-outside-directory`, `-Wms-bitfield-padding` (10), `-Wnon-modular-include-in-framework-module`, `-Wnon-modular-include-in-module`, `-Wnonportable-include-path-separator`, `-Wnonportable-private-system-apinotes-path`, `-Wnonportable-system-include-path`, `-Wnullability-extension`, `-Wnullable-to-nonnull-conversion`, `-Wnvcc-compat`, `-Wobjc-interface-ivars`, `-Wobjc-messaging-id`, `-Wobjc-missing-property-synthesis`, `-Wobjc-property-assign-on-object-type`, `-Wobjc-signed-char-bool-implicit-int-conversion`, `-Wopenacc-extension`, `-Woverriding-method-mismatch`, `-Wpedantic-core-features`, `-Wperf-constraint-implies-noexcept`, `-Wpoison-system-directories`, `-Wpragma-pack-suspicious-include`, `-Wpre-openmp-51-compat`, `-Wprofile-instr-missing`, `-Wquoted-include-in-framework-header`, `-Wreceiver-forward-class`, `-Wretained-language-linkage`, `-Wselector`, `-Wselector-type-mismatch`, `-Wshadow-header`, `-Wsource-uses-openacc`, `-Wsource-uses-openmp` (1), `-Wspir-compat`, `-Wstrict-potentially-direct-selector`, `-Wstrict-selector-match`, `-Wsuper-class-method-mismatch`, `-Wthread-safety-analysis`, `-Wthread-safety-attributes`, `-Wthread-safety-beta`, `-Wthread-safety-negative`, `-Wthread-safety-pointer`, `-Wthread-safety-precise`, `-Wthread-safety-reference`, `-Wthread-safety-reference-return`, `-Wthread-safety-verbose`, `-Wunaligned-access` (1), `-Wundeclared-selector`, `-Wundef-prefix`, `-Wunguarded-availability`, `-Wunique-object-duplication`, `-Wunsupported-dll-base-class-template`, `-Wvector-conversion` (14)
