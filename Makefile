@@ -162,7 +162,7 @@ $(RT).a: $(RT_OBJS)
 $(RT).so: $(RT_OBJS)
 	$(N)/bin/wasm-ld -shared --experimental-pic --unresolved-symbols=import-dynamic $^ -L$(SR)/lib/wasm32-wasip1 -lc -o $@
 
-# where U-estrito stays off: the sysroot's headers (NOTES.md §40)
+# where U-strict stays off: the sysroot's headers (NOTES.md §40)
 IGNORELIST := $(SR)/share/sc/ignorelist.txt
 $(IGNORELIST): rt/ignorelist.txt | $(SR)/lib/wasm32-wasip1/libc++.so
 	@mkdir -p $(@D)

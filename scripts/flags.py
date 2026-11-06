@@ -84,7 +84,7 @@ LEVELS = ['off', 'on', 'strict']
 U = ['alignment', 'array-bounds', 'bool', 'builtin', 'enum', 'float-cast-overflow', 'integer-divide-by-zero',
      'nonnull-attribute', 'null', 'pointer-overflow', 'return', 'returns-nonnull-attribute', 'shift-base',
      'shift-exponent', 'signed-integer-overflow', 'unreachable', 'vla-bound']
-# U-estrito: what is defined, but rarely what the student meant; strict only.
+# U-strict: what is defined, but rarely what the student meant; strict only.
 # implicit-conversion's group, as the driver expands it
 U_STRICT = ['float-divide-by-zero', 'unsigned-integer-overflow', 'unsigned-shift-base',
             'implicit-unsigned-integer-truncation', 'implicit-signed-integer-truncation',
