@@ -373,17 +373,9 @@ if mode == 'learn':
 
 
 
-def unll(x):
-    """a demangled name as both engines spelled it, before ANALISE.md §68:
-    symbols.session.used has names of the native engine too. int64_t is
-    long long in wasm and long in x86-64, and std:: is libc++'s std::__2 in
-    wasm and libstdc++'s std::__cxx11 (and [abi:cxx11]) in x86-64"""
-    return re.sub(r'\blong long\b', 'long', re.sub(r'std::__(?:\d+|cxx11)::|\[abi:cxx11\]', lambda m: 'std::' * (m[0][0] == 's'), x))
-
-
 session_file = f'{CUTS}/symbols.session.used'
-session = set(map(unll, rules(session_file))) if os.path.exists(session_file) else set()
-session = {s for s, dm in cands.items() if unll(dm) in session}
+session = set(rules(session_file)) if os.path.exists(session_file) else set()
+session = {s for s, dm in cands.items() if dm in session}
 # after a run with differences, run only the files that differ until they
 # pass, then the whole corpus again
 only = None

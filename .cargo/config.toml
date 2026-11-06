@@ -1,3 +1,12 @@
 # the builds go in build/, with what the REPL reads at run time (build/repl)
 [build]
 target-dir = "build/cargo"
+
+# on Windows, the C runtime in sc.exe: without it, sc.exe needs
+# VCRUNTIME140.dll, which Windows without the VC++ Redistributable does not
+# have (ANALISE.md §70); the UCRT comes with Windows 10
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

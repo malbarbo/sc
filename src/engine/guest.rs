@@ -114,16 +114,16 @@ struct Ctx {
     max: Option<usize>,
     /// A growth above `max` was refused.
     over: bool,
-    /// The call's deadline, and the Ctrl-Cs before it.
+    /// The call's deadline, and the Ctrl-Cs before it if Ctrl-C stops it.
     deadline: Option<Instant>,
-    interrupts: u64,
+    interrupts: Option<u64>,
     /// Why the call stopped, if it was stopped.
     stop: Option<Stop>,
 }
 
 /// At each move of the epoch: whether the call goes on.
 fn tick(c: &mut Ctx) -> UpdateDeadline {
-    c.stop = if INTERRUPTS.load(Ordering::Relaxed) != c.interrupts {
+    c.stop = if c.interrupts.is_some_and(|i| INTERRUPTS.load(Ordering::Relaxed) != i) {
         Some(Stop::Interrupted)
     } else if c.deadline.is_some_and(|d| Instant::now() >= d) {
         Some(Stop::TimedOut)
@@ -197,7 +197,7 @@ impl Guest {
         let at = if cfg!(windows) { guest_path(root).trim_end_matches('/').to_string() } else { "/".into() };
         b.preopened_dir(root, at, FsPerms::ReadWrite).map_err(fail)?;
         let max = memory.map(|m| (2 * m).min(u32::MAX as u64 + 1) as usize);
-        let ctx = Ctx { wasi: b.build_p1(), max, over: false, deadline: None, interrupts: 0, stop: None };
+        let ctx = Ctx { wasi: b.build_p1(), max, over: false, deadline: None, interrupts: None, stop: None };
         let mut store = Store::new(&s.engine, ctx);
         store.limiter(|c| c);
         store.epoch_deadline_callback(|mut c| Ok(tick(c.data_mut())));
@@ -233,10 +233,12 @@ impl Guest {
     }
 
     /// `f` within the limits: armed when it starts, as a Ctrl-C before it
-    /// is for the student's code.
-    fn call<R>(&mut self, f: impl FnOnce(&mut Guest) -> wasmtime::Result<R>) -> Result<R, (wasmtime::Error, Option<Stop>)> {
+    /// is for the student's code. Ctrl-C stops it if `ctrl_c`: a cell's
+    /// compile, which [`Compiler::cell`] recovers from.
+    fn call<R>(&mut self, ctrl_c: bool, f: impl FnOnce(&mut Guest) -> wasmtime::Result<R>) -> Result<R, (wasmtime::Error, Option<Stop>)> {
         let c = self.store.data_mut();
-        (c.deadline, c.interrupts, c.stop) = (self.timeout.map(|t| Instant::now() + t), INTERRUPTS.load(Ordering::Relaxed), None);
+        let interrupts = ctrl_c.then(|| INTERRUPTS.load(Ordering::Relaxed));
+        (c.deadline, c.interrupts, c.stop) = (self.timeout.map(|t| Instant::now() + t), interrupts, None);
         self.store.set_epoch_deadline(1);
         if self.timeout.is_some() {
             TIMED.fetch_add(1, Ordering::Relaxed);
@@ -247,7 +249,8 @@ impl Guest {
             TIMED.fetch_sub(1, Ordering::Relaxed);
         }
         let c = self.store.data_mut();
-        c.deadline = None;
+        // the recover after it runs to its end
+        (c.deadline, c.interrupts) = (None, None);
         r.map_err(|e| (e, c.stop.take()))
     }
 
@@ -326,7 +329,7 @@ impl Compiler for Guest {
         if self.dead {
             return Err(lost("a session before"));
         }
-        let r = self.call(|g| {
+        let r = self.call(false, |g| {
             if g.session != 0 {
                 let s = std::mem::take(&mut g.session);
                 g.f.del.call(&mut g.store, s)?;
@@ -357,7 +360,7 @@ impl Compiler for Guest {
             return Err(lost("no session"));
         }
         let len = u32::try_from(src.len()).map_err(|_| io::Error::other("the cell is too long"))?;
-        let r = self.call(|g| {
+        let r = self.call(true, |g| {
             let p = g.put(src)?;
             let st = g.f.cell.call(&mut g.store, (g.session, p, len, mode.to_raw() as i32))?;
             g.f.free.call(&mut g.store, p)?;
@@ -396,7 +399,7 @@ impl Compiler for Guest {
             return Ok(0);
         }
         let len = u32::try_from(src.len()).map_err(|_| io::Error::other("the cell is too long"))?;
-        let r = self.call(|g| {
+        let r = self.call(false, |g| {
             let p = g.put(src)?;
             let d = g.f.depth.call(&mut g.store, (g.session, p, len))?;
             g.f.free.call(&mut g.store, p)?;

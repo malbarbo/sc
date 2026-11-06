@@ -31,6 +31,10 @@ libc = "0.2"
 # sc.wasm's .cwasm, which build.rs compresses (src/engine/guest.rs)
 zstd = { version = "0.13", optional = true }
 
+# Ctrl-C on Windows (src/loader/native/ctrl_c.rs), the version rustyline has
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"], optional = true }
+
 # the bindings of engine/sc.h; the pack sc embeds (build.rs), with the
 # libraries and sc.wasm compiled by the wasmtime of the loader, with its
 # features
@@ -48,7 +52,7 @@ wat = "=1.254.0"
 default = ["engine"]
 # the loader on wasmtime (src/loader/native.rs): scload, and sc with the
 # engine. Without it the loader is its core, which sc.wasm links (wasm/)
-native = ["dep:wasmtime", "dep:wasmtime-wasi"]
+native = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:windows-sys"]
 # the engine's API (the bindings of engine/sc.h) and the machine, which
 # sc.wasm links too (wasm/)
 machine = ["dep:bindgen"]

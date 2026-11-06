@@ -167,7 +167,13 @@ struct EnterHandler(Arc<Mutex<Machine>>);
 
 impl ConditionalEventHandler for EnterHandler {
     fn handle(&self, _: &Event, _: RepeatCount, _: bool, ctx: &EventContext) -> Option<Cmd> {
-        match self.0.lock().unwrap().enter(ctx.line(), ctx.pos()) {
+        // the compile (Machine::enter) stops at Ctrl-C, which rustyline's
+        // raw mode would read after it
+        let enter = {
+            let _ctrl_c = sc::loader::native::InRawMode::new();
+            self.0.lock().unwrap().enter(ctx.line(), ctx.pos())
+        };
+        match enter {
             Enter::Run => None,
             Enter::Open(depth) => Some(Cmd::Insert(1, format!("\n{:1$}", "", depth * INDENT))),
         }

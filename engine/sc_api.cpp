@@ -117,6 +117,10 @@ static int cell(sc_session *s, const char *src, unsigned len, int mode) {
 // same addresses, and clang the same order where it iterates over pointers.
 // What the heap grew in the cell is zeroed, as it was.
 //
+// A trap (Ctrl-C, the host's time limit) may stop the cell anywhere: what
+// says where the copy is (Brk, Snap, Mv) is not in it, so that putting it
+// back does not change that, and sbrk's move of it can be ended by recover.
+//
 // SC_SNAPSHOT_LOG appends to that file, for each cell, the heap's size and
 // the ms to copy and to put back (or -).
 extern "C" char __stack_low[], __stack_high[];
@@ -128,6 +132,17 @@ size_t memory() { return __builtin_wasm_memory_size(0) * 65536; }
 // the heap's end, what memory.size is without the copy; the copy is from
 // here to the memory's end
 size_t Brk;
+
+// sbrk's move of the copy up by Grow, from From (the Brk before): Moved of
+// its bytes, from its top, are there. Each piece of at most Grow goes where
+// none of what is still to move is, so the piece a trap stopped can move
+// again
+struct Move {
+  size_t From, Grow, Moved;
+} Mv;
+
+// the order of the stores, where a trap may stop the code
+void fence() { __atomic_signal_fence(__ATOMIC_SEQ_CST); }
 
 // at least N bytes for the copy, from Brk
 bool room(size_t N) {
@@ -143,7 +158,12 @@ struct Snapshot {
   template <class F> void pieces(F f) const {
     unsigned N;
     const unsigned char *Img = sc_pack_image(&N);
-    std::pair<size_t, size_t> Holes[] = {{(size_t)__stack_low, (size_t)__stack_high}, {(size_t)Img, (size_t)Img + N}};
+    auto hole = [](const auto &V) { return std::pair((size_t)&V, (size_t)(&V + 1)); };
+    std::pair<size_t, size_t> Holes[] = {{(size_t)__stack_low, (size_t)__stack_high},
+                                         {(size_t)Img, (size_t)Img + N},
+                                         hole(Brk),
+                                         hole(*this),
+                                         hole(Mv)};
     llvm::sort(Holes);
     size_t At = 8;
     for (auto [A, B] : Holes) {
@@ -163,18 +183,19 @@ struct Snapshot {
     pieces([&](size_t A, size_t B) { N += B - A; });
     if (!room(N))
       return false;
-    // Used, in the memory being copied, is set after it: 0 in the copy
+    // Used after the copy: without it, a trap loses the session
     size_t At = 0;
     pieces([&](size_t A, size_t B) {
       memcpy((char *)Brk + At, (const char *)A, B - A);
       At += B - A;
     });
+    fence();
     Used = At;
     return true;
   }
 
   // back to the copy, with the session's diagnostics and names kept (or
-  // none, after a trap); the copy puts back Brk and Used too
+  // none, after a trap)
   void restore(sc_session *s, bool Keep = true) {
     size_t Top = Brk, U = Used, D = Keep ? s->Diags.size() : 0, Y = Keep ? s->Syms.size() : 0;
     if (!room(U + D + Y))
@@ -189,7 +210,6 @@ struct Snapshot {
     });
     // the heap as it was, but what it grew stays its: as memory.size
     memset((char *)Size, 0, Top - Size);
-    Brk = Top;
     // the memory is as before the cell: these allocate from it, and sbrk
     // moves what they are copied from, which Used now covers
     Used = U + D + Y;
@@ -204,6 +224,18 @@ struct Snapshot {
 };
 
 Snapshot Snap;
+
+// the rest of sbrk's move (Mv)
+void move() {
+  while (Mv.Moved < Snap.Used) {
+    size_t L = std::min(Mv.Grow, Snap.Used - Mv.Moved), At = Snap.Used - Mv.Moved - L;
+    memcpy((char *)Mv.From + Mv.Grow + At, (const char *)Mv.From + At, L);
+    fence();
+    Mv.Moved += L;
+    fence();
+  }
+}
+
 bool Snapping = getenv("SC_SNAPSHOT");
 
 double now() {
@@ -227,9 +259,17 @@ extern "C" void *sbrk(intptr_t N) {
     errno = ENOMEM;
     return (void *)-1;
   }
-  memmove((char *)Old + N, (char *)Old, Snap.Used);
+  Mv.From = Old;
+  Mv.Moved = 0;
+  fence();
+  Mv.Grow = N;
+  fence();
+  move();
   memset((char *)Old, 0, std::min<size_t>(N, Copy));
-  Brk += N;
+  fence();
+  Brk += N; // the move is done
+  fence();
+  Mv.Grow = 0;
   return (void *)Old;
 }
 #endif
@@ -272,6 +312,14 @@ int sc_session_cell(sc_session *s, const char *src, unsigned len, int mode) {
 #ifdef __wasm__
 namespace {
 __attribute__((noinline)) int recover(sc_session *s) {
+  // a move a trap stopped
+  if (Mv.Grow) {
+    if (Brk == Mv.From) {
+      move();
+      Brk += Mv.Grow;
+    }
+    Mv.Grow = 0;
+  }
   // the copy outlives the cell; Brk and Used, if the cell did not break
   // them, say where it is
   if (!Snap.Used || Brk + Snap.Used > memory())

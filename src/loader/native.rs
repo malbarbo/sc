@@ -11,6 +11,9 @@ use wasmtime::{Engine, Extern, ExternType, Func, FuncType, Global, GlobalType, I
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::I32Exit;
 
+mod ctrl_c;
+pub use ctrl_c::InRawMode;
+
 struct Host {
     wasi: WasiP1Ctx,
     stacks: Stacks,
@@ -182,13 +185,10 @@ impl Wasmtime {
     /// From now on, Ctrl-C stops the code this runtime runs, in place of
     /// the runtime's before, and calls `also`, which must be safe in a
     /// signal handler (`sc::engine::interrupt`: the compile). The first
-    /// call installs the SIGINT handler.
+    /// call installs the handler ([`InRawMode`]: also in a line editor).
     pub fn on_ctrl_c(&self, also: fn()) {
-        let _ = CTRL_C_ALSO.set(also);
-        if CTRL_C.lock().unwrap().replace(self.engine.clone()).is_none() {
-            // SAFETY: the handler only increments the epoch and calls `also`
-            unsafe { libc::signal(libc::SIGINT, on_sigint as *const () as libc::sighandler_t) };
-        }
+        *ctrl_c::ENGINE.lock().unwrap() = Some(self.engine.clone());
+        ctrl_c::install(also);
     }
 }
 
@@ -297,21 +297,5 @@ impl Runtime for Wasmtime {
     fn stack(&self, id: u32) -> Vec<Frame> {
         let st = &self.store.data().stacks;
         id.checked_sub(1).and_then(|i| st.traces.get(i as usize)).map(|bt| self.frames(bt)).unwrap_or_default()
-    }
-}
-
-/// The engine Ctrl-C interrupts: the last runtime's ([`Wasmtime::on_ctrl_c`]).
-static CTRL_C: std::sync::Mutex<Option<Engine>> = std::sync::Mutex::new(None);
-static CTRL_C_ALSO: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
-
-extern "C" fn on_sigint(_: libc::c_int) {
-    if let Some(also) = CTRL_C_ALSO.get() {
-        also();
-    }
-    // the main thread holds the lock only to put a new engine there
-    if let Ok(e) = CTRL_C.try_lock() {
-        if let Some(e) = e.as_ref() {
-            e.increment_epoch();
-        }
     }
 }

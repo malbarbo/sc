@@ -30,8 +30,9 @@ fn pack() -> &'static Pack {
         let mut files = HashMap::new();
         for (i, node) in fs.files().enumerate() {
             if let InnerNode::File(f) = &node.inner {
-                let path = node.fullpath.to_str().expect("a path in UTF-8").trim_start_matches('/');
-                files.insert(path.to_string(), (i, f.file_len() as u64));
+                // with /, which a PathBuf on Windows does not have
+                let path: Vec<_> = node.fullpath.components().skip(1).map(|c| c.as_os_str().to_str().expect("a path in UTF-8")).collect();
+                files.insert(path.join("/"), (i, f.file_len() as u64));
             }
         }
         Pack { fs, files, read: Mutex::new(HashMap::new()) }

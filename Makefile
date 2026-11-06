@@ -52,7 +52,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader baseline test test-small test-warn learn learn-session checkinv size test-proto test-split test-session test-session-warn test-split-node test-split-node-rs test-aluno-node-rs test-aluno test-checks test-dist repl sc-deps test-loader check rs-wasm dist clean
+.PHONY: all fetch llvm sysroot engine trim loader baseline test test-small test-warn learn learn-session checkinv size test-proto test-split test-session test-session-warn test-split-node test-split-node-rs test-aluno-node-rs test-aluno test-checks test-dist repl sc-deps test-loader test-ctrl-c check rs-wasm dist clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -310,6 +310,11 @@ rs-wasm: $(RS_WASM)
 # the engine
 test-loader:
 	cargo test --release $(CARGO) --no-default-features --features native --lib --test signal --test exceptions --test undo
+
+# Ctrl-C in sc's REPL in a terminal (ANALISE.md §70); on Windows by hand,
+# test/ctrlc.py ssh:HOST
+test-ctrl-c: $(SC_REPL)
+	test/ctrlc.py $(SC_REPL)
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc
 # FILE`, in the pack's view. build.rs puts them in the pack sc embeds

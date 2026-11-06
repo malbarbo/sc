@@ -15,8 +15,6 @@ then all of them again. The slices:
   test/session.py ses-, seq- and crash-, with -Weverything, against the
   uncut engine's (build/res/session-wev-base);
   test/split.py, against pic-.
-Until ANALISE.md §68 the list was learned on the native engine first, then
-on sc.wasm: it keeps what the native one called.
 """
 import json, os, re, shutil, subprocess, sys, time
 

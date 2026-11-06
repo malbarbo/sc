@@ -5119,3 +5119,88 @@ pipe ele para a compilação (`sc: interrupted`, a sessão segue). No
 terminal ele não chega à compilação que o Enter faz (`Machine::enter`,
 dentro do `readline`): o rustyline troca o handler de SIGINT e o terminal
 está em modo cru. Era assim com o filho também.
+
+## 70. O Ctrl-C na compilação do Enter, e a sessão que um trap corrompia
+
+**O `make learn-session` só com o wasm.** Refeita do zero, a lista
+`cuts/symbols.session.used` tem 67 funções, todas com os nomes do
+`sc.wasm`; o `unll()` do `scripts/link.py`, que traduzia os nomes do
+`sc-engine` nativo, saiu. O `sc.wasm` fica com o mesmo tamanho
+(39 561 349 bytes); `make test`, `test-session` e `test-split` sem
+diferenças.
+
+**O Ctrl-C no terminal.** O Enter compila a célula dentro do `readline`
+do rustyline (`EnterHandler` → `Machine::enter`), com o terminal em modo
+cru: no Unix sem `ISIG` (e com o handler de SIGINT do rustyline, que
+escreve num pipe), no Windows sem `ENABLE_PROCESSED_INPUT`. O Ctrl-C vira
+uma tecla, lida só depois da compilação (3,6 s para `#include
+<iostream>`). Agora uma guarda, `sc::loader::native::InRawMode`
+(`src/loader/native/ctrl_c.rs`), envolve o `enter`:
+
+- Unix: põe o handler do sc no lugar do do rustyline e só depois liga
+  `ISIG`, com `VQUIT`, `VSUSP` (e `VSTATUS` no macOS) desligados, para
+  Ctrl-\ e Ctrl-Z não matarem nem suspenderem o sc; ao sair, desfaz na
+  ordem inversa (assim um Ctrl-C na janela não cai no pipe do rustyline).
+  O que se digitou durante a compilação se perde com o Ctrl-C, como num
+  shell.
+- Windows: liga `ENABLE_PROCESSED_INPUT` e, se houve Ctrl-C, esvazia a
+  entrada ao sair (`FlushConsoleInputBuffer`). O handler passa a ser o do
+  console (`SetConsoleCtrlHandler`, TRUE só para `CTRL_C_EVENT`), não o
+  `signal` do CRT, que volta o SIGINT a `SIG_DFL` antes de chamar o
+  handler: o 2º Ctrl-C matava o sc (também num pipe). `windows-sys` 0.61,
+  a do rustyline, na feature `native`.
+
+No `Guest`, só a compilação de uma célula para no Ctrl-C (ela tem o
+`recover`); a `depth` e a `new_session` não, e o `recover` também não
+(antes, um 2º Ctrl-C nele perdia a sessão).
+
+`make test-ctrl-c` (`test/ctrlc.py`, num pty, `TERM=xterm`: com
+`TERM=dumb` o rustyline não usa o modo cru) verifica cinco casos, e depois
+de cada um `1+2` ainda dá `(int) 3`:
+- Ctrl-C na compilação do Enter dá `sc: interrupted`;
+- dois Ctrl-C seguidos nela;
+- Ctrl-\ e Ctrl-Z antes dela não fazem nada;
+- Ctrl-C no prompt ainda descarta a linha;
+- dois Ctrl-C no código do aluno (`while (1);`).
+
+No Windows, `test/ctrlc.py ssh:HOST` roda o `sc.exe` da VM pelo OpenSSH,
+que lhe dá um ConPTY (o `^C` vira `CTRL_C_EVENT`). Os cinco passam numa VM
+Windows 10, com o `sc.exe` compilado aqui (`cargo xwin build --target
+x86_64-pc-windows-msvc`). Antes, o `sc` nem compilava no Windows (a CI só
+compila o loader lá), e para chegar a isso foram precisos três ajustes:
+- O bindgen dava às constantes dos enums de `engine/sc.h` o tipo `i32`,
+  porque na ABI do MSVC um enum é um `int`. Para o MSVC, o `build.rs` passa
+  o alvo GNU ao clang: os layouts são os mesmos, e as constantes ficam
+  `u32` como nos outros alvos.
+- Os caminhos do pack no Windows vinham com `\` (o `fullpath` do backhand
+  é um `PathBuf`), e `repl/c-on.args` não era achado. O `pack.rs` agora
+  junta os componentes com `/`.
+- O `sc.exe` dependia do `VCRUNTIME140.dll`, que um Windows sem o VC++
+  Redistributable não tem (`STATUS_DLL_NOT_FOUND`). Com `-C
+  target-feature=+crt-static`, só fica o UCRT, que vem com o Windows 10.
+  Isso está agora no `.cargo/config.toml`, para os dois alvos msvc.
+
+**A sessão que um trap corrompia.** Esse teste falhava às vezes: depois do
+Ctrl-C, `1+2` voltava `Lost` sem mensagem e sem resultado. Também num
+pipe, então já era assim antes (e com o limite de tempo, que também para
+a compilação em qualquer ponto). Sem carga, ~1 em 30; com a máquina
+carregada (96 laços ocupados), 3 em 14. A causa: o `sbrk` do snapshot
+(§65) sobe a cópia (`memmove`, ~7,9 MB na célula do `<iostream>`) e só
+depois avança o `Brk`; um trap entre os dois deixava o `recover` restaurar
+de onde a cópia não estava mais. Instrumentado, os 3 de 18 que falharam
+foram exatamente os que pararam dentro do `sbrk`.
+
+A correção (`engine/sc_api.cpp`):
+- `Brk`, `Snap` e o estado da mudança (`Mv`) não estão mais na cópia (são
+  buracos, como a pilha e o pack), então pôr a cópia de volta não os
+  muda. Antes, um trap no meio do `restore` de uma célula que falhou podia
+  deixar o `Brk` com o valor da cópia.
+- O `sbrk` move a cópia em pedaços de no máximo `N` bytes, do topo para
+  baixo, e anota o quanto moveu; cada pedaço vai para onde não há nada
+  ainda por mover, então o pedaço que o trap parou pode ser movido de
+  novo. O `recover` termina a mudança se o `Brk` ainda não andou.
+- `__atomic_signal_fence` entre os passos, para o compilador não
+  reordenar as escritas.
+
+Com a máquina carregada, 0 em 30 no pipe e 0 em 15 no pty. O `sc.wasm`
+cresce 400 bytes (39 561 749).

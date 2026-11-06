@@ -23,11 +23,13 @@ fn main() {
     let header = root.join("engine/sc.h");
     println!("cargo:rerun-if-changed={}", header.display());
     // for the target: sc.wasm's Rust is wasm32-wasip1 (wasm/), where clang
-    // hides what it declares, and bindgen leaves out hidden functions
+    // hides what it declares, and bindgen leaves out hidden functions. In
+    // MSVC's ABI an enum is an int: the GNU one's has the same layouts, and
+    // the enums' constants are u32, as elsewhere
     #[cfg(feature = "machine")]
     bindgen::Builder::default()
         .header(header.to_str().unwrap())
-        .clang_args([format!("--target={}", env::var("TARGET").unwrap()), "-fvisibility=default".into()])
+        .clang_args([format!("--target={}", env::var("TARGET").unwrap().replace("-msvc", "-gnu")), "-fvisibility=default".into()])
         .allowlist_item("sc_.*|SC_.*")
         .default_enum_style(bindgen::EnumVariation::ModuleConsts)
         .generate()
