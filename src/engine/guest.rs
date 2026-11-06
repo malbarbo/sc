@@ -19,7 +19,7 @@
 use super::{sys, Answer, Compiler, Mode, Status};
 use crate::machine::ROOT;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::thread::{self, Thread};
@@ -156,6 +156,28 @@ pub struct Guest {
     session: u32,
     /// The instance can no longer be called: a trap without the copy.
     dead: bool,
+    /// The module's TMPDIR, removed with the instance: the session never
+    /// ends as clang would remove the .pcm `#pragma clang module build`
+    /// writes there (ANALISE.md §70).
+    _tmp: Option<TempDir>,
+}
+
+/// A new directory in the host's temporary one, removed with it.
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new() -> Option<TempDir> {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("sc-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&d).ok().map(|()| TempDir(d))
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 struct Funcs {
@@ -191,6 +213,10 @@ impl Guest {
         let fail = |e: wasmtime::Error| io::Error::other(format!("sc.wasm: {e:?}"));
         let mut b = WasiCtxBuilder::new();
         b.args(&["sc"]).env("SC_SNAPSHOT", "1").inherit_stderr();
+        let tmp = TempDir::new();
+        if let Some(t) = &tmp {
+            b.env("TMPDIR", guest_path(&t.0));
+        }
         let cwd = std::env::current_dir()?;
         // the files of the host, as the native engine saw them
         let root = cwd.ancestors().last().unwrap_or(&cwd);
@@ -205,7 +231,7 @@ impl Guest {
         let inst = s.linker.instantiate(&mut store, &s.module).map_err(fail)?;
         let mem = inst.get_memory(&mut store, "memory").ok_or_else(|| io::Error::other("sc.wasm: no memory"))?;
         let f = funcs(&mut store, &inst).map_err(fail)?;
-        let mut g = Guest { timeout, memory, store, mem, f, session: 0, dead: false };
+        let mut g = Guest { timeout, memory, store, mem, f, session: 0, dead: false, _tmp: tmp };
         g.init(&inst, &cwd).map_err(fail)?;
         Ok(g)
     }

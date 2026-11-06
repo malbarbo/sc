@@ -81,6 +81,7 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
+          components: clippy
           target: ${{ matrix.target }}
 
       - name: Setup
@@ -101,3 +102,11 @@ jobs:
           cargo test --release --locked --target ${{ matrix.target }}
           --no-default-features --features native
           --lib --test signal --test exceptions --test undo
+
+      # sc, with the engine, compiles on the target: under clippy build.rs
+      # needs no LLVM (make check does it on Linux)
+      - name: Clippy with the engine
+        shell: bash
+        run: >
+          cargo clippy --release --locked --target ${{ matrix.target }}
+          --features engine --all-targets -- -D warnings

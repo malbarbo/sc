@@ -119,9 +119,10 @@ def ld_so(n, cxx):
 
 def run(cmd):
     # a few programs under ASan (gcc torture's VLAs) take more than 20 s when
-    # the base is made with 48 jobs (ANALISE.md §51); none loops for ever
+    # the base is made with 48 jobs (ANALISE.md §51), and 20040811-1-strict
+    # more than 60 s on a loaded machine (§70); none loops for ever
     try:
-        x = subprocess.run(cmd, input=b'linha1\nlinha2\n', capture_output=True, timeout=60)
+        x = subprocess.run(cmd, input=b'linha1\nlinha2\n', capture_output=True, timeout=300)
     except subprocess.TimeoutExpired as e:
         x = subprocess.CompletedProcess(e.cmd, 'timeout', e.stdout or b'', e.stderr or b'')
     return x.stdout.decode(errors='replace') + x.stderr.decode(errors='replace') + f'run exit={x.returncode}\n'

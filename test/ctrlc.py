@@ -47,7 +47,10 @@ def read_until(fd, pat, timeout):
 
 
 def alive(pid):
-    return os.waitpid(pid, os.WNOHANG)[0] == 0
+    try:
+        return os.waitpid(pid, os.WNOHANG)[0] == 0
+    except ChildProcessError:  # reaped
+        return False
 
 
 def case(name, steps, wait):
@@ -71,8 +74,14 @@ def case(name, steps, wait):
     print('ok  ' if ok else 'FAIL', name, flush=True)
     if not ok:
         print('   ', out[-400:])
-    os.kill(pid, signal.SIGKILL)
-    os.waitpid(pid, 0)
+    # Ctrl-D, so that sc ends as it does (its TMPDIR goes)
+    os.write(fd, b'\x04')
+    end = time.time() + 10
+    while alive(pid) and time.time() < end:
+        read_until(fd, rb'$^', 0.2)
+    if alive(pid):
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
     return ok
 
 

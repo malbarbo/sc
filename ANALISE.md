@@ -5204,3 +5204,20 @@ A correção (`engine/sc_api.cpp`):
 
 Com a máquina carregada, 0 em 30 no pipe e 0 em 15 no pty. O `sc.wasm`
 cresce 400 bytes (39 561 749).
+
+**Os `.pcm` em `/tmp`.** `#pragma clang module build X` (só nos testes do
+clang: o `test-session` e o `test-split` passam por três deles) grava
+`/tmp/X-*.pcm`, e o clang o apaga quando o `CompilerInstance` termina
+(`clearOutputFiles`). A sessão do sc não termina assim: o processo acaba
+com ela viva, e cada bateria deixava 4 arquivos em `/tmp` (o clang nativo,
+nenhum). Agora o `Guest` dá ao `sc.wasm` um `TMPDIR` seu
+(`$TMPDIR/sc-<pid>-<n>`, só no ambiente do guest) e o apaga no `Drop`,
+o que cobre também as células que falham e voltam pelo snapshot. Um sc
+morto por um sinal (SIGKILL, o terminal fechado) ainda deixa o diretório;
+o `test/ctrlc.py` agora termina o sc com Ctrl-D.
+
+**O tempo de execução no corpus.** O `20040811-1-strict` passou dos 60 s
+de execução do `test/corpus.py` com a máquina carregada (load ~180;
+sozinho, 47 s com compilação e tudo). O limite passa a 300 s, o mesmo da
+compilação e da ligação: nenhum programa do corpus fica em laço, então
+só um que ficasse pagaria isso.
