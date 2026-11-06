@@ -1,5 +1,5 @@
 #include <vector>
 std::vector<int> v(3);
-int pega(int i) { return v[i]; }
-pega(5);
+int get(int i) { return v[i]; }
+get(5);
 v.size()

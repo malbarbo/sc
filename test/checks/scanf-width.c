@@ -2,9 +2,9 @@
 #include <stdlib.h>
 
 int main(void) {
-    char *sigla = malloc(4);
-    if (scanf("%9s", sigla) == 1) {
-        printf("%s\n", sigla);
+    char *acronym = malloc(4);
+    if (scanf("%9s", acronym) == 1) {
+        printf("%s\n", acronym);
     }
-    free(sigla);
+    free(acronym);
 }

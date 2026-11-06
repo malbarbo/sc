@@ -1,6 +1,6 @@
 // import std with exceptions, std::print and std::expected
 import std;
-struct Empty : std::runtime_error { Empty() : std::runtime_error("pilha vazia") {} };
+struct Empty : std::runtime_error { Empty() : std::runtime_error("empty stack") {} };
 template <class T> class Stack {
   std::vector<T> items;
 public:
@@ -13,7 +13,7 @@ public:
   }
 };
 std::expected<double, std::string> safe_sqrt(double x) {
-  if (x < 0) return std::unexpected(std::format("negativo: {}", x));
+  if (x < 0) return std::unexpected(std::format("negative: {}", x));
   return std::sqrt(x);
 }
 int main() {
@@ -23,7 +23,7 @@ int main() {
   try {
     for (;;) std::println("pop {}", s.pop());
   } catch (const Empty &e) {
-    std::println("fim: {}", e.what());
+    std::println("end: {}", e.what());
   }
   for (double x : {16.0, -1.0}) {
     auto r = safe_sqrt(x);

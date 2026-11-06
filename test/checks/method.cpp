@@ -1,11 +1,11 @@
 #include <iostream>
 
-struct Turma {
-    int soma = 0, n = 0;
-    int media() const { return soma / n; }
+struct Classroom {
+    int sum = 0, n = 0;
+    int average() const { return sum / n; }
 };
 
 int main() {
-    Turma t;
-    std::cout << t.media() << '\n';
+    Classroom t;
+    std::cout << t.average() << '\n';
 }

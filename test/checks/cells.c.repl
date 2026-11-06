@@ -1,7 +1,7 @@
-int media(int soma, int n) {
-    return soma / n;
+int average(int sum, int n) {
+    return sum / n;
 }
 int total = 10;
-media(total, 0);
+average(total, 0);
 int x = 1;
 x

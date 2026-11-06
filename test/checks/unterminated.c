@@ -2,9 +2,9 @@
 #include <string.h>
 
 int main(void) {
-    char nome[5] = "Maria";
-    if (strcmp(nome, "Maria") == 0)
-        puts("achou");
+    char name[5] = "Maria";
+    if (strcmp(name, "Maria") == 0)
+        puts("found");
     else
-        puts("não achou");
+        puts("not found");
 }

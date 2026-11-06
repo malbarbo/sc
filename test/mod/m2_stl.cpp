@@ -14,7 +14,7 @@ int main() {
   for (int x : even) std::cout << x << ' ';
   std::cout << '\n' << std::format("{:>6.2f}|{:<4}|{}", 3.14159, 7, "fmt") << '\n';
   std::cout << parse("123").value_or(-1) << ' ' << parse("1x").value_or(-1) << '\n';
-  std::variant<int, std::string> var = std::string("texto");
+  std::variant<int, std::string> var = std::string("text");
   std::visit([](auto &&a) { std::cout << a << '\n'; }, var);
   std::vector<std::unique_ptr<Shape>> shapes;
   shapes.push_back(std::make_unique<Circle>(1.0));

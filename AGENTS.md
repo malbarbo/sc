@@ -30,19 +30,19 @@ make test-session # the session's slices on build/sc against the uncut sc.wasm (
 make test-session-warn # ses-, seq- and crash- with -Weverything
 make test-split-node # test-split with the JS loader (test/node/loader.mjs) in place of scload
 make test-split-node-rs # test-split with sc.wasm's loader on Node's primitives (test/node/wasm.mjs)
-make test-aluno-node-rs # test-aluno with sc inside sc.wasm (the machine) on Node's primitives
+make test-student-node-rs # test-student with sc inside sc.wasm (the machine) on Node's primitives
 make repl        # build/cargo/release/sc, the REPL (sc, sc FILE, sc help), unstripped:
                  # sc.wasm's session on wasmtime is its compiler (NOTES.md §68)
 cargo build --release # the same sc (build.rs runs make sc-deps)
 make dist        # build/cargo/dist/scload and sc: small, LTO (~4 min)
 make dist-windows # the same sc.exe and scload.exe for x86_64-pc-windows-msvc (cargo-xwin)
-make test-aluno  # test/aluno, correct code, at each --safety level (scripts/flags.py)
+make test-student  # test/student, correct code, at each --safety level (scripts/flags.py)
 make test-checks # test/checks, one bug per program: what sc says of it at each level
 make test-loader # src/loader.rs: Ctrl-C, many exceptions, after changing the loader or wasmtime (no engine)
 make test-ctrl-c # Ctrl-C in sc's REPL on a pty (test/ctrlc.py), after changing the reader or Ctrl-C
 make check       # clippy with and without the engine (no LLVM: under clippy build.rs embeds nothing) and on wasm/: the CI's (.github/workflows/ci.yaml)
 make rs-wasm     # the Rust that sc.wasm links, alone
-make test-dist   # before shipping: test-split, test-session, test-aluno, test-checks on the dist sc
+make test-dist   # before shipping: test-split, test-session, test-student, test-checks on the dist sc
 ```
 
 The cuts keep the code of every warning. `make learn` runs the corpus with

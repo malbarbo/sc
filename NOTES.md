@@ -1961,7 +1961,7 @@ translation unit to contain at least one declaration" without showing it,
 and `strict` printed only "1 warning generated.". The session now ignores
 `ext_empty_translation_unit`.
 
-**Correct student code (`test/aluno`, `make test-aluno`).**
+**Correct student code (`test/student`, `make test-student`).**
 - There are 20 programs. 11 were written for this (lists, matrices,
   strings, structs with `qsort`, recursion, a menu with `fgets`, `vector`,
   `map`, classes with exceptions, BFS, a stack template), and 9 are the
@@ -1998,7 +1998,7 @@ file, and two clang checks that depend on it failed:
   after a `return` passed without a warning;
 - `-Wheader-hygiene` (S) gave a **false positive** on
   `using namespace std;` ("in header"), in the 10 C++ programs of
-  `test/aluno`.
+  `test/student`.
 
 A cell without an include location would count as the main file. But
 `isBeforeInTranslationUnit` between two cells with no common ancestor
@@ -2037,7 +2037,7 @@ words and the frames of the student's code:
 
 ```
 error: division by zero
-    at media (div-zero.c:4:17)
+    at average (div-zero.c:4:16)
     at main (div-zero.c:10:20)
 ```
 
@@ -2065,8 +2065,8 @@ error: division by zero
   - the statements of a cell (`__stmts__N`) are only the location:
     `at cell_3:1:1`, the name that the diagnostics give the cell.
 - **Recursion.** A repeated frame shows once, with the count
-  (`at fatorial (recursion.c:4:16), 10916 times`). A cycle of 2 to 4
-  frames, such as `par` and `impar`, shows once, with
+  (`at factorial (recursion.c:4:16), 10916 times`). A cycle of 2 to 4
+  frames, such as `even` and `odd`, shows once, with
   `(the 2 frames above, 8187 times)`. What remains, if very long, shows
   the first 10 and the last 3.
 - **The messages:**
@@ -2087,11 +2087,11 @@ error: division by zero
   The message uses the `stack_pointer` from before `exec` restores it.
 
 **Measured costs:**
-- compiling with `-g` costs about 2% per cell (`grafo.cpp`: 1.94 s against
+- compiling with `-g` costs about 2% per cell (`graph.cpp`: 1.94 s against
   1.91 s; `rev-c1.c`: 0.058 s against 0.060 s). The `.so` grows by 20% to
   40% (127 KB against 105 KB; 7.5 KB against 5.3 KB);
-- `wasm_backtrace_details` has no measurable cost. `sc run grafo.cpp`
-  takes about 2 s with or without it, and `lista.c` 0.09 s;
+- `wasm_backtrace_details` has no measurable cost. `sc run graph.cpp`
+  takes about 2 s with or without it, and `list.c` 0.09 s;
 - capturing and symbolizing all the frames of an infinite recursion takes
   less than 0.1 s. That is 16 thousand frames, and the whole `sc` run
   takes 0.14 s.
@@ -2135,7 +2135,7 @@ as in an ordinary compiler.
 11! = 39916800
 12! = 479001600
 error: signed integer overflow: 479001600 * 13 cannot be represented in type 'int'
-    at fatorial (overflow.c:6:15)
+    at factorial (overflow.c:6:15)
     at main (overflow.c:13:33)
 ```
 
@@ -2235,14 +2235,14 @@ of each level import their own. The REPL does not use `import std` (§22).
 | `overflow.c` | `13! = 1932053504` | `signed integer overflow: 479001600 * 13 ...` |
 | `shift.c` | `1` | `shift exponent 32 is too large for 32-bit type 'int'` |
 | `array-index.c` | `6` | `index 3 out of bounds for type 'int[3]'` |
-| `null.c` | `0` | `member access within null pointer of type 'struct no'` |
+| `null.c` | `0` | `member access within null pointer of type 'struct node'` |
 | `uninit-pointer.c` | `42` | `store to uninitialized pointer 0xffffffff of type 'int'` |
 | `uninit-string.c` | a null byte | `invalid memory access through an uninitialized pointer` |
 | `float-cast.c` | `2147483647` | `8.1e+09 is outside the range of representable values of type 'int'` |
 | `optional.cpp` | `4352` | `optional operator* called on a disengaged value` |
 | `string-index.cpp` | `abc` and garbage | `string index out of bounds` |
 
-`test/aluno` (the gate for `on`, §9 of the plan) did not change. There is
+`test/student` (the gate for `on`, §9 of the plan) did not change. There is
 no report in the 20 correct programs, at any level.
 
 **The cuts.** The corpus at the levels now generates the checks, and
@@ -2289,7 +2289,7 @@ the student's frames:
 
 ```
 error: heap-use-after-free: read of 4 bytes, 4 bytes into a freed block of 8 bytes
-    at libera (use-after-free.c:12:24)
+    at free_list (use-after-free.c:12:22)
     at main (use-after-free.c:24:5)
 ```
 
@@ -2392,12 +2392,12 @@ adds little to UBSan in the REPL. A cell stays near 0.1 s.
 
 **The rule-of-three warning** (`-Wdeprecated-copy-with-user-provided-dtor`)
 moved from A to S, as the plan foresaw (§4). ASan catches the real double
-`delete[]` (`test/checks/regra-dos-tres.cpp`). In `test/aluno`,
+`delete[]` (`test/checks/rule-of-three.cpp`). In `test/student`,
 `rev-dtor.cpp` no longer warns in `on`.
 
 **The tests.** `test/checks` gained 12 programs, one per kind of error.
 Each one gives the report with the student's lines in `on` and in `strict`.
-`test/aluno` still has no report in the 20 correct programs, at any level.
+`test/student` still has no report in the 20 correct programs, at any level.
 `make test`, `test-warn`, `test-native` and `test-split` gave 0
 differences.
 
@@ -2429,8 +2429,8 @@ loader gives the other modules, so `setjmp` did not catch the `longjmp`.
 **The fix:** `rt/c_longjmp.s` defines the *tag* as strong, in assembly, and
 the Makefile rebuilds the sysroot's `libsetjmp.so` from it and from
 wasi-sdk's `libsetjmp.a` (`$(SR)/.setjmp`). The functions stay exported with
-`--export`, because they are hidden in the object. `test/aluno` gained
-`erros.c`, a calculator that handles errors with `setjmp`/`longjmp`, and it
+`--export`, because they are hidden in the object. `test/student` gained
+`errors.c`, a calculator that handles errors with `setjmp`/`longjmp`, and it
 runs at all three levels.
 
 ## 36. The block's stack in the ASan report (F3b)
@@ -2440,13 +2440,13 @@ allocated the block:
 
 ```
 error: heap-use-after-free: read of 4 bytes, 4 bytes into a freed block of 8 bytes
-    at libera (use-after-free.c:12:24)
+    at free_list (use-after-free.c:12:22)
     at main (use-after-free.c:24:5)
 the block was freed
-    at libera (use-after-free.c:11:9)
+    at free_list (use-after-free.c:11:9)
     at main (use-after-free.c:24:5)
 and allocated
-    at main (use-after-free.c:19:24)
+    at main (use-after-free.c:19:26)
 ```
 
 **The pieces:**
@@ -2518,8 +2518,8 @@ allocator knows the blocks.
 ```
 error: memory leak: 24 bytes in 3 blocks, never freed
 the blocks were allocated
-    at insere (leak.c:10:20)
-    at soma (leak.c:19:17)
+    at insert (leak.c:10:22)
+    at sum (leak.c:19:16)
     at main (leak.c:29:20)
 ```
 
@@ -2588,7 +2588,7 @@ They end with little on the heap.
   `std::string` and `std::vector`, with no false positive from libc++;
 - `leaks.c.repl`, `:leaks` before and after the block is lost.
 
-`test-aluno` stayed the same. None of the 21 correct programs loses memory.
+`test-student` stayed the same. None of the 21 correct programs loses memory.
 
 ## 38. libc++'s `DEBUG` in `strict` (F4)
 
@@ -2639,7 +2639,7 @@ included and the machine loaded:
 (the names are in `WRAP` in `flags.py`):
 
 ```
-Nome e idade: error: stack-buffer-overflow: write of 12 bytes by scanf, 0 bytes past the end of the variable 'nome' (8 bytes)
+Name and age: error: stack-buffer-overflow: write of 12 bytes by scanf, 0 bytes past the end of the variable 'name' (8 bytes)
     at main (scanf.c:7:9)
 ```
 
@@ -2685,10 +2685,10 @@ student meant:
 
 | Check | Catches |
 |---|---|
-| `unsigned-integer-overflow` | `saldo - saque` with `saque > saldo`, `size_t i = n - 1` with `n = 0` |
+| `unsigned-integer-overflow` | `balance - withdrawal` with `withdrawal > balance`, `size_t i = n - 1` with `n = 0` |
 | `unsigned-shift-base` | `1u << 31 << 1` |
 | `implicit-conversion` | `short p = 50000`, `uint8_t b = 250; b += 10`, `unsigned u = -1` |
-| `float-divide-by-zero` | `soma / n` with `n = 0` in `double` |
+| `float-divide-by-zero` | `sum / n` with `n = 0` in `double` |
 
 `implicit-conversion` is a group. `-cc1` accepts the checks only one by
 one, so `U_STRICT` in `flags.py` expands it as the driver does:
@@ -2727,7 +2727,7 @@ The wraparound is intentional in both cases. So `strict` passes
 `isupper`, `isprint` and `isgraph` (and `iswdigit`, in `wchar.h` and in
 `wctype.h`) as `((unsigned)(a)-'0') < 10`. The macro expands in the
 student's code, where the ignorelist does not apply, and `isdigit(' ')`
-stopped `test/aluno/erros.c`, which is correct. The Makefile's
+stopped `test/student/errors.c`, which is correct. The Makefile's
 `$(SR)/.ctype` step deletes these macros from the sysroot's headers. They
 become libc's functions, with the same result, at every level. `isspace`
 uses `__isspace`, a function from the header, which the ignorelist already
@@ -2751,11 +2751,11 @@ U-strict:
 
 | Program | without | with | |
 |---|---|---|---|
-| `aluno/matriz.c` | 13,925 | 13,925 | 1.00× |
-| `aluno/texto.c` | 14,365 | 15,341 | 1.07× |
-| `aluno/alunos.c` | 13,272 | 14,312 | 1.08× |
-| `aluno/vetor.cpp` | 341,016 | 342,695 | 1.00× |
-| `aluno/grafo.cpp` | 426,604 | 428,430 | 1.00× |
+| `student/matrix.c` | 13,925 | 13,925 | 1.00× |
+| `student/text.c` | 14,365 | 15,341 | 1.07× |
+| `student/students.c` | 13,272 | 14,312 | 1.08× |
+| `student/vector.cpp` | 341,016 | 342,695 | 1.00× |
+| `student/graph.cpp` | 426,604 | 428,430 | 1.00× |
 | `cxx/c1_basics.cpp` | 321,533 | 322,100 | 1.00× |
 
 C++ barely changes. The headers' code stays out.
@@ -2764,7 +2764,7 @@ C++ barely changes. The headers' code stays out.
 - `test/checks` gained `unsigned.c`, `truncation.c` and `float-div-zero.c`.
   In `off` and in `on` they print the value that wrapped around. In
   `strict`, they print the report.
-- `test/aluno` gained `sorteio.cpp`, correct code with `mt19937`,
+- `test/student` gained `draw.cpp`, correct code with `mt19937`,
   `shuffle`, `uniform_int_distribution` and an `unordered_map<char, int>`
   with "Fábio". It must not stop in `strict`.
 
@@ -2773,7 +2773,7 @@ C++ barely changes. The headers' code stays out.
 The plan left the instrumented libc as optional (§5.2 of the plan), to
 catch what libc reads and writes on its own. Today, a string without the
 `'\0'` passes in silence through `strlen`, `printf("%s")`, `strcmp` and
-`puts`. It is a common student error: `char nome[5] = "Maria"`.
+`puts`. It is a common student error: `char name[5] = "Maria"`.
 
 **Decided: more interceptors, not a new libc.** Building wasi-libc with
 ASan would require:
@@ -2798,11 +2798,11 @@ The earlier interceptors now also read the source string this way:
 `strcpy`, `strcat`, `strncpy`, `strncat` and `sscanf`.
 
 ```
-error: stack-buffer-overflow: read of 6 bytes by strcmp, 0 bytes past the end of the variable 'nome' (5 bytes)
+error: stack-buffer-overflow: read of 6 bytes by strcmp, 0 bytes past the end of the variable 'name' (5 bytes)
     at main (unterminated.c:6:9)
 ```
 
-In C++, `std::cout << sigla` and `std::string(sigla)` call `strlen` in the
+In C++, `std::cout << acronym` and `std::string(acronym)` call `strlen` in the
 student's code, from the headers, and the interceptors catch them too.
 
 **How it reads.** `libsc_rt` cannot call libc's `strlen`. The call would go
@@ -2840,13 +2840,13 @@ With 200 thousand calls of `snprintf`, `atoi` and `strcmp`, it stayed at
   `scanf`.
 
 **In the corpus**, none of the runs in `on` and in `strict` gained a report
-from these functions. `test/aluno` still has no report either.
+from these functions. `test/student` still has no report either.
 
 **The tests.** `test/checks` gained:
-- `unterminated.c`, a `strcmp` with `char nome[5] = "Maria"`;
-- `unterminated.cpp`, a `std::cout << sigla` of a `char[3]`.
+- `unterminated.c`, a `strcmp` with `char name[5] = "Maria"`;
+- `unterminated.cpp`, a `std::cout << acronym` of a `char[3]`.
 
-In `off`, the first one says "não achou" and the second prints "UEM" by
+In `off`, the first one says "not found" and the second prints "UEM" by
 luck.
 
 ## 42. The pattern for uninitialized integers (§5.4 of the plan)
@@ -2863,11 +2863,11 @@ struct fields and conditional initializations:
 
 | Case | Correct | `on` with -1 | `on` with 0xAA… |
 |---|---|---|---|
-| `int votos[3]; votos[k]++` | 1 1 3 | 0 0 2 | -1431655765 -1431655765 -1431655763 |
-| `soma[i] += 10 * (i + 1)` | 10 20 | 9 19 | -1431655756 -1431655746 |
-| `struct aluno a; a.faltas++` | 1 | 0 | -1431655765 |
+| `int votes[3]; votes[k]++` | 1 1 3 | 0 0 2 | -1431655765 -1431655765 -1431655763 |
+| `sum[i] += 10 * (i + 1)` | 10 20 | 9 19 | -1431655756 -1431655746 |
+| `struct student a; a.absences++` | 1 | 0 | -1431655765 |
 
-With -1, the forgotten counter comes out one short, and `faltas` comes out
+With -1, the forgotten counter comes out one short, and `absences` comes out
 0, which looks right.
 
 **`llvm/pattern-init.patch`** (4 lines) separates the two values:
@@ -2883,14 +2883,14 @@ The cut engine did not need `make learn`.
 
 **The code size does not change.** Measured with the clang without the
 patch (`build/native`) against the engine with it, in `on`:
-- `aluno/matriz.c`, `alunos.c`, `lista.c`, `vetor.cpp` and `grafo.cpp` keep
+- `student/matrix.c`, `students.c`, `list.c`, `vector.cpp` and `graph.cpp` keep
   the same bytes;
 - `cxx/c1_basics.cpp` gains 4 bytes.
 
 The pattern's `memset` only changes the byte.
 
 **The tests.** `make test`, `test-warn`, `test-native`, `test-split` and
-`test-aluno` gave 0 differences. `test/checks` gained `uninit-count.c`, the
+`test-student` gave 0 differences. `test/checks` gained `uninit-count.c`, the
 vote counter without `= {0}`. `uninit-pointer.c` still says "uninitialized
 pointer".
 
@@ -2918,8 +2918,8 @@ place to give the error.
 `return.cpp.repl`. The `return` at the top and in the `if` give the error,
 and the next cell shows the value. `uninit-count.c` (§42) printed stack
 garbage in `off`, which changed with the new engine (4525, 4513). Now it
-prints "contagem impossível" for a value outside 0..5, and the output stays
-stable. `make test`, `test-native`, `test-split`, `test-aluno` and
+prints "impossible count" for a value outside 0..5, and the output stays
+stable. `make test`, `test-native`, `test-split`, `test-student` and
 `test-checks` gave 0 differences.
 
 ## 44. The end of the REPL's phase 2: §3.4 and §3.5 of the plan
@@ -3055,7 +3055,7 @@ demangles.
 
 **The tests.** With the patch, `make test` and `test-native` gave 0
 differences in 17715 files, and the corpus does not change. `test-split`,
-`test-aluno` and `test-proto` passed, and `test-checks` gained only the new
+`test-student` and `test-proto` passed, and `test-checks` gained only the new
 entries.
 
 ## 46. Phase 3 of the REPL: the session's slices
@@ -3155,10 +3155,10 @@ a patch.
   a declaration. The branch for `identifier` and `::` read the scope
   `B::C::` without suspending the access check, so `B::C::C() {}` gave
   "'C' is a private member of 'B'". The `default` branch just below already
-  did this. This is common in student code, such as `struct Lista::No`
+  did this. This is common in student code, such as `struct List::Node`
   defined outside the class. Now the branch does what `default` does. It
   suspends the check and goes back with the tokens unannotated, and the
-  access is checked in the context of the declaration. Using `Lista::No`
+  access is checked in the context of the declaration. Using `List::Node`
   outside the class still gives an error.
 
 **The harness.** On a timeout, `subprocess.run` killed `sc-engine repl`,
@@ -3201,7 +3201,7 @@ two.
 - `make test` and `make test-native`: 17,715 files, 0 differences.
 - `make test-split`: 1,947 programs and 10,541 cells, 0 differences (6
   known).
-- `make test-aluno` and `make test-checks`: as in `expected.txt`.
+- `make test-student` and `make test-checks`: as in `expected.txt`.
 - `make test-proto`: passes. `make checkinv`: SAME.
 - `make test-session`: 11,917 results, 0 bad (39 known).
 
@@ -3308,7 +3308,7 @@ differences in 17,715 files. `test-session`, on `sc-engine` against
 `sc-engine-full`, gave 11,917 results and 0 bad (39 known), and
 `test-session-warn` (ses-, seq- and crash- with `-Weverything`) gave 11,916
 and 0 bad. `test-split` gave 0 differences in 1,947 programs, and
-`test-aluno` and `test-checks` now run on the cut engine, equal to
+`test-student` and `test-checks` now run on the cut engine, equal to
 `expected.txt`. `checkinv` and `test-proto` passed.
 
 The session's slices stay out of `make test`. They need the native engine
@@ -3527,7 +3527,7 @@ to 2.25 s. No difference matters.
 | `test-split` | 1,947 programs, 0 differences |
 | `checkinv` | SAME |
 | `test-proto` | passed |
-| `test-aluno` | passed |
+| `test-student` | passed |
 | `test-checks` | passed |
 
 `node:wasi` rejects a module with both `_initialize` and `_start`.
@@ -3628,11 +3628,11 @@ test-loader` checks the memory (below).
 **The depth of the stack overflow.** The wasmtime limit
 (`max_wasm_stack`) measures the native stack from the entry into wasm, and
 the host frames count. With the `dist` profile, the host uses less stack,
-and the recursion in `test/checks` overflows 3 frames later. `fatorial`
-goes from 10,916 to 10,919 calls, and `par`/`impar` from 8,187 to 8,190.
+and the recursion in `test/checks` overflows 3 frames later. `factorial`
+goes from 10,916 to 10,919 calls, and `even`/`odd` from 8,187 to 8,190.
 With two profiles, the count also differs between the batteries' binary
 and the shipped one. So `checks.py` replaces the count with `N` before it
-compares (`at fatorial (...), N times`). The test still checks the message
+compares (`at factorial (...), N times`). The test still checks the message
 and the frames, only not the number. `expected.txt` was regenerated, and
 only those 6 lines changed.
 
@@ -3640,7 +3640,7 @@ Pinning the number with a larger stack is not worth it. With a
 `max_wasm_stack` of 4 MiB (wasmtime then requires a larger
 `async_stack_size`), the recursion goes past the backtrace's cap
 (`wasm_backtrace_max_frames`, 2^15). The output becomes
-`at fatorial (...), 32767 times`, without `at main`, and the number is
+`at factorial (...), 32767 times`, without `at main`, and the number is
 fixed only because it is the cap. A thread with a large stack would still
 be needed so as not to depend on the student's `ulimit -s`. The 1 MiB
 stack in linear memory never becomes the limit. `N` stays, and in
@@ -3656,7 +3656,7 @@ stack in linear memory never becomes the limit. `N` stays, and in
 | `test-split`, `test-split-wasm` | 1,947 programs, 0 differences |
 | `test-session`, `test-session-warn` | 0 bad |
 | `test-session-wasm`, `test-session-wasm-warn` | 0 bad |
-| `test-aluno` | passed |
+| `test-student` | passed |
 | `test-checks` | passed, after the `--update` above |
 
 The two differences come from bases made under high load:
@@ -3818,7 +3818,7 @@ exists only there.
 
 **Batteries.** `test-native` (the whole corpus through the new `build/sc`,
 with `sc -cc1` and `sc ld`), `test-split`, `test-session`,
-`test-session-wasm`, `test-proto`, `test-loader`, `test-aluno` and
+`test-session-wasm`, `test-proto`, `test-loader`, `test-student` and
 `test-checks` show no difference.
 
 **Left for later:** the documented JS host (`sc.wasm` in the browser, with
@@ -3896,7 +3896,7 @@ variable was empty. The crate's variables moved to the top.
 **Batteries.** `test-native`, `test-split`, `test-session` (with the base
 rebuilt by `build/sc-full`, equal to the old one, result by result),
 `test-session-wasm` (the same), `test-split-wasm`, `test-proto`,
-`test-loader`, `test-aluno` and `test-checks` show no difference.
+`test-loader`, `test-student` and `test-checks` show no difference.
 `build/cargo/dist/sc` is 34.3 MB, like the `build/loader/dist/sc` of §50.
 
 **`sc --cc1` and `sc --ld`.** The engine modes in `sc` were `-cc1` and
@@ -3925,10 +3925,10 @@ thread.
 **The batteries on the distributed `sc`.** `build/cargo/dist/sc` (LTO,
 `"s"`, `panic=abort`) is what the student gets, and it had never gone
 through the batteries. `make test-dist` runs `test-split`, `test-session`,
-`test-aluno` and `test-checks` on it, against the same bases (`aluno.py`
+`test-student` and `test-checks` on it, against the same bases (`student.py`
 and `checks.py` take the binary as an argument). It stays out of the
 batteries for each change. It is the check before distributing. The first
-time: 1,947 programs, 0 differences; 11,918 results, 0 bad; aluno and
+time: 1,947 programs, 0 differences; 11,918 results, 0 bad; student and
 checks as in `expected.txt`. `spike.py` also called `-cc1` on `sc` (the
 `std.pcm` of the sessions). `std_pcm` now takes the mode.
 
@@ -4160,7 +4160,7 @@ not rebuild the pack if the stamp has not changed.
 `toml_parser` went from 1.1.3 to 1.1.5, because of the `toml_edit` that
 `deku` brings.
 
-`test-aluno` and `test-checks` passed with no difference.
+`test-student` and `test-checks` passed with no difference.
 
 ## 53. REPL phase 7, steps 2 to 4: `sc` reads from the pack
 
@@ -4206,7 +4206,7 @@ Measured on a loaded machine: the index takes 3 to 4 ms, `stdio.h`
 0.35 ms, `libc.so` 2.2 ms, and decompressing the whole pack 31 ms.
 
 **Outside the checkout.** With `sc` copied to a temporary directory and
-`build/` hidden (`bwrap --tmpfs build`), `test-aluno` (66 runs) and
+`build/` hidden (`bwrap --tmpfs build`), `test-student` (66 runs) and
 `test-checks` (165) give 0 differences. `strace -f -e trace=%file` shows
 no path from the checkout, and the only `/sc/...` on disk is the `access`
 of the `.imports`. The same holds for the dist `sc`, which also runs the
@@ -4336,23 +4336,23 @@ epoch, always gave. The recursion of a single function did not change
 does not go up.
 
 The point where the stack runs out varies with the build, and so does the
-innermost frame. The release `sc` overflowed in `impar`, after 5,458
-cycles. The dist one overflowed in `par`, after 5,459. Then the cycle,
-found from the inside, started one frame earlier, and one `par` was left
+innermost frame. The release `sc` overflowed in `odd`, after 5,458
+cycles. The dist one overflowed in `even`, after 5,459. Then the cycle,
+found from the inside, started one frame earlier, and one `even` was left
 over at the end. `test-checks` (release) and `test-dist` (dist) use the
 same `expected.txt`, and one of the two failed. Before, they agreed by
 chance. **Decided on 2026-10-22:** `frames` finds the cycles from the
 outside (from `main`), which does not depend on the build. It omits the
 piece of a cycle that the overflow cut on the inside, because those frames
 equal the cycle's. A trap inside the cycle keeps its line, which is a
-different one. Both builds now give `at impar / at par / (the 2 frames
+different one. Both builds now give `at odd / at even / (the 2 frames
 above, N times) / at main`, as `expected.txt` already had.
 
 **The batteries.** `make test-dist`:
 - `test-split`: 1,947 programs, 10,541 cells, 0 differences (6
   known);
 - `test-session`: 11,918 results, 0 bad (39 known);
-- `test-aluno`: 66 runs, 0 differences;
+- `test-student`: 66 runs, 0 differences;
 - `test-checks`: 165 runs, equal to `expected.txt`, on the dist `sc` and
   on the release one.
 
@@ -4556,9 +4556,9 @@ session opens `/tmp` any more, and `src/engine/wasm.rs` and
 **The package through the host.** An `sc_files` with function pointers
 cannot cross the wasm boundary. `engine/sc_host_files.cpp`, only in
 `sc.wasm`, implements `sc_files` on two imports:
-- `sc_files.status(caminho, n, *tamanho)`: 0, 1 (file) or 2 (directory,
+- `sc_files.status(path, n, *size)`: 0, 1 (file) or 2 (directory,
   with the size of the names);
-- `sc_files.read(caminho, n, destino)`: the bytes of the file or the
+- `sc_files.read(path, n, dest)`: the bytes of the file or the
   names.
 
 The host calls the exported `sc_host_files("/sc")` after `_initialize`.
@@ -4778,7 +4778,7 @@ without the undo. `loader.mjs` does not undo.
 
 **The batteries.** `make test-split`: 1,947 programs, 10,541 cells, 0
 differences (6 known). `make test-session`: 11,918 results, 0 bad
-(38 known). `make test-aluno`, `make test-checks` (the levels with ASan)
+(38 known). `make test-student`, `make test-checks` (the levels with ASan)
 and `make test-loader` pass.
 
 ## 63. The loader on a runtime trait: the primitives of Draft 4
@@ -4840,7 +4840,7 @@ it comes back to the table with sgleam:
 
 **The batteries.** `make test-split`: 1,947 programs, 10,541 cells, 0
 differences (6 known), 5m10s (5m05s before). `make test-session`: 11,918
-results, 0 bad (38 known), 4m45s (4m41s before). `make test-aluno`,
+results, 0 bad (38 known), 4m45s (4m41s before). `make test-student`,
 `make test-checks`, `make test-loader`, `make test-proto` and
 `make test-session-wasm` (11,926 results, 0 bad, 40 known) pass. The
 extra calls (the world, the `try`) do not show in the time.
@@ -4906,7 +4906,7 @@ gives them, for `sc.wasm` to instantiate.
   (7 known, the 6 of `test-split` and `ct-00187`, whose trap message V8
   gives differently). `make test-split`, `test-session` (0 bad, 38
   known), `test-session-wasm` (0 bad, 40), `test-split-node`,
-  `test-loader`, `test-aluno` and `test-checks` pass.
+  `test-loader`, `test-student` and `test-checks` pass.
 - `make test-session-node`, with `scload.mjs` or with `scload-rs` in its
   place: the same 11,926 results, 2 bad (41 known). These are the 2 the
   battery already gave before §61. `limits-externdecl` runs out of time,
@@ -5056,7 +5056,7 @@ reads the error.
   `ENGINE.md`, with the configuration `lang=c|c++ safety=… color=0|1`.
 
 **The batteries.**
-- `test/aluno.py test/node/sc-rs`: 66 runs, equal to `expected.txt`.
+- `test/student.py test/node/sc-rs`: 66 runs, equal to `expected.txt`.
 - `test/checks.py test/node/sc-rs`: only the frames differ (`at f
   (arquivo:linha:coluna)`, "the block was freed …"). The rest comes out
   the same, and so does the cell that crashes clang
@@ -5067,9 +5067,9 @@ reads the error.
   puts in front and accepts C++ names with spaces, and so it finds
   `__sc_rt_report` (before, it said "aborted").
 
-In native, `test-split`, `test-session`, `test-aluno`, `test-checks`,
+In native, `test-split`, `test-session`, `test-student`, `test-checks`,
 `test-proto` and `test-loader` pass, and so do `test-split-wasm`,
-`test-session-wasm` and `test-split-node-rs`. `make test-aluno-node-rs`
+`test-session-wasm` and `test-split-node-rs`. `make test-student-node-rs`
 runs the first battery above.
 
 **The time** is not measured yet. The machine had load 100–550. Each run
@@ -5129,8 +5129,8 @@ Simplecode's `make test-all` gives 636 tests, 0 failures, with sc in
 `engine_test.ts`. `check-imports` accepts the 8 `env` imports of
 `sc.wasm`.
 
-In sc, `test-proto`, `test-aluno`, `test-checks`, `test-split-node-rs`
-(0 differ), `test-aluno-node-rs` and `test-session-node` (11926 results,
+In sc, `test-proto`, `test-student`, `test-checks`, `test-split-node-rs`
+(0 differ), `test-student-node-rs` and `test-session-node` (11926 results,
 0 bad) pass.
 
 **The size**: 39.56 MB (+11 KB over §66). With zstd -19, 7.75 MB.
@@ -5243,7 +5243,7 @@ sessions and from the batteries themselves):
 - `test-session`: 11,926 results, 0 differences from the new base (made
   with `sc-full.cwasm`). `test-session-warn`: the same;
 - `test-split`: 1,947 programs, 10,541 cells, 0 differences from `pic-`;
-- `test-aluno` (66 runs) and `test-checks` (165) equal to the expected
+- `test-student` (66 runs) and `test-checks` (165) equal to the expected
   output;
 - `test-proto` (`tests/session.rs` ported to the `Guest`, covering cells,
   crash, undo, limits, Enter, values, `:type`) and `test-loader` pass.
@@ -5425,7 +5425,7 @@ test it.
 
 **The release in the CI.** `.github/workflows/release.yaml`, like
 sgleam's. A `v*` tag (which has to be the version in `Cargo.toml`)
-builds, on each native target, `sc-VERSÃO-ALVO.tar.gz` or `.zip`, with
+builds, on each native target, `sc-VERSION-TARGET.tar.gz` or `.zip`, with
 the sha256, and a draft release. There are six targets, sgleam's five
 and aarch64-pc-windows-msvc (`windows-11-arm`, which also joins the
 matrix of `ci.yaml`). What sc embeds and does not depend on the target

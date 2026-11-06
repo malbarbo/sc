@@ -7,7 +7,7 @@ enum { MAX = 10 };
 int f(int x) {
   if (DEBUG) printf("dbg\n");
   if (verbose) printf("v\n");
-  if (MAX > 100) printf("grande\n");
+  if (MAX > 100) printf("large\n");
   switch (x) { case 1: return 1; break; default: exit(1); return 0; }
 }
 int g(void) { while (1) { int c = getchar(); if (c == EOF) return 0; } return -1; }

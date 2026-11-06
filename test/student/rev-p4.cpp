@@ -3,13 +3,13 @@
 #include <vector>
 #include <memory>
 using namespace std;
-struct N { int v; N *prox; };
-struct L { N *ini = nullptr; void remove(int x) {
-  N **pp = &ini; while (*pp) { if ((*pp)->v == x) { N *t = *pp; *pp = t->prox; delete t; } else pp = &(*pp)->prox; } } };
+struct N { int v; N *next; };
+struct L { N *head = nullptr; void remove(int x) {
+  N **pp = &head; while (*pp) { if ((*pp)->v == x) { N *t = *pp; *pp = t->next; delete t; } else pp = &(*pp)->next; } } };
 int main() {
   int *p = new int(1); delete p; p = new int(2); cout << *p; delete p;
   N *a = new N{1, nullptr}; N *b = new N{2, a}; N *cur = b;
-  while (cur) { N *nx = cur->prox; delete cur; cur = nx; }
+  while (cur) { N *nx = cur->next; delete cur; cur = nx; }
   const int *m = nullptr; int best = -1;
   for (int i = 0; i < 3; i++) { int val = i * 2; if (val > best) { best = val; m = &best; } }
   cout << *m;

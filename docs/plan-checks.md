@@ -607,7 +607,7 @@ Each phase closes with `make test` at 0 differences, `test-split`,
   (`llvm/incremental-main-file.patch`). Before that, `-Wunreachable-code`
   did not fire, and `-Wheader-hygiene` gave a false positive.
 - `-Wmissing-prototypes` moved from S to N. It fired on 16 of the 20
-  correct programs of `test/aluno` at `strict`.
+  correct programs of `test/student` at `strict`.
 
 **F0 is done** (NOTES.md §31). It has the error in words and the student's
 frames, with `-gline-tables-only` in every session, `test-split` with `-g`
@@ -660,7 +660,7 @@ F1 comes first, because it is the foundation:
 
 ## 9. Tests
 
-- **`test/aluno/`: correct student code (T9, W).**
+- **`test/student/`: correct student code (T9, W).**
   - These are introductory exercises in C and in C++ with the STL: loops,
     vectors, strings, structs, lists, matrices, graphs, classes, `map`.
   - **It is the gate of the `on` level:** no warning from E or A and no
@@ -704,7 +704,7 @@ F1 comes first, because it is the foundation:
 5. **The REPL's latency.** If `on` makes the cell too slow, the REPL uses
    UBSan in `trap` mode and leaves ASan only for `sc FILE`. The measurement
    decides (T11).
-6. **False positives in libc++'s headers.** The gate is `test/aluno` in
+6. **False positives in libc++'s headers.** The gate is `test/student` in
    C++ (§9).
 
 Risk 4 of version 1, the `std.pcm`, is solved. One `.pcm` per mode is

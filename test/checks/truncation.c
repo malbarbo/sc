@@ -1,7 +1,7 @@
 #include <stdio.h>
 
 int main(void) {
-    int habitantes = 50000;
-    short populacao = habitantes;
-    printf("%d\n", populacao);
+    int inhabitants = 50000;
+    short population = inhabitants;
+    printf("%d\n", population);
 }

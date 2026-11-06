@@ -1,7 +1,7 @@
 #include <stdio.h>
 
 int main(void) {
-    double populacao = 8.1e9;
-    int n = (int) populacao;
+    double population = 8.1e9;
+    int n = (int) population;
     printf("%d\n", n);
 }

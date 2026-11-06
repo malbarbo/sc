@@ -1,45 +1,45 @@
-// tratamento de erros com setjmp e longjmp: uma calculadora de expressões
+// error handling with setjmp and longjmp: an expression calculator
 #include <ctype.h>
 #include <setjmp.h>
 #include <stdio.h>
 
-static jmp_buf falha;
+static jmp_buf failure;
 static const char *msg;
 static const char *p;
 
-static void erro(const char *m) {
+static void fail(const char *m) {
     msg = m;
-    longjmp(falha, 1);
+    longjmp(failure, 1);
 }
 
 static int expr(void);
 
-static int fator(void) {
+static int factor(void) {
     while (*p == ' ') p++;
     if (*p == '(') {
         p++;
         int v = expr();
-        if (*p != ')') erro("falta )");
+        if (*p != ')') fail("missing )");
         p++;
         return v;
     }
-    if (!isdigit((unsigned char)*p)) erro("número esperado");
+    if (!isdigit((unsigned char)*p)) fail("number expected");
     int v = 0;
     while (isdigit((unsigned char)*p)) v = v * 10 + (*p++ - '0');
     return v;
 }
 
-static int termo(void) {
-    int v = fator();
+static int term(void) {
+    int v = factor();
     for (;;) {
         while (*p == ' ') p++;
         if (*p == '*') {
             p++;
-            v *= fator();
+            v *= factor();
         } else if (*p == '/') {
             p++;
-            int d = fator();
-            if (d == 0) erro("divisão por zero");
+            int d = factor();
+            if (d == 0) fail("division by zero");
             v /= d;
         } else {
             return v;
@@ -48,15 +48,15 @@ static int termo(void) {
 }
 
 static int expr(void) {
-    int v = termo();
+    int v = term();
     for (;;) {
         while (*p == ' ') p++;
         if (*p == '+') {
             p++;
-            v += termo();
+            v += term();
         } else if (*p == '-') {
             p++;
-            v -= termo();
+            v -= term();
         } else {
             return v;
         }
@@ -64,14 +64,14 @@ static int expr(void) {
 }
 
 int main(void) {
-    const char *testes[] = {"1 + 2 * 3", "(1 + 2) * 3", "8 / (4 - 4)", "2 * (3 + 4", "7 - x"};
+    const char *tests[] = {"1 + 2 * 3", "(1 + 2) * 3", "8 / (4 - 4)", "2 * (3 + 4", "7 - x"};
     for (int i = 0; i < 5; i++) {
-        p = testes[i];
-        if (setjmp(falha) == 0) {
+        p = tests[i];
+        if (setjmp(failure) == 0) {
             int v = expr();
-            printf("%s = %d\n", testes[i], v);
+            printf("%s = %d\n", tests[i], v);
         } else {
-            printf("%s: erro: %s\n", testes[i], msg);
+            printf("%s: error: %s\n", tests[i], msg);
         }
     }
     return 0;

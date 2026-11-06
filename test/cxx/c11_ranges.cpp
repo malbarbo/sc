@@ -12,13 +12,13 @@ struct Point {
   auto operator<=>(const Point &) const = default;
 };
 
-struct Aluno {
-  std::string nome;
-  double nota = 0;
-  int faltas = 0;
+struct Student {
+  std::string name;
+  double grade = 0;
+  int absences = 0;
 };
 
-double media(std::span<const double> v) {
+double average(std::span<const double> v) {
   double s = 0;
   for (double x : v) s += x;
   return v.empty() ? 0 : s / v.size();
@@ -43,10 +43,10 @@ int main() {
   for (auto [x, y] : ps) std::cout << "(" << x << "," << y << ")";
   std::cout << "\n";
 
-  Aluno al{.nome = "Ana", .nota = 8.5};
-  std::cout << al.nome << " " << al.nota << " " << al.faltas << "\n";
-  double notas[] = {7.0, 8.0, 9.5};
-  std::cout << media(notas) << "\n";
-  std::string s = "programacao";
-  std::cout << s.starts_with("pro") << s.ends_with("ao") << "\n";
+  Student st{.name = "Ana", .grade = 8.5};
+  std::cout << st.name << " " << st.grade << " " << st.absences << "\n";
+  double grades[] = {7.0, 8.0, 9.5};
+  std::cout << average(grades) << "\n";
+  std::string s = "programming";
+  std::cout << s.starts_with("pro") << s.ends_with("ng") << "\n";
 }

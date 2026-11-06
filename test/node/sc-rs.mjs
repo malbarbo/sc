@@ -1,7 +1,7 @@
 // sc inside sc.wasm on Node: the machine (src/machine.rs, its export
 // sc_cli in wasm/lib.rs), with the session in the same module and the
 // host's primitives of wasm.mjs, which is all the JS here gives it. For
-// test/aluno.py and test/checks.py (SC=test/node/sc-rs).
+// test/student.py and test/checks.py (SC=test/node/sc-rs).
 //
 // usage: node sc-rs.mjs [-q] [-x LANG] [--safety LEVEL] [FILE [ARG]...]
 // (SC_WASM: the module, build/sc.wasm)

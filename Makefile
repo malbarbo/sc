@@ -52,7 +52,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader baseline test test-small test-warn learn learn-session checkinv size test-proto test-split test-session test-session-warn test-split-node test-split-node-rs test-aluno-node-rs test-aluno test-checks test-dist repl sc-deps test-loader test-ctrl-c check rs-wasm dist dist-windows llvm-key clean
+.PHONY: all fetch llvm sysroot engine trim loader baseline test test-small test-warn learn learn-session checkinv size test-proto test-split test-session test-session-warn test-split-node test-split-node-rs test-student-node-rs test-student test-checks test-dist repl sc-deps test-loader test-ctrl-c check rs-wasm dist dist-windows llvm-key clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -277,12 +277,12 @@ test-split-node: $(B)/sc $(SCLOAD) $(B)/res/base/summary.json
 test-split-node-rs: $(B)/sc $(B)/sc.wasm $(SCLOAD) $(B)/res/base/summary.json
 	SCLOAD=test/node/scload-rs test/split.py $(B)/sc $(B)/res/split-node-rs
 
-# test-aluno with sc inside sc.wasm (the machine, wasm/lib.rs's sc_cli), on
+# test-student with sc inside sc.wasm (the machine, wasm/lib.rs's sc_cli), on
 # Node with only the host's primitives (test/node/sc-rs). test/checks.py
 # test/node/sc-rs differs only in the frames, which the host's do not tie to
 # an instance (NOTES.md §66)
-test-aluno-node-rs: $(B)/sc.wasm
-	test/aluno.py test/node/sc-rs
+test-student-node-rs: $(B)/sc.wasm
+	test/student.py test/node/sc-rs
 
 # --- the REPL's loader, runs the shared objects (native, wasmtime): scload,
 # for the batteries, without the engine; and sc, the REPL, whose compiler is
@@ -340,8 +340,8 @@ repl: $(SC_REPL) sc-deps
 sc-deps: $(PACK) $(B)/sc.wasm
 
 # a student's correct code at each level of --safety (docs/plan-checks.md §9)
-test-aluno: repl
-	test/aluno.py
+test-student: repl
+	test/student.py
 
 test-checks: repl
 	test/checks.py
@@ -351,7 +351,7 @@ test-checks: repl
 test-dist: dist $(SCLOAD) $(B)/res/base/summary.json $(B)/res/session-base/summary.json sc-deps
 	test/split.py $(B)/cargo/dist/sc $(B)/res/split-dist
 	test/session.py $(B)/cargo/dist/sc $(B)/res/session-dist $(B)/res/session-base/summary.json
-	test/aluno.py $(B)/cargo/dist/sc
+	test/student.py $(B)/cargo/dist/sc
 	test/checks.py $(B)/cargo/dist/sc
 
 # --- tests: the corpus against the uncut engine

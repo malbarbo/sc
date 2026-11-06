@@ -6,7 +6,7 @@ static jmp_buf on_error;
 static const char *message;
 static int parse_digit(char c) {
   if (c < '0' || c > '9') {
-    message = "não é dígito";
+    message = "not a digit";
     longjmp(on_error, c);
   }
   return c - '0';
@@ -25,7 +25,7 @@ int main(void) {
       printf("%s -> %d\n", inputs[i], parse(inputs[i]));
     } else {
       tries++;
-      printf("%s: erro '%c' (%s), tentativas %d\n", inputs[i], c, message, tries);
+      printf("%s: error '%c' (%s), tries %d\n", inputs[i], c, message, tries);
     }
   }
   jmp_buf a;

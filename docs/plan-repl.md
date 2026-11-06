@@ -1059,7 +1059,7 @@ The cold cache costs the compilation of `libc.so` (1.9 MB) and of `libc++.so`
 
 **Exit criterion:**
 - `make test`, `test-warn`, `test-native`, `test-split`, `test-split-wasm`,
-  `test-session*`, `test-aluno` and `test-checks` with no difference. All of
+  `test-session*`, `test-student` and `test-checks` with no difference. All of
   them run through `scload` or `sc` with the new features;
 - `make test-loader` green;
 - the baselines are not redone. `$(SCLOAD)` is order-only in the baselines'
@@ -1284,7 +1284,7 @@ three readers: clang's VFS, a hook in wasm-ld and the loader.
 - The baselines do not change by themselves. `ses-`, `seq-`, `crash-` and
   `split-` pass their own arguments to `sc --replay`, with the
   real paths (`flags.session(...)`, `test/session.py:105`,
-  `test/split.py:78`), and the real FS is still underneath. `test-aluno` and
+  `test/split.py:78`), and the real FS is still underneath. `test-student` and
   `test-checks` use the `.args` of `sc`, but their `expected.txt` has no
   build path.
 - `sc` grows by some 4.3 MB, 4.01 MB for the squashfs and 302 KB for the
@@ -1315,7 +1315,7 @@ three readers: clang's VFS, a hook in wasm-ld and the loader.
    embedded), with no readers yet. Check the size against the table above.
    **Done on 2026-10-21** (NOTES.md §52). The pack's `.args` live in
    `build/pack/repl`, and the pack without the `.cwasm` files is 2.61 MB.
-2. Clang's VFS and `sc_set_files`. Run `test-aluno` and `test-checks`,
+2. Clang's VFS and `sc_set_files`. Run `test-student` and `test-checks`,
    which are the ones that go through the `.args` of `sc`, with `sc` copied
    outside the checkout. `test-session` and `test-split` switch to the
    `.args` with `/sc/` (decided below) and redo the baselines once.

@@ -24,7 +24,7 @@ constexpr int fact(int n) { return n <= 1 ? 1 : n * fact(n - 1); }
 int main() {
   std::cout << sum(2, 3) << " " << sum(1.5, 2.25) << "\n";
   show(42);
-  show(std::string("texto"));
+  show(std::string("text"));
   std::cout << maxOf(3, 7) << " " << maxOf(std::string("abc"), std::string("abd")) << "\n";
   constexpr int s = square(12);
   static_assert(fact(5) == 120);

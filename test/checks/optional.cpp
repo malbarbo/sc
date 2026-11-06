@@ -1,7 +1,7 @@
 #include <iostream>
 #include <optional>
 
-std::optional<int> busca(int x) {
+std::optional<int> lookup(int x) {
     if (x > 0) {
         return x;
     }
@@ -9,5 +9,5 @@ std::optional<int> busca(int x) {
 }
 
 int main() {
-    std::cout << *busca(-1) << '\n';
+    std::cout << *lookup(-1) << '\n';
 }

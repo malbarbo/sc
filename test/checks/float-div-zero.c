@@ -1,8 +1,8 @@
 #include <stdio.h>
 
 int main(void) {
-    double notas[] = {7.5, 8.0};
-    double soma = notas[0] + notas[1];
+    double grades[] = {7.5, 8.0};
+    double sum = grades[0] + grades[1];
     int n = 0;
-    printf("media: %g\n", soma / n);
+    printf("average: %g\n", sum / n);
 }

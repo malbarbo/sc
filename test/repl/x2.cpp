@@ -9,8 +9,8 @@ extern Base *obj;
 inline int &counter() { static int c = 0; return c; }
 int tick1();
 __attribute__((constructor)) static void run() {
-  v.push_back("dois");
+  v.push_back("two");
   tick1(); tick1(); ++counter();
   std::printf("v.size = %zu, counter = %d, id = %d, dynamic_cast: %s\n", v.size(), counter(), obj->id(),
-              dynamic_cast<Der *>(obj) ? "ok" : "FALHOU");
+              dynamic_cast<Der *>(obj) ? "ok" : "FAILED");
 }

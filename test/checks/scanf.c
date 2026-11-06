@@ -1,10 +1,10 @@
 #include <stdio.h>
 
 int main(void) {
-    char nome[8];
-    int idade;
-    printf("Nome e idade: ");
-    if (scanf("%s %d", nome, &idade) == 2) {
-        printf("%s tem %d anos\n", nome, idade);
+    char name[8];
+    int age;
+    printf("Name and age: ");
+    if (scanf("%s %d", name, &age) == 2) {
+        printf("%s is %d years old\n", name, age);
     }
 }

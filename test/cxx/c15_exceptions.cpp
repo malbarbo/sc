@@ -20,7 +20,7 @@ struct AppError : std::runtime_error {
 struct ParseError : AppError { using AppError::AppError; };
 int depth(int n) {
   Trace t(n % 2 ? "odd" : "even");
-  if (n == 0) throw ParseError("fundo", 42);
+  if (n == 0) throw ParseError("bottom", 42);
   return depth(n - 1) + 1;
 }
 struct Widget {
@@ -31,27 +31,27 @@ struct Widget {
   }
 };
 double divide(double a, double b) {
-  if (b == 0) throw std::domain_error("divisão por zero");
+  if (b == 0) throw std::domain_error("division by zero");
   return a / b;
 }
 int main() {
   try { depth(3); } catch (const AppError &e) { std::printf("AppError '%s' code %d\n", e.what(), e.code); }
   try { throw 7; } catch (long) { std::puts("long?"); } catch (int i) { std::printf("int %d\n", i); }
-  try { throw std::string("texto"); } catch (std::string s) { std::printf("string %s\n", s.c_str()); }
+  try { throw std::string("text"); } catch (std::string s) { std::printf("string %s\n", s.c_str()); }
   try { std::vector<int> v(3); v.at(10) = 1; } catch (const std::out_of_range &) { std::puts("out_of_range"); }
   try { std::stoi("abc"); } catch (const std::invalid_argument &e) { std::printf("invalid_argument: %s\n", e.what()); }
   try { std::map<int, int> m; m.at(1); } catch (const std::exception &e) { std::puts("map::at"); }
   try { auto p = std::make_unique<int[]>(1); (void)p; throw std::bad_alloc(); } catch (const std::bad_alloc &e) { std::printf("bad_alloc: %s\n", e.what()); }
   try { std::printf("%g\n", divide(1, 4)); divide(1, 0); } catch (const std::logic_error &e) { std::printf("logic_error: %s\n", e.what()); }
   try {
-    try { throw ParseError("interno", 1); } catch (AppError &e) { e.code = 2; std::puts("rethrow"); throw; }
+    try { throw ParseError("inner", 1); } catch (AppError &e) { e.code = 2; std::puts("rethrow"); throw; }
   } catch (const ParseError &e) { std::printf("outer code %d\n", e.code); }
   try { Widget w(-1); } catch (const std::invalid_argument &e) { std::printf("rethrown by the function-try-block: %s\n", e.what()); }
   std::exception_ptr ep;
-  try { throw std::runtime_error("guardada"); } catch (...) { ep = std::current_exception(); }
+  try { throw std::runtime_error("stored"); } catch (...) { ep = std::current_exception(); }
   try { std::rethrow_exception(ep); } catch (const std::exception &e) { std::printf("exception_ptr: %s\n", e.what()); }
   try {
-    try { throw std::runtime_error("causa"); } catch (...) { std::throw_with_nested(std::logic_error("efeito")); }
+    try { throw std::runtime_error("cause"); } catch (...) { std::throw_with_nested(std::logic_error("effect")); }
   } catch (const std::logic_error &e) {
     std::printf("nested: %s\n", e.what());
     try { std::rethrow_if_nested(e); } catch (const std::runtime_error &c) { std::printf("  cause: %s\n", c.what()); }

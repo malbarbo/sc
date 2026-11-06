@@ -8,14 +8,14 @@ struct S {
 };
 int g(int v) {
   switch (v) {
-  case 1: std::cout << "um";
-  case 2: std::cout << "dois"; break;
+  case 1: std::cout << "one";
+  case 2: std::cout << "two"; break;
   }
   return v;
 }
 int main() {
-  std::vector<std::string> nomes{"a", "b"};
-  for (auto n : nomes) std::cout << n;
+  std::vector<std::string> names{"a", "b"};
+  for (auto n : names) std::cout << n;
   int arr[3] = {1, 2, 3};
   int i = 0;
   arr[i] = i++;

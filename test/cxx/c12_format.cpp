@@ -29,21 +29,21 @@ Gen fib(int n) {
   }
 }
 
-enum class Cor { Vermelho, Verde, Azul };
-constinit int contador = 10;
+enum class Color { Red, Green, Blue };
+constinit int counter = 10;
 
-const char *nome(Cor c) {
+const char *name(Color c) {
   switch (c) {
-    using enum Cor;
-    case Vermelho: return "vermelho";
-    case Verde: return "verde";
-    case Azul: return "azul";
+    using enum Color;
+    case Red: return "red";
+    case Green: return "green";
+    case Blue: return "blue";
   }
   return "?";
 }
 
 int main() {
-  std::cout << std::format("{:>8}|{:<6}|{:^7}|\n", "dir", "esq", "meio");
+  std::cout << std::format("{:>8}|{:<6}|{:^7}|\n", "right", "left", "mid");
   std::cout << std::format("{:.3f} {:08.2f} {:x} {:#b} {:e}\n", 3.14159, 2.5, 255, 5, 12345.678);
   std::map<std::string, int> m{{"a", 1}, {"b", 2}};
   for (auto &[k, v] : m) std::cout << std::format("{}={} ", k, v);
@@ -52,7 +52,7 @@ int main() {
   while (g.next()) std::cout << g.value() << " ";
   std::cout << "\n";
   const char8_t *u = u8"ok";
-  std::cout << (int)u[0] << " " << nome(Cor::Verde) << " " << contador << "\n";
+  std::cout << (int)u[0] << " " << name(Color::Green) << " " << counter << "\n";
   int x = 5;
-  if (x > 0) [[likely]] std::cout << "positivo\n";
+  if (x > 0) [[likely]] std::cout << "positive\n";
 }

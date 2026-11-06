@@ -1,12 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-struct no {
-    int valor;
-    struct no *prox;
+struct node {
+    int value;
+    struct node *next;
 };
 
 int main(void) {
-    struct no *lista = NULL;
-    printf("%d\n", lista->valor);
+    struct node *list = NULL;
+    printf("%d\n", list->value);
 }

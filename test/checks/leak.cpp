@@ -3,22 +3,22 @@
 #include <string>
 #include <vector>
 
-struct Pilha {
-    int *itens;
-    int topo = 0;
-    Pilha() : itens(new int[10]) {}
-    void empilha(int x) { itens[topo++] = x; }
+struct Stack {
+    int *items;
+    int top = 0;
+    Stack() : items(new int[10]) {}
+    void push(int x) { items[top++] = x; }
 };
 
 int main() {
-    std::map<std::string, int> conta;
+    std::map<std::string, int> counts;
     for (std::string p : {"a", "b", "a"}) {
-        conta[p]++;
+        counts[p]++;
     }
-    std::vector<Pilha> pilhas;
+    std::vector<Stack> stacks;
     for (int i = 0; i < 2; i++) {
-        pilhas.push_back(Pilha());
-        pilhas.back().empilha(i);
+        stacks.push_back(Stack());
+        stacks.back().push(i);
     }
-    std::cout << conta["a"] << " " << pilhas.size() << "\n";
+    std::cout << counts["a"] << " " << stacks.size() << "\n";
 }

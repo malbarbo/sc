@@ -1,9 +1,9 @@
 #include <stdlib.h>
 int *v = NULL;
-void enche(int *a, int n) { for (int i = 0; i <= n; i++) a[i] = i; }
+void fill(int *a, int n) { for (int i = 0; i <= n; i++) a[i] = i; }
 v = malloc(4 * sizeof(int));
-enche(v, 4);
-enche(v, 3);
+fill(v, 4);
+fill(v, 3);
 v[3]
 free(v);
 v[3]

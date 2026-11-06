@@ -10,7 +10,7 @@ constexpr int SIZE = 4;
 constexpr double PI = 3.14159;
 enum Color : uint8_t { RED = 1, GREEN = 2, BLUE = 0b1000'0000 };
 static_assert(sizeof(enum Color) == 1);
-static_assert(SIZE == 4, "tamanho");
+static_assert(SIZE == 4, "size");
 [[nodiscard]] static int square(int x) { return x * x; }
 [[maybe_unused]] static int unused_helper(int) { return 0; }
 static void swap_any(void *a, void *b, size_t n) {

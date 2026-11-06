@@ -1,8 +1,8 @@
 #include <stdio.h>
 
-int contagem[10];
+int counts[10];
 
-int soma(int v[], int n) {
+int sum(int v[], int n) {
     int s = 0;
     for (int i = 1; i <= n; i++) {
         s += v[i];
@@ -11,5 +11,5 @@ int soma(int v[], int n) {
 }
 
 int main(void) {
-    printf("%d\n", soma(contagem, 10));
+    printf("%d\n", sum(counts, 10));
 }

@@ -2,9 +2,9 @@
 
 int main(void) {
     int a[3] = {1, 2, 3};
-    int soma = 0;
+    int sum = 0;
     for (int i = 0; i <= 3; i++) {
-        soma += a[i];
+        sum += a[i];
     }
-    printf("%d\n", soma);
+    printf("%d\n", sum);
 }

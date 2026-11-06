@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <exception>
 #include <stdexcept>
-void inner() { throw std::runtime_error("escapou"); }
+void inner() { throw std::runtime_error("escaped"); }
 void wrapper() noexcept { inner(); }
 int main() {
   std::set_terminate([] {
@@ -12,7 +12,7 @@ int main() {
     std::fflush(stdout);
     std::abort();
   });
-  std::puts("antes");
+  std::puts("before");
   wrapper();
-  std::puts("depois?");
+  std::puts("after?");
 }

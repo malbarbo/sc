@@ -1,9 +1,9 @@
-// matrizes: leitura de valores fixos, transposta, produto e diagonal
+// matrices: fixed values, transpose, product and diagonal
 #include <stdio.h>
 
 #define N 3
 
-void imprime(int m[N][N]) {
+void print(int m[N][N]) {
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
             printf("%4d", m[i][j]);
@@ -12,13 +12,13 @@ void imprime(int m[N][N]) {
     }
 }
 
-void transposta(int m[N][N], int t[N][N]) {
+void transpose(int m[N][N], int t[N][N]) {
     for (int i = 0; i < N; i++)
         for (int j = 0; j < N; j++)
             t[j][i] = m[i][j];
 }
 
-void produto(int a[N][N], int b[N][N], int c[N][N]) {
+void product(int a[N][N], int b[N][N], int c[N][N]) {
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
             c[i][j] = 0;
@@ -29,20 +29,20 @@ void produto(int a[N][N], int b[N][N], int c[N][N]) {
     }
 }
 
-int soma_diagonal(int m[N][N]) {
-    int soma = 0;
+int diagonal_sum(int m[N][N]) {
+    int sum = 0;
     for (int i = 0; i < N; i++) {
-        soma += m[i][i];
+        sum += m[i][i];
     }
-    return soma;
+    return sum;
 }
 
 int main(void) {
     int a[N][N] = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}};
     int t[N][N], c[N][N];
-    transposta(a, t);
-    produto(a, t, c);
-    imprime(c);
-    printf("diagonal: %d\n", soma_diagonal(c));
+    transpose(a, t);
+    product(a, t, c);
+    print(c);
+    printf("diagonal: %d\n", diagonal_sum(c));
     return 0;
 }

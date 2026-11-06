@@ -1,23 +1,23 @@
 == abort.c off exit=134
-antes
+before
 aborted
     at main (abort.c:6:5)
 == abort.c on exit=134
-antes
+before
 aborted
     at main (abort.c:6:5)
 == abort.c strict exit=134
-antes
+before
 aborted
     at main (abort.c:6:5)
 == array-index.c off exit=0
 6
 == array-index.c on exit=134
 error: index 3 out of bounds for type 'int[3]'
-    at main (array-index.c:7:17)
+    at main (array-index.c:7:16)
 == array-index.c strict exit=134
 error: index 3 out of bounds for type 'int[3]'
-    at main (array-index.c:7:17)
+    at main (array-index.c:7:16)
 == assert.c off exit=134
 Assertion failed: n % 2 == 0 (assert.c: main: 5)
 aborted
@@ -72,32 +72,32 @@ error: division by zero
 == cells.c.repl off exit=0
 (int) 1
 error: division by zero
-    at media (cell_1:2:17)
+    at average (cell_1:2:16)
     at cell_3:1:1
 == cells.c.repl on exit=0
 (int) 1
 error: division by zero
-    at media (cell_1:2:17)
+    at average (cell_1:2:16)
     at cell_3:1:1
 == cells.c.repl strict exit=0
 (int) 1
 error: division by zero
-    at media (cell_1:2:17)
+    at average (cell_1:2:16)
     at cell_3:1:1
 == cells.cpp.repl off exit=0
 (size_t) 3
 == cells.cpp.repl on exit=0
 (size_t) 3
 error: vector[] index out of bounds
-    at pega(int) (cell_3:1:26)
+    at get(int) (cell_3:1:25)
     at cell_4:1:1
 == cells.cpp.repl strict exit=0
 (size_t) 3
-cell_3:1:28: warning: implicit conversion changes signedness: 'int' to 'size_type' (aka 'unsigned long') [-Wsign-conversion]
-    1 | int pega(int i) { return v[i]; }
-      |                          ~ ^
+cell_3:1:27: warning: implicit conversion changes signedness: 'int' to 'size_type' (aka 'unsigned long') [-Wsign-conversion]
+    1 | int get(int i) { return v[i]; }
+      |                         ~ ^
 error: vector[] index out of bounds
-    at pega(int) (cell_3:1:26)
+    at get(int) (cell_3:1:25)
     at cell_4:1:1
 == compiler-crash.c.repl off exit=0
 (int) 42
@@ -124,15 +124,15 @@ the block was freed
 and allocated
     at main (dangling.cpp:5:26)
 == dangling.cpp strict exit=134
-dangling.cpp:6:21: warning: local variable 'v' is later invalidated [-Wlifetime-safety-invalidation]
-    6 |     int &primeiro = v[0];
-      |                     ^
+dangling.cpp:6:18: warning: local variable 'v' is later invalidated [-Wlifetime-safety-invalidation]
+    6 |     int &first = v[0];
+      |                  ^
 dangling.cpp:8:11: note: local variable 'v' is invalidated here
     8 |         v.push_back(i);
       |         ~~^~~~~~~~~~~~
 dangling.cpp:10:18: note: later used here
-   10 |     std::cout << primeiro << "\n";
-      |                  ^~~~~~~~
+   10 |     std::cout << first << "\n";
+      |                  ^~~~~
 error: heap-use-after-free: read of 4 bytes, at the start of a freed block of 12 bytes
     at main (dangling.cpp:10:18)
 the block was freed
@@ -140,19 +140,19 @@ the block was freed
 and allocated
     at main (dangling.cpp:5:26)
 == div-zero.c off exit=134
-antes
+before
 error: division by zero
-    at media (div-zero.c:4:17)
+    at average (div-zero.c:4:16)
     at main (div-zero.c:10:20)
 == div-zero.c on exit=134
-antes
+before
 error: division by zero
-    at media (div-zero.c:4:17)
+    at average (div-zero.c:4:16)
     at main (div-zero.c:10:20)
 == div-zero.c strict exit=134
-antes
+before
 error: division by zero
-    at media (div-zero.c:4:17)
+    at average (div-zero.c:4:16)
     at main (div-zero.c:10:20)
 == double-free.c off exit=0
 == double-free.c on exit=134
@@ -164,7 +164,7 @@ and allocated
     at main (double-free.c:5:18)
 == double-free.c strict exit=134
 double-free.c:5:11: warning: implicit conversion when initializing 'char *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
-    5 |     char *nome = malloc(10);
+    5 |     char *name = malloc(10);
       |           ^      ~~~~~~~~~~
 error: double-free: free of a block of 10 bytes already freed
     at main (double-free.c:8:5)
@@ -174,10 +174,10 @@ and allocated
     at main (double-free.c:5:18)
 == fgets.c off exit=0
 == fgets.c on exit=134
-error: stack-buffer-overflow: write of up to 100 bytes by fgets, 0 bytes past the end of the variable 'nome' (10 bytes)
+error: stack-buffer-overflow: write of up to 100 bytes by fgets, 0 bytes past the end of the variable 'name' (10 bytes)
     at main (fgets.c:5:9)
 == fgets.c strict exit=134
-error: stack-buffer-overflow: write of up to 100 bytes by fgets, 0 bytes past the end of the variable 'nome' (10 bytes)
+error: stack-buffer-overflow: write of up to 100 bytes by fgets, 0 bytes past the end of the variable 'name' (10 bytes)
     at main (fgets.c:5:9)
 == float-cast.c off exit=0
 2147483647
@@ -188,12 +188,12 @@ error: 8.1e+09 is outside the range of representable values of type 'int'
 error: 8.1e+09 is outside the range of representable values of type 'int'
     at main (float-cast.c:5:13)
 == float-div-zero.c off exit=0
-media: inf
+average: inf
 == float-div-zero.c on exit=0
-media: inf
+average: inf
 == float-div-zero.c strict exit=134
 error: division by zero
-    at main (float-div-zero.c:7:32)
+    at main (float-div-zero.c:7:33)
 == free-local.c off exit=0
 == free-local.c on exit=134
 error: invalid-free: free of the address of a local variable
@@ -204,38 +204,38 @@ error: invalid-free: free of the address of a local variable
 == global-overflow.c off exit=0
 0
 == global-overflow.c on exit=134
-error: global-buffer-overflow: read of 4 bytes, 0 bytes past the end of the global 'contagem' (40 bytes)
-    at soma (global-overflow.c:8:14)
+error: global-buffer-overflow: read of 4 bytes, 0 bytes past the end of the global 'counts' (40 bytes)
+    at sum (global-overflow.c:8:14)
     at main (global-overflow.c:14:20)
 == global-overflow.c strict exit=134
-error: global-buffer-overflow: read of 4 bytes, 0 bytes past the end of the global 'contagem' (40 bytes)
-    at soma (global-overflow.c:8:14)
+error: global-buffer-overflow: read of 4 bytes, 0 bytes past the end of the global 'counts' (40 bytes)
+    at sum (global-overflow.c:8:14)
     at main (global-overflow.c:14:20)
 == heap-overflow.c off exit=0
 16
 == heap-overflow.c on exit=134
 error: heap-buffer-overflow: write of 4 bytes, 0 bytes past the end of a block of 20 bytes
-    at main (heap-overflow.c:8:22)
+    at main (heap-overflow.c:8:20)
 the block was allocated
-    at main (heap-overflow.c:6:22)
+    at main (heap-overflow.c:6:20)
 == heap-overflow.c strict exit=134
 heap-overflow.c:6:10: warning: implicit conversion when initializing 'int *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
-    6 |     int *quadrados = malloc(n * sizeof(int));
-      |          ^           ~~~~~~~~~~~~~~~~~~~~~~~
-heap-overflow.c:6:29: warning: implicit conversion changes signedness: 'int' to '__size_t' (aka 'unsigned long') [-Wsign-conversion]
-    6 |     int *quadrados = malloc(n * sizeof(int));
-      |                             ^ ~
+    6 |     int *squares = malloc(n * sizeof(int));
+      |          ^         ~~~~~~~~~~~~~~~~~~~~~~~
+heap-overflow.c:6:27: warning: implicit conversion changes signedness: 'int' to '__size_t' (aka 'unsigned long') [-Wsign-conversion]
+    6 |     int *squares = malloc(n * sizeof(int));
+      |                           ^ ~
 error: heap-buffer-overflow: write of 4 bytes, 0 bytes past the end of a block of 20 bytes
-    at main (heap-overflow.c:8:22)
+    at main (heap-overflow.c:8:20)
 the block was allocated
-    at main (heap-overflow.c:6:22)
+    at main (heap-overflow.c:6:20)
 == heap.c.repl off exit=0
 (int) 3
 (int) 17
 == heap.c.repl on exit=1
 (int) 3
 error: heap-buffer-overflow: write of 4 bytes, 0 bytes past the end of a block of 16 bytes
-    at enche (cell_3:1:63)
+    at fill (cell_3:1:62)
     at cell_5:1:1
 the block was allocated
     at cell_4:1:5
@@ -251,7 +251,7 @@ cell_4:1:3: warning: implicit conversion when assigning to 'int *' from type 'vo
     1 | v = malloc(4 * sizeof(int));
       |   ^ ~~~~~~~~~~~~~~~~~~~~~~~
 error: heap-buffer-overflow: write of 4 bytes, 0 bytes past the end of a block of 16 bytes
-    at enche (cell_3:1:63)
+    at fill (cell_3:1:62)
     at cell_5:1:1
 the block was allocated
     at cell_4:1:5
@@ -264,12 +264,12 @@ and allocated
 == in-libc.c off exit=134
 error: invalid memory access
     in strlen
-    at tamanho (in-libc.c:5:12)
+    at length (in-libc.c:5:12)
     at main (in-libc.c:9:20)
 == in-libc.c on exit=134
 error: invalid memory access
     in strlen
-    at tamanho (in-libc.c:5:12)
+    at length (in-libc.c:5:12)
     at main (in-libc.c:9:20)
 == in-libc.c strict exit=134
 in-libc.c:5:12: warning: implicit conversion changes signedness: '__size_t' (aka 'unsigned long') to 'int' [-Wsign-conversion]
@@ -277,7 +277,7 @@ in-libc.c:5:12: warning: implicit conversion changes signedness: '__size_t' (aka
       |     ~~~~~~ ^~~~~~~~~
 error: invalid memory access
     in strlen
-    at tamanho (in-libc.c:5:12)
+    at length (in-libc.c:5:12)
     at main (in-libc.c:9:20)
 == int-min.c off exit=134
 error: integer overflow in a division (INT_MIN / -1)
@@ -306,22 +306,22 @@ error: division by zero
 3
 == leak-global.c strict exit=0
 3
-leak-global.c:13:20: warning: implicit conversion when initializing 'struct no *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
-   13 |         struct no *n = malloc(sizeof(struct no));
-      |                    ^   ~~~~~~~~~~~~~~~~~~~~~~~~~
+leak-global.c:13:22: warning: implicit conversion when initializing 'struct node *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
+   13 |         struct node *n = malloc(sizeof(struct node));
+      |                      ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 == leak.c off exit=0
 6
 == leak.c on exit=0
 6
 == leak.c strict exit=1
 6
-leak.c:10:16: warning: implicit conversion when initializing 'struct no *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
-   10 |     struct no *n = malloc(sizeof(struct no));
-      |                ^   ~~~~~~~~~~~~~~~~~~~~~~~~~
+leak.c:10:18: warning: implicit conversion when initializing 'struct node *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
+   10 |     struct node *n = malloc(sizeof(struct node));
+      |                  ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 error: memory leak: 24 bytes in 3 blocks, never freed
 the blocks were allocated
-    at insere (leak.c:10:20)
-    at soma (leak.c:19:17)
+    at insert (leak.c:10:22)
+    at sum (leak.c:19:16)
     at main (leak.c:29:20)
 == leak.cpp off exit=0
 2 2
@@ -331,7 +331,7 @@ the blocks were allocated
 2 2
 error: memory leak: 80 bytes in 2 blocks, never freed
 the blocks were allocated
-    at Pilha::Pilha() (leak.cpp:9:21)
+    at Stack::Stack() (leak.cpp:9:21)
     at main (leak.cpp:20:26)
 == leaks.c.repl off exit=0
 The :leaks command needs safety on or strict.
@@ -351,54 +351,54 @@ the block was allocated
     at cell_3:1:5
 == method.cpp off exit=134
 error: division by zero
-    at Turma::media() const (method.cpp:5:37)
+    at Classroom::average() const (method.cpp:5:38)
     at main (method.cpp:10:20)
 == method.cpp on exit=134
 error: division by zero
-    at Turma::media() const (method.cpp:5:37)
+    at Classroom::average() const (method.cpp:5:38)
     at main (method.cpp:10:20)
 == method.cpp strict exit=134
 error: division by zero
-    at Turma::media() const (method.cpp:5:37)
+    at Classroom::average() const (method.cpp:5:38)
     at main (method.cpp:10:20)
 == mutual.c off exit=134
 error: stack overflow (infinite recursion?)
-    at impar (mutual.c:3:40)
-    at par (mutual.c:5:38)
+    at odd (mutual.c:3:38)
+    at even (mutual.c:5:39)
     (the 2 frames above, N times)
     at main (mutual.c:7:25)
 == mutual.c on exit=134
 error: stack overflow (infinite recursion?)
-    at impar (mutual.c:3:40)
-    at par (mutual.c:5:38)
+    at odd (mutual.c:3:38)
+    at even (mutual.c:5:39)
     (the 2 frames above, N times)
     at main (mutual.c:7:25)
 == mutual.c strict exit=134
 error: stack overflow (infinite recursion?)
-    at impar (mutual.c:3:40)
-    at par (mutual.c:5:38)
+    at odd (mutual.c:3:38)
+    at even (mutual.c:5:39)
     (the 2 frames above, N times)
     at main (mutual.c:7:25)
 == null-fn.c off exit=134
 error: call through a null function pointer
-    at aplica (null-fn.c:4:12)
+    at apply (null-fn.c:4:12)
     at main (null-fn.c:9:20)
 == null-fn.c on exit=134
 error: call through a null function pointer
-    at aplica (null-fn.c:4:12)
+    at apply (null-fn.c:4:12)
     at main (null-fn.c:9:20)
 == null-fn.c strict exit=134
 error: call through a null function pointer
-    at aplica (null-fn.c:4:12)
+    at apply (null-fn.c:4:12)
     at main (null-fn.c:9:20)
 == null.c off exit=0
 0
 == null.c on exit=134
-error: member access within null pointer of type 'struct no'
-    at main (null.c:11:27)
+error: member access within null pointer of type 'struct node'
+    at main (null.c:11:26)
 == null.c strict exit=134
-error: member access within null pointer of type 'struct no'
-    at main (null.c:11:27)
+error: member access within null pointer of type 'struct node'
+    at main (null.c:11:26)
 == optional.cpp off exit=0
 0
 == optional.cpp on exit=134
@@ -419,63 +419,33 @@ error: optional operator* called on a disengaged value
 11! = 39916800
 12! = 479001600
 error: signed integer overflow: 479001600 * 13 cannot be represented in type 'int'
-    at fatorial (overflow.c:6:15)
+    at factorial (overflow.c:6:15)
     at main (overflow.c:13:33)
 == overflow.c strict exit=134
 10! = 3628800
 11! = 39916800
 12! = 479001600
 error: signed integer overflow: 479001600 * 13 cannot be represented in type 'int'
-    at fatorial (overflow.c:6:15)
+    at factorial (overflow.c:6:15)
     at main (overflow.c:13:33)
 == recursion.c off exit=134
 error: stack overflow (infinite recursion?)
-    at fatorial (recursion.c:4:16), N times
+    at factorial (recursion.c:4:16), N times
     at main (recursion.c:8:20)
 == recursion.c on exit=134
-recursion.c:3:21: warning: all paths through this function will call itself [-Winfinite-recursion]
-    3 | int fatorial(int n) {
-      |                     ^
+recursion.c:3:22: warning: all paths through this function will call itself [-Winfinite-recursion]
+    3 | int factorial(int n) {
+      |                      ^
 error: stack overflow (infinite recursion?)
-    at fatorial (recursion.c:4:16), N times
+    at factorial (recursion.c:4:16), N times
     at main (recursion.c:8:20)
 == recursion.c strict exit=134
-recursion.c:3:21: warning: all paths through this function will call itself [-Winfinite-recursion]
-    3 | int fatorial(int n) {
-      |                     ^
+recursion.c:3:22: warning: all paths through this function will call itself [-Winfinite-recursion]
+    3 | int factorial(int n) {
+      |                      ^
 error: stack overflow (infinite recursion?)
-    at fatorial (recursion.c:4:16), N times
+    at factorial (recursion.c:4:16), N times
     at main (recursion.c:8:20)
-== regra-dos-tres.cpp off exit=0
-ana
-== regra-dos-tres.cpp on exit=134
-ana
-error: double-free: free of a block of 4 bytes already freed
-    at Nome::~Nome() (regra-dos-tres.cpp:8:15)
-    at main (regra-dos-tres.cpp:16:1)
-the block was freed
-    at Nome::~Nome() (regra-dos-tres.cpp:8:15)
-    at main (regra-dos-tres.cpp:16:1)
-and allocated
-    at Nome::Nome(char const*) (regra-dos-tres.cpp:7:33)
-    at main (regra-dos-tres.cpp:13:10)
-== regra-dos-tres.cpp strict exit=134
-ana
-regra-dos-tres.cpp:8:5: warning: definition of implicit copy constructor for 'Nome' is deprecated because it has a user-provided destructor [-Wdeprecated-copy-with-user-provided-dtor]
-    8 |     ~Nome() { delete[] texto; }
-      |     ^
-regra-dos-tres.cpp:14:14: note: in implicit copy constructor for 'Nome' first required here
-   14 |     Nome b = a;
-      |              ^
-error: double-free: free of a block of 4 bytes already freed
-    at Nome::~Nome() (regra-dos-tres.cpp:8:15)
-    at main (regra-dos-tres.cpp:16:1)
-the block was freed
-    at Nome::~Nome() (regra-dos-tres.cpp:8:15)
-    at main (regra-dos-tres.cpp:16:1)
-and allocated
-    at Nome::Nome(char const*) (regra-dos-tres.cpp:7:33)
-    at main (regra-dos-tres.cpp:13:10)
 == return.c.repl off exit=0
 (int) 3
 cell_2:1:1: error: 'return' cannot be used outside a function
@@ -524,38 +494,68 @@ cell_2:1:1: error: 'return' cannot be used outside a function
 cell_2:1:12: error: 'return' cannot be used outside a function
     1 | if (x > 1) return 2;
       |            ^
+== rule-of-three.cpp off exit=0
+ana
+== rule-of-three.cpp on exit=134
+ana
+error: double-free: free of a block of 4 bytes already freed
+    at Name::~Name() (rule-of-three.cpp:8:15)
+    at main (rule-of-three.cpp:16:1)
+the block was freed
+    at Name::~Name() (rule-of-three.cpp:8:15)
+    at main (rule-of-three.cpp:16:1)
+and allocated
+    at Name::Name(char const*) (rule-of-three.cpp:7:32)
+    at main (rule-of-three.cpp:13:10)
+== rule-of-three.cpp strict exit=134
+ana
+rule-of-three.cpp:8:5: warning: definition of implicit copy constructor for 'Name' is deprecated because it has a user-provided destructor [-Wdeprecated-copy-with-user-provided-dtor]
+    8 |     ~Name() { delete[] text; }
+      |     ^
+rule-of-three.cpp:14:14: note: in implicit copy constructor for 'Name' first required here
+   14 |     Name b = a;
+      |              ^
+error: double-free: free of a block of 4 bytes already freed
+    at Name::~Name() (rule-of-three.cpp:8:15)
+    at main (rule-of-three.cpp:16:1)
+the block was freed
+    at Name::~Name() (rule-of-three.cpp:8:15)
+    at main (rule-of-three.cpp:16:1)
+and allocated
+    at Name::Name(char const*) (rule-of-three.cpp:7:32)
+    at main (rule-of-three.cpp:13:10)
 == scanf-width.c off exit=0
 UEM
 == scanf-width.c on exit=134
 error: heap-buffer-overflow: write of up to 10 bytes by scanf, 0 bytes past the end of a block of 4 bytes
     at main (scanf-width.c:6:9)
 the block was allocated
-    at main (scanf-width.c:5:19)
+    at main (scanf-width.c:5:21)
 == scanf-width.c strict exit=134
 scanf-width.c:5:11: warning: implicit conversion when initializing 'char *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
-    5 |     char *sigla = malloc(4);
-      |           ^       ~~~~~~~~~
+    5 |     char *acronym = malloc(4);
+      |           ^         ~~~~~~~~~
 error: heap-buffer-overflow: write of up to 10 bytes by scanf, 0 bytes past the end of a block of 4 bytes
     at main (scanf-width.c:6:9)
 the block was allocated
-    at main (scanf-width.c:5:19)
+    at main (scanf-width.c:5:21)
 == scanf.c off exit=134
-Nome e idade: Maximiliano tem 20 anos
+Name and age: Maximiliano is 20 years old
 error: exit with invalid exit status outside of [0..126)
 == scanf.c on exit=134
-Nome e idade: error: stack-buffer-overflow: write of 12 bytes by scanf, 0 bytes past the end of the variable 'nome' (8 bytes)
+Name and age: error: stack-buffer-overflow: write of 12 bytes by scanf, 0 bytes past the end of the variable 'name' (8 bytes)
     at main (scanf.c:7:9)
 == scanf.c strict exit=134
-Nome e idade: error: stack-buffer-overflow: write of 12 bytes by scanf, 0 bytes past the end of the variable 'nome' (8 bytes)
+Name and age: error: stack-buffer-overflow: write of 12 bytes by scanf, 0 bytes past the end of the variable 'name' (8 bytes)
     at main (scanf.c:7:9)
 == shift.c off exit=0
 1
 == shift.c on exit=134
 error: shift exponent 32 is too large for 32-bit type 'int'
-    at main (shift.c:5:26)
+    at main (shift.c:5:23)
 == shift.c strict exit=134
 error: shift exponent 32 is too large for 32-bit type 'int'
-    at main (shift.c:5:26)
+    at main (shift.c:5:23)
 == sort-cmp.cpp off exit=0
 1 2 3 3 3 5 8 9 
 == sort-cmp.cpp on exit=0
@@ -566,12 +566,12 @@ error: Comparator does not induce a strict weak ordering
 == stack-overflow.c off exit=0
 0
 == stack-overflow.c on exit=134
-error: stack-buffer-overflow: write of 4 bytes, 0 bytes past the end of the variable 'notas' (16 bytes)
-    at preenche (stack-overflow.c:5:14)
+error: stack-buffer-overflow: write of 4 bytes, 0 bytes past the end of the variable 'grades' (16 bytes)
+    at fill (stack-overflow.c:5:14)
     at main (stack-overflow.c:11:5)
 == stack-overflow.c strict exit=134
-error: stack-buffer-overflow: write of 4 bytes, 0 bytes past the end of the variable 'notas' (16 bytes)
-    at preenche (stack-overflow.c:5:14)
+error: stack-buffer-overflow: write of 4 bytes, 0 bytes past the end of the variable 'grades' (16 bytes)
+    at fill (stack-overflow.c:5:14)
     at main (stack-overflow.c:11:5)
 == static-stmt.c.repl off exit=0
 (int) 3
@@ -607,20 +607,20 @@ cell_2:1:31: error: 'static' cannot be used outside a function
 maria
 == strcpy.c on exit=134
 error: heap-buffer-overflow: write of 6 bytes by strcpy, 0 bytes past the end of a block of 5 bytes
-    at copia (strcpy.c:7:5)
+    at copy (strcpy.c:7:5)
     at main (strcpy.c:12:18)
 the block was allocated
-    at copia (strcpy.c:6:15)
+    at copy (strcpy.c:6:15)
     at main (strcpy.c:12:18)
 == strcpy.c strict exit=134
 strcpy.c:6:11: warning: implicit conversion when initializing 'char *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
     6 |     char *c = malloc(strlen(s));
       |           ^   ~~~~~~~~~~~~~~~~~
 error: heap-buffer-overflow: write of 6 bytes by strcpy, 0 bytes past the end of a block of 5 bytes
-    at copia (strcpy.c:7:5)
+    at copy (strcpy.c:7:5)
     at main (strcpy.c:12:18)
 the block was allocated
-    at copia (strcpy.c:6:15)
+    at copy (strcpy.c:6:15)
     at main (strcpy.c:12:18)
 == string-index.cpp off exit=0
 abc  
@@ -635,32 +635,32 @@ abc error: string index out of bounds
 == truncation.c on exit=0
 -15536
 == truncation.c strict exit=134
-truncation.c:5:23: warning: implicit conversion loses integer precision: 'int' to 'short' [-Wimplicit-int-conversion]
-    5 |     short populacao = habitantes;
-      |           ~~~~~~~~~   ^~~~~~~~~~
+truncation.c:5:24: warning: implicit conversion loses integer precision: 'int' to 'short' [-Wimplicit-int-conversion]
+    5 |     short population = inhabitants;
+      |           ~~~~~~~~~~   ^~~~~~~~~~~
 error: implicit conversion from type 'int' of value 50000 (32-bit, signed) to type 'short' changed the value to -15536 (16-bit, signed)
-    at main (truncation.c:5:23)
+    at main (truncation.c:5:24)
 == uninit-count.c off exit=0
-candidato 0: 1 votos
-candidato 1: 1 votos
-candidato 2: contagem impossível
+candidate 0: 1 votes
+candidate 1: 1 votes
+candidate 2: impossible count
 == uninit-count.c on exit=0
-candidato 0: contagem impossível
-candidato 1: contagem impossível
-candidato 2: contagem impossível
+candidate 0: impossible count
+candidate 1: impossible count
+candidate 2: impossible count
 == uninit-count.c strict exit=0
-candidato 0: contagem impossível
-candidato 1: contagem impossível
-candidato 2: contagem impossível
+candidate 0: impossible count
+candidate 1: impossible count
+candidate 2: impossible count
 == uninit-pointer.c off exit=0
 42
 == uninit-pointer.c on exit=134
 uninit-pointer.c:9:9: warning: variable 'p' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
     9 |     if (argc > 5) {
       |         ^~~~~~~~
-uninit-pointer.c:12:8: note: uninitialized use occurs here
-   12 |     le(p);
-      |        ^
+uninit-pointer.c:12:14: note: uninitialized use occurs here
+   12 |     read_int(p);
+      |              ^
 uninit-pointer.c:9:5: note: remove the 'if' if its condition is always true
     9 |     if (argc > 5) {
       |     ^~~~~~~~~~~~~
@@ -669,7 +669,7 @@ uninit-pointer.c:8:11: note: initialize the variable 'p' to silence this warning
       |           ^
       |            = NULL
 error: store to uninitialized pointer 0xffffffff of type 'int'
-    at le (uninit-pointer.c:4:8)
+    at read_int (uninit-pointer.c:4:8)
     at main (uninit-pointer.c:12:5)
 == uninit-pointer.c strict exit=134
 uninit-pointer.c:7:26: warning: unused parameter 'argv' [-Wunused-parameter]
@@ -678,9 +678,9 @@ uninit-pointer.c:7:26: warning: unused parameter 'argv' [-Wunused-parameter]
 uninit-pointer.c:9:9: warning: variable 'p' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
     9 |     if (argc > 5) {
       |         ^~~~~~~~
-uninit-pointer.c:12:8: note: uninitialized use occurs here
-   12 |     le(p);
-      |        ^
+uninit-pointer.c:12:14: note: uninitialized use occurs here
+   12 |     read_int(p);
+      |              ^
 uninit-pointer.c:9:5: note: remove the 'if' if its condition is always true
     9 |     if (argc > 5) {
       |     ^~~~~~~~~~~~~
@@ -689,97 +689,97 @@ uninit-pointer.c:8:11: note: initialize the variable 'p' to silence this warning
       |           ^
       |            = NULL
 error: store to uninitialized pointer 0xffffffff of type 'int'
-    at le (uninit-pointer.c:4:8)
+    at read_int (uninit-pointer.c:4:8)
     at main (uninit-pointer.c:12:5)
 == uninit-string.c off exit=0
  
 == uninit-string.c on exit=134
-uninit-string.c:5:9: warning: variable 'nome' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+uninit-string.c:5:9: warning: variable 'name' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
     5 |     if (argc > 5) {
       |         ^~~~~~~~
 uninit-string.c:8:20: note: uninitialized use occurs here
-    8 |     printf("%c\n", nome[0]);
+    8 |     printf("%c\n", name[0]);
       |                    ^~~~
 uninit-string.c:5:5: note: remove the 'if' if its condition is always true
     5 |     if (argc > 5) {
       |     ^~~~~~~~~~~~~
-uninit-string.c:4:15: note: initialize the variable 'nome' to silence this warning
-    4 |     char *nome;
+uninit-string.c:4:15: note: initialize the variable 'name' to silence this warning
+    4 |     char *name;
       |               ^
       |                = NULL
 error: invalid memory access through an uninitialized pointer
     in main
 == uninit-string.c strict exit=134
-uninit-string.c:5:9: warning: variable 'nome' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+uninit-string.c:5:9: warning: variable 'name' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
     5 |     if (argc > 5) {
       |         ^~~~~~~~
 uninit-string.c:8:20: note: uninitialized use occurs here
-    8 |     printf("%c\n", nome[0]);
+    8 |     printf("%c\n", name[0]);
       |                    ^~~~
 uninit-string.c:5:5: note: remove the 'if' if its condition is always true
     5 |     if (argc > 5) {
       |     ^~~~~~~~~~~~~
-uninit-string.c:4:15: note: initialize the variable 'nome' to silence this warning
-    4 |     char *nome;
+uninit-string.c:4:15: note: initialize the variable 'name' to silence this warning
+    4 |     char *name;
       |               ^
       |                = NULL
 error: invalid memory access through an uninitialized pointer
     in main
 == unsigned.c off exit=0
-saldo: 4294967286
+balance: 4294967286
 == unsigned.c on exit=0
-saldo: 4294967286
+balance: 4294967286
 == unsigned.c strict exit=134
 error: unsigned integer overflow: 10 - 20 cannot be represented in type 'unsigned int'
-    at main (unsigned.c:5:19)
+    at main (unsigned.c:5:23)
 == unterminated.c off exit=0
-achou
+found
 == unterminated.c on exit=134
 unterminated.c:5:20: warning: initializer-string for character array is too long, array size is 5 but initializer has size 6 (including the null terminating character); did you mean to use the 'nonstring' attribute? [-Wunterminated-string-initialization]
-    5 |     char nome[5] = "Maria";
+    5 |     char name[5] = "Maria";
       |                    ^~~~~~~
-error: stack-buffer-overflow: read of 6 bytes by strcmp, 0 bytes past the end of the variable 'nome' (5 bytes)
+error: stack-buffer-overflow: read of 6 bytes by strcmp, 0 bytes past the end of the variable 'name' (5 bytes)
     at main (unterminated.c:6:9)
 == unterminated.c strict exit=134
 unterminated.c:5:20: warning: initializer-string for character array is too long, array size is 5 but initializer has size 6 (including the null terminating character); did you mean to use the 'nonstring' attribute? [-Wunterminated-string-initialization]
-    5 |     char nome[5] = "Maria";
+    5 |     char name[5] = "Maria";
       |                    ^~~~~~~
 unterminated.c:5:20: warning: initializer-string for character array is too long for C++, array size is 5 but initializer has size 6 (including the null terminating character) [-Wc++-unterminated-string-initialization]
-    5 |     char nome[5] = "Maria";
+    5 |     char name[5] = "Maria";
       |                    ^~~~~~~
-error: stack-buffer-overflow: read of 6 bytes by strcmp, 0 bytes past the end of the variable 'nome' (5 bytes)
+error: stack-buffer-overflow: read of 6 bytes by strcmp, 0 bytes past the end of the variable 'name' (5 bytes)
     at main (unterminated.c:6:9)
 == unterminated.cpp off exit=0
-Universidade: UEM
+University: UEM
 == unterminated.cpp on exit=134
-Universidade: error: stack-buffer-overflow: read of 4 bytes by strlen, 0 bytes past the end of the variable 'sigla' (3 bytes)
-    at main (unterminated.cpp:5:35)
+University: error: stack-buffer-overflow: read of 4 bytes by strlen, 0 bytes past the end of the variable 'acronym' (3 bytes)
+    at main (unterminated.cpp:5:33)
 == unterminated.cpp strict exit=134
-Universidade: error: stack-buffer-overflow: read of 4 bytes by strlen, 0 bytes past the end of the variable 'sigla' (3 bytes)
-    at main (unterminated.cpp:5:35)
+University: error: stack-buffer-overflow: read of 4 bytes by strlen, 0 bytes past the end of the variable 'acronym' (3 bytes)
+    at main (unterminated.cpp:5:33)
 == use-after-free.c off exit=0
 ok
 == use-after-free.c on exit=134
 error: heap-use-after-free: read of 4 bytes, 4 bytes into a freed block of 8 bytes
-    at libera (use-after-free.c:12:24)
+    at free_list (use-after-free.c:12:22)
     at main (use-after-free.c:24:5)
 the block was freed
-    at libera (use-after-free.c:11:9)
+    at free_list (use-after-free.c:11:9)
     at main (use-after-free.c:24:5)
 and allocated
-    at main (use-after-free.c:19:24)
+    at main (use-after-free.c:19:26)
 == use-after-free.c strict exit=134
-use-after-free.c:19:20: warning: implicit conversion when initializing 'struct no *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
-   19 |         struct no *n = malloc(sizeof(struct no));
-      |                    ^   ~~~~~~~~~~~~~~~~~~~~~~~~~
+use-after-free.c:19:22: warning: implicit conversion when initializing 'struct node *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
+   19 |         struct node *n = malloc(sizeof(struct node));
+      |                      ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 error: heap-use-after-free: read of 4 bytes, 4 bytes into a freed block of 8 bytes
-    at libera (use-after-free.c:12:24)
+    at free_list (use-after-free.c:12:22)
     at main (use-after-free.c:24:5)
 the block was freed
-    at libera (use-after-free.c:11:9)
+    at free_list (use-after-free.c:11:9)
     at main (use-after-free.c:24:5)
 and allocated
-    at main (use-after-free.c:19:24)
+    at main (use-after-free.c:19:26)
 == use-after-scope.c off exit=0
 10
 == use-after-scope.c on exit=134

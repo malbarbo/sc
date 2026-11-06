@@ -3,10 +3,10 @@
 
 int main(void) {
     int n = 5;
-    int *quadrados = malloc(n * sizeof(int));
+    int *squares = malloc(n * sizeof(int));
     for (int i = 0; i <= n; i++) {
-        quadrados[i] = i * i;
+        squares[i] = i * i;
     }
-    printf("%d\n", quadrados[n - 1]);
-    free(quadrados);
+    printf("%d\n", squares[n - 1]);
+    free(squares);
 }

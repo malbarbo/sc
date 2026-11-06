@@ -1,10 +1,10 @@
 #include <stdio.h>
 
 int main(void) {
-    int *maior;
+    int *largest;
     {
         int x = 10;
-        maior = &x;
+        largest = &x;
     }
-    printf("%d\n", *maior);
+    printf("%d\n", *largest);
 }

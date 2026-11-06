@@ -1,7 +1,7 @@
 // entry 1: a vector that lives across entries and a class with inline virtuals
 #include <vector>
 #include <string>
-std::vector<std::string> v{"um"};
+std::vector<std::string> v{"one"};
 struct Base { virtual ~Base() {} virtual int id() const { return 1; } };
 struct Der : Base { int id() const override { return 2; } };
 Base *obj = new Der;

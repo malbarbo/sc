@@ -1,4 +1,4 @@
 #!/bin/sh
-# sc inside sc.wasm (sc-rs.mjs): SC=test/node/sc-rs for test/aluno.py and
+# sc inside sc.wasm (sc-rs.mjs): SC=test/node/sc-rs for test/student.py and
 # test/checks.py; SC_NODE_FLAGS are node's
 exec node --no-warnings $SC_NODE_FLAGS "$(dirname "$(realpath "$0")")/sc-rs.mjs" "$@"

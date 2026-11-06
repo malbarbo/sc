@@ -10,7 +10,7 @@
 #include <vector>
 std::expected<int, std::string> parse(const std::string &s) {
   if (s.empty() || !std::ranges::all_of(s, [](char c) { return c >= '0' && c <= '9'; }))
-    return std::unexpected("não é número: '" + s + "'");
+    return std::unexpected("not a number: '" + s + "'");
   return std::stoi(s);
 }
 struct Counter {
@@ -23,7 +23,7 @@ struct Grid {
   int &operator[](int r, int c) { return cells[r][c]; }
 };
 template <class... Ts> auto first(Ts... xs) { return xs...[0]; }
-void legacy(int) = delete("use a versão nova");
+void legacy(int) = delete("use the new version");
 struct Twice { static int operator()(int x) { return 2 * x; } };
 constexpr int compile_or_run(int x) {
   if consteval { return x * 10; } else { return x; }
@@ -31,7 +31,7 @@ constexpr int compile_or_run(int x) {
 int main() {
   for (auto s : {"12", "x1", ""}) {
     auto r = parse(s);
-    if (r) std::println("ok {}", *r); else std::println("erro: {}", r.error());
+    if (r) std::println("ok {}", *r); else std::println("error: {}", r.error());
   }
   auto r = parse("7").and_then([](int x) -> std::expected<int, std::string> { return x * 6; });
   std::println("and_then: {}", r.value_or(-1));

@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-void le(int *n) {
+void read_int(int *n) {
     *n = 42;
 }
 
@@ -9,6 +9,6 @@ int main(int argc, char *argv[]) {
     if (argc > 5) {
         p = NULL;
     }
-    le(p);
+    read_int(p);
     printf("%d\n", *p);
 }

@@ -1,26 +1,26 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-struct no {
-    int valor;
-    struct no *prox;
+struct node {
+    int value;
+    struct node *next;
 };
 
-void libera(struct no *lista) {
-    while (lista != NULL) {
-        free(lista);
-        lista = lista->prox;
+void free_list(struct node *list) {
+    while (list != NULL) {
+        free(list);
+        list = list->next;
     }
 }
 
 int main(void) {
-    struct no *lista = NULL;
+    struct node *list = NULL;
     for (int i = 0; i < 3; i++) {
-        struct no *n = malloc(sizeof(struct no));
-        n->valor = i;
-        n->prox = lista;
-        lista = n;
+        struct node *n = malloc(sizeof(struct node));
+        n->value = i;
+        n->next = list;
+        list = n;
     }
-    libera(lista);
+    free_list(list);
     printf("ok\n");
 }
