@@ -4,8 +4,8 @@ The programs of test/samples, test/cxx and test/mod are cut into one cell
 per top-level declaration (a preprocessor directive, a declaration ending
 in ';', a function or namespace body), and the output of the cells must be
 the one of the program compiled whole (pic-, from the one-shot sc.wasm's
-base, build/res/base). Phase 0 of PLANO-REPL.md chose, with these cells,
-one session over chained PCHs (ANALISE.md §22).
+base, build/res/base). Phase 0 of docs/plan-repl.md chose, with these cells,
+one session over chained PCHs (NOTES.md §22).
 """
 import os, re, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -19,7 +19,7 @@ SR = f'{B}/sysroot'
 LIB = f'{SR}/lib/wasm32-wasip1'
 SCLOAD = os.environ.get('SCLOAD', f'{B}/cargo/release/scload')  # test/node/scload: the JS loader; scload-rs, sc.wasm's
 BASE = f'{B}/res/base'
-# on V8, with the JS loader (test/node/scload, PLANO-REPL.md §5.5) or sc.wasm's
+# on V8, with the JS loader (test/node/scload, docs/plan-repl.md §5.5) or sc.wasm's
 # (test/node/scload-rs), the programs whose trap V8 says less of than wasmtime
 JS = {
     'ct-00187': 'a call through a null slot: V8 says "null function or function signature mismatch",'

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What the REPL's session calls of what the cuts remove, PLANO-REPL.md
+"""What the REPL's session calls of what the cuts remove, docs/plan-repl.md
 phase 4: rewrites cuts/symbols.session.used (demangled names, which
 scripts/link.py keeps).
 

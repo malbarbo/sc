@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One bug per program (PLANO-VERIFICACOES.md §9): what sc (make repl) says
+"""One bug per program (docs/plan-checks.md §9): what sc (make repl) says
 of each program in test/checks at each level of --safety must be what
 test/checks/expected.txt says: the output, the diagnostics and the exit
 status. A NAME.c or NAME.cpp runs as `sc NAME`, with NAME.c.in or
@@ -34,7 +34,7 @@ def one(job):
     r = subprocess.run(cmd, cwd=D, input=stdin, capture_output=True, timeout=120, env={'NO_COLOR': '1'})
     out = (r.stdout + r.stderr).decode(errors='replace')
     # how deep a recursion overflows moves with the native stack the host
-    # takes (rustc, wasmtime, the profile): ANALISE.md §49
+    # takes (rustc, wasmtime, the profile): NOTES.md §49
     out = re.sub(r'^(    (?:at .*|\(the \d+ frames above)), \d+ times', r'\1, N times', out, flags=re.M)
     return f'== {name} {level} exit={r.returncode}\n{out}'
 

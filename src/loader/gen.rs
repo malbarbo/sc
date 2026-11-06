@@ -1,4 +1,4 @@
-//! The modules the loader makes for itself (ANALISE.md §63): the world (the
+//! The modules the loader makes for itself (NOTES.md §63): the world (the
 //! memory, the table and the stack pointer of all modules, with functions
 //! that change them), the stubs of functions not defined yet, a tag, a
 //! module that sets globals, and the one that calls a function and catches

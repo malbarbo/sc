@@ -4,9 +4,9 @@ wasm32-wasip1 (C gnu23, C++ gnu++26, with exceptions and setjmp/longjmp) and
 the libraries a shared object is linked with. The paths are the engine's
 view: the sysroot at /sysroot, clang's resource directory at /res and libc++'s
 std module at /m/std.pcm; real() puts the build's in their place, or the
-pack's (/sc, what sc embeds: PLANO-REPL.md §5.4).
+pack's (/sc, what sc embeds: docs/plan-repl.md §5.4).
 
-The level of --safety (PLANO-VERIFICACOES.md §3, §4) adds to these flags the
+The level of --safety (docs/plan-checks.md §3, §4) adds to these flags the
 warnings, and the warnings that are errors, of what the student sees.
 
 usage: flags.py [c++|gnu17] [pic] [pcm|mod] [off|on|strict] [g]
@@ -36,7 +36,7 @@ CXXFLAGS = FLAGS[:FLAGS.index('/res/include') - 1] + [
 MODFILE = ['-fmodule-file=std=/m/std.pcm']
 
 
-# PLANO-VERIFICACOES.md §4.1, E: undefined behaviour for certain, or an error
+# docs/plan-checks.md §4.1, E: undefined behaviour for certain, or an error
 # with no use, which no correct program of the measures set off; an error
 # from the level on. -Werror=G is also the error of G's subgroups: the
 # second list keeps those that are a warning
@@ -92,7 +92,7 @@ U_STRICT = ['float-divide-by-zero', 'unsigned-integer-overflow', 'unsigned-shift
 # where they stay off: the sysroot's headers (rt/ignorelist.txt)
 IGNORELIST = '/sysroot/share/sc/ignorelist.txt'
 # §5.3: libc++'s hardening; off: none (the sysroot is built with fast); strict:
-# debug, which also checks the comparators of the algorithms (ANALISE.md §38)
+# debug, which also checks the comparators of the algorithms (NOTES.md §38)
 HARDENING = {'off': 'NONE', 'on': 'EXTENSIVE', 'strict': 'DEBUG'}
 # §5.2: ASan's shadow memory is at SHADOW, after the stack: 512 MiB, the
 # shadow of the 4 GiB, and the program after it. Not a power of 2, which

@@ -14,7 +14,7 @@
 //! program exits through libc's `exit`.
 //!
 //! The loader asks the wasm runtime for little ([`Runtime`]: instantiate a
-//! module, an export, a call, the memory; ANALISE.md §63), so that it runs
+//! module, an export, a call, the memory; NOTES.md §63), so that it runs
 //! on wasmtime (`native::Wasmtime`) and inside sc.wasm (`host::Host`). The rest comes
 //! from modules it makes ([`gen`]): the world has the memory, the function
 //! table and the stack pointer that all modules share, and the functions
@@ -27,7 +27,7 @@
 //! undefined symbol, a function a later entry defines), to a stub that calls
 //! through the symbol's table slot. Each module is instantiated once, with
 //! its GOT imports at the values the bytes give ([`Loader::load_bytes`],
-//! ANALISE.md §60). An exception tag is one for all
+//! NOTES.md §60). An exception tag is one for all
 //! modules: the first module that defines it, or the loader when a module
 //! imports it first, so a C++ exception or a longjmp crosses modules.
 //!
@@ -832,7 +832,7 @@ impl<R: Runtime> Loader<R> {
     /// entry); otherwise the first definition wins.
     ///
     /// Each module is instantiated once, with every import at its value
-    /// (ANALISE.md §60): the bytes give the layout, the data symbols and
+    /// (NOTES.md §60): the bytes give the layout, the data symbols and
     /// the functions the group defines, whose slots are filled once their
     /// module is instantiated. Only the GOT.mem of a variable not defined
     /// yet is set later, when a module defines it. If a module fails to

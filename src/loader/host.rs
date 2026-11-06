@@ -1,5 +1,5 @@
 //! The loader's [`Runtime`] inside sc.wasm: the primitives are imports of
-//! the host, `env.wasm_*` (ANALISE.md §64). test/node/wasm.mjs gives them on
+//! the host, `env.wasm_*` (NOTES.md §64). test/node/wasm.mjs gives them on
 //! Node, with the JS API of WebAssembly.
 //!
 //! - `wasm_instantiate(bytes, len, imports, n, out) -> status`: `imports`

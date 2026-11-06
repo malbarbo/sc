@@ -1,4 +1,4 @@
-/* The engine's API (PLANO-REPL.md §2): sc.wasm's exports. Only scalars and
+/* The engine's API (docs/plan-repl.md §2): sc.wasm's exports. Only scalars and
    pointers. The Rust side takes the types and declarations from here
    through bindgen (src/engine).
 
@@ -6,7 +6,7 @@
    same session. The engine is not thread safe: one thread uses it. A fatal
    error in the compiler ends the module (a trap or an exit): with
    SC_SNAPSHOT, sc_session_recover puts the session back as before the cell
-   (ANALISE.md §65). */
+   (NOTES.md §65). */
 #ifndef SC_H
 #define SC_H
 
@@ -101,7 +101,7 @@ const unsigned char *sc_result_ptr(sc_session *s, int part);
 unsigned sc_result_len(sc_session *s, int part);
 
 /* The files a session reads in place of the disk: those under root (the
-   pack inside sc.wasm, PLANO-REPL.md §5.4), for its clang and its wasm-ld.
+   pack inside sc.wasm, docs/plan-repl.md §5.4), for its clang and its wasm-ld.
    The rest are on the disk, and so is all without them and in the one-shot
    engine. sc.wasm does not export it: its host turns its own pack on with
    sc_pack (sc_pack.cpp). A path

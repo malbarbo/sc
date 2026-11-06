@@ -1,4 +1,4 @@
-// The host's primitives for wasm (ANALISE.md §64) over the JS API of
+// The host's primitives for wasm (NOTES.md §64) over the JS API of
 // WebAssembly: the imports `env.wasm_*` of a module that loads others, as
 // sc.wasm's loader does (src/loader/host.rs, which says what each does).
 // Nothing here knows sc: a host such as simplecode's gives the same.

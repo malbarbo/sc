@@ -105,7 +105,7 @@ impl Lang {
     }
 }
 
-/// How much the compiler checks (PLANO-VERIFICACOES.md §3): `off` is a
+/// How much the compiler checks (docs/plan-checks.md §3): `off` is a
 /// common compiler's, `on` the default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Safety {

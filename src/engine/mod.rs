@@ -1,9 +1,9 @@
-//! The engine's API (`engine/sc.h`, PLANO-REPL.md §2) for Rust.
+//! The engine's API (`engine/sc.h`, docs/plan-repl.md §2) for Rust.
 //!
 //! [`sys`] is what bindgen generates from the header: the types and the raw
 //! functions. [`Repl`] is the log that replays a lost session over a
 //! [`Compiler`]: natively (the `engine` feature), [`Guest`], sc.wasm's
-//! session on wasmtime (ANALISE.md §68).
+//! session on wasmtime (NOTES.md §68).
 //!
 //! Inside sc.wasm (without the `native` feature), [`Session`] is a safe API
 //! over the raw functions of the engine linked in:
@@ -29,7 +29,7 @@ pub enum Status {
     /// Done.
     Ok,
     /// An error in the student's code. From a `Session` without the copy,
-    /// which keeps part of a failed cell (PLANO-REPL.md §3.3); from a
+    /// which keeps part of a failed cell (docs/plan-repl.md §3.3); from a
     /// [`Guest`], the session is as before the cell.
     Error,
     /// The session must be recreated and its log replayed.

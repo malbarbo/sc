@@ -103,7 +103,7 @@ static int cell(sc_session *s, const char *src, unsigned len, int mode) {
 }
 
 #ifdef __wasm__
-// The cell that fails, without fork (ANALISE.md §65): with SC_SNAPSHOT in
+// The cell that fails, without fork (NOTES.md §65): with SC_SNAPSHOT in
 // the environment, the session copies the linear memory before a cell and
 // puts it back if the cell fails or is a type, as the fork of serve
 // (src/engine/session.rs) and test/node/engine.mjs do. Only the engine runs

@@ -1,4 +1,4 @@
-// libsc_rt: the handlers of UBSan's checks (PLANO-VERIFICACOES.md §5.1) and
+// libsc_rt: the handlers of UBSan's checks (docs/plan-checks.md §5.1) and
 // of libc++'s hardening (§5.3), for the code sc compiles at the levels on and
 // strict of --safety. A report says what went wrong, in UBSan's words, and
 // stops the program with a trap: where it went wrong are the frames the host

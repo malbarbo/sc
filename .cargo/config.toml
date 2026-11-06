@@ -4,7 +4,7 @@ target-dir = "build/cargo"
 
 # on Windows, the C runtime in sc.exe: without it, sc.exe needs
 # VCRUNTIME140.dll, which Windows without the VC++ Redistributable does not
-# have (ANALISE.md §70); the UCRT comes with Windows 10
+# have (NOTES.md §70); the UCRT comes with Windows 10
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
 

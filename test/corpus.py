@@ -19,13 +19,13 @@ The programs are also compiled with -fPIC, linked as shared objects and run
 by the REPL's loader, build/cargo/release/scload (pic-), and test/repl has
 sequences of REPL inputs, each loaded on top of the ones before (repl-).
 The programs run again at each level of --safety but off (<name>-on,
-<name>-strict; PLANO-VERIFICACOES.md §9): those that have undefined
+<name>-strict; docs/plan-checks.md §9): those that have undefined
 behaviour on purpose (c-testsuite, the gcc torture tests) with the errors of
 the levels as warnings. Their checks at run time take libsc_rt, and the
 programs in test/mod a std module of their level (std-pcm-on...): it keeps
 the macros it was built with, libc++'s hardening among them. As a REPL
 session does, pic-, repl- and the levels compile with -gline-tables-only:
-the debug info, for where a trap is (ANALISE.md §31, §33).
+the debug info, for where a trap is (NOTES.md §31, §33).
 """
 from corpuslib import norm_hash, diff, sources, source_name
 import hashlib, re, json, os, subprocess, sys, glob
@@ -119,7 +119,7 @@ def ld_so(n, cxx):
 
 def run(cmd):
     # a few programs under ASan (gcc torture's VLAs) take more than 20 s when
-    # the base is made with 48 jobs (ANALISE.md §51), and 20040811-1-strict
+    # the base is made with 48 jobs (NOTES.md §51), and 20040811-1-strict
     # more than 60 s on a loaded machine (§70); none loops for ever
     try:
         x = subprocess.run(cmd, input=b'linha1\nlinha2\n', capture_output=True, timeout=300)

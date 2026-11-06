@@ -1,4 +1,4 @@
-//! Ctrl-C stops a loop of the REPL (PLANO-REPL.md §5.3, step 5).
+//! Ctrl-C stops a loop of the REPL (docs/plan-repl.md §5.3, step 5).
 //! Unix only: the signal is sent with pthread_kill.
 #![cfg(unix)]
 

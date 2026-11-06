@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Ctrl-C in sc's REPL, in a terminal (a pty, TERM=xterm: with TERM=dumb
-rustyline leaves raw mode out), ANALISE.md §70: during the compile Enter
+rustyline leaves raw mode out), NOTES.md §70: during the compile Enter
 does, twice in a row, with Ctrl-\\ and Ctrl-Z before it (which do nothing),
 at the prompt, and in the student's code. After each, the session goes on.
 

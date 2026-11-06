@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 2 of PLANO-REPL.md: the programs of the corpus as REPL cells, through
+"""Phase 2 of docs/plan-repl.md: the programs of the corpus as REPL cells, through
 sc's session (sc --replay, src/bin/sc/main.rs).
 
 usage: split.py [<engine> [<outdir>]]   (build/sc, build/res/split)
@@ -31,7 +31,7 @@ ENG = os.path.realpath(sys.argv[1] if len(sys.argv) > 1 else f'{B}/sc')
 LIB = f'{B}/sysroot/lib/wasm32-wasip1'
 OUT = os.path.realpath(sys.argv[2] if len(sys.argv) > 2 else f'{B}/res/split')
 G = 'gcc-ts_gcc_testsuite_gcc.c-torture_execute_'
-# where cells cannot be the program (ANALISE.md §24)
+# where cells cannot be the program (NOTES.md §24)
 KNOWN = {
     'ct-00152': '#line in one cell does not reach the next: each cell is a file',
     G + '20050215-1': 'a directive inside a declaration: the splitter cuts the declaration',
@@ -43,7 +43,7 @@ KNOWN = {
 KNOWN.update(JS)
 
 def flags(cxx, gnu17, mod):
-    # the pack sc embeds (PLANO-REPL.md §5.4), but with std.pcm, which sc
+    # the pack sc embeds (docs/plan-repl.md §5.4), but with std.pcm, which sc
     # --cc1 builds from the disk
     root = B if mod else PACK
     return session(cxx, root, gnu17, mod, f'{OUT}/std.pcm')

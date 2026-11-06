@@ -39,7 +39,7 @@ index fd7fcb13f..bcda274f8 100644
  std::optional<MemoryBufferRef> readFile(StringRef path);
  
 +// The bytes of a file the linker reads in place of the disk, which live until
-+// the process ends; nothing for the rest (sc, PLANO-REPL.md §5.4).
++// the process ends; nothing for the rest (sc, docs/plan-repl.md §5.4).
 +extern std::optional<StringRef> (*fileHook)(StringRef path);
 +
  std::string replaceThinLTOSuffix(StringRef path);
@@ -84,7 +84,7 @@ index cd32ecffb..4af0a1027 100644
  void writeResult();
  
 +// Takes the output in place of the file "-" names, which goes to stdout
-+// without it (sc, PLANO-REPL.md §5.5).
++// without it (sc, docs/plan-repl.md §5.5).
 +extern void (*outputHook)(llvm::StringRef bytes);
 +
  } // namespace lld::wasm

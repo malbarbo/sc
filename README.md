@@ -41,7 +41,7 @@ for the library (`bench/cc.mjs`).
 `sc.wasm` in it, compiled for wasmtime and compressed (20 MB). Its compiler
 is `sc.wasm`'s session in the same process, as in the browser: a cell that
 fails is undone by the copy of the memory the session takes, and Ctrl-C,
-the timeout and the memory limit are wasmtime's (`ANALISE.md` §68). Until
+the timeout and the memory limit are wasmtime's (`NOTES.md` §68). Until
 then the engine was also built natively, and the compiler was a child
 process that forked before each cell.
 
@@ -59,11 +59,11 @@ sc.wasm ld -shared --experimental-pic --unresolved-symbols=import-dynamic in1.o 
 scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if any
 ```
 
-`ANALISE.md` (Portuguese) records how the build was chosen and measured.
+`NOTES.md` (Portuguese) records how the build was chosen and measured.
 
 ## Layout
 
-- `engine/` is the code of the engine. `sc.h` is its C API (`PLANO-REPL.md`
+- `engine/` is the code of the engine. `sc.h` is its C API (`docs/plan-repl.md`
   §2). `sc_main.cpp` dispatches `-cc1` and `ld` (`sc_main`), and
   `sc_entry.cpp` is the executables' `main`. `sc_inv.cpp` builds clang's invocation in code rather than through the
   cc1 option parser. `sc_backend.cpp` replaces clang's `BackendUtil` with the
@@ -79,11 +79,11 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   its `sc_files`: the pack in the module, a squashfs without compression
   (`scripts/pack.py`) that squashfuse's library reads.
 - `Cargo.toml`, `build.rs` and `src/` are the Rust crate `sc`
-  (`ANALISE.md` §51). `cargo build --release` makes
+  (`NOTES.md` §51). `cargo build --release` makes
   `build/cargo/release/sc` and `scload`: `build.rs` runs `make sc-deps`
   (what `sc` embeds). `sc` embeds `build/sc.wasm`, compiled by wasmtime
   and compressed with zstd, and a squashfs `build.rs` writes
-  (`PLANO-REPL.md` §5.4) with the session's arguments and the libraries
+  (`docs/plan-repl.md` §5.4) with the session's arguments and the libraries
   the loader loads, each with its `.cwasm`, which the loader takes in
   place of compiling it (`src/bin/sc/pack.rs`). The session's headers
   and libraries are in `sc.wasm`'s own pack. Installing `sc` is copying
@@ -94,7 +94,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   - `src/engine/` is bindgen over `engine/sc.h`, `Repl` (the log, which
     replays a lost session) over a `Compiler`, and, with the `engine`
     feature (the default), `Guest`: `sc.wasm`'s session on wasmtime, the
-    compiler of `sc` (`ANALISE.md` §68). Inside `sc.wasm` (`wasm/`),
+    compiler of `sc` (`NOTES.md` §68). Inside `sc.wasm` (`wasm/`),
     `Session` is a safe Rust API over the engine linked in (§23, §24).
     `make test-proto` runs the tests of `Repl` over `Guest`
     (`tests/session.rs`).
@@ -102,7 +102,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
     `libc.so` and `libc++.so` from wasi-sdk, then each input, sharing one
     memory and one function table. A definition in an input hides an
     older one for the inputs after it, and an input may use what a later
-    one defines. `ANALISE.md` §18 has the design. It asks the wasm
+    one defines. `NOTES.md` §18 has the design. It asks the wasm
     runtime for a few primitives (`src/loader/runtime.rs`, §63):
     `src/loader/native.rs` gives them on wasmtime (the `native` feature),
     `src/loader/host.rs` inside `sc.wasm`, as `env.wasm_*` imports of the
@@ -123,13 +123,13 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   the first copy of an inline function, a vtable or a typeinfo.
   `libcxx-locale.patch` keeps libc++'s z/OS locale shims off WASI.
   `incremental-c-scopes.patch` keeps a REPL cell's block scopes in C from
-  leaking names into the cells after it (`ANALISE.md` §24).
+  leaking names into the cells after it (`NOTES.md` §24).
   `incremental-stmts.patch` lets a REPL cell start with `-` or `+`, and
   keeps the value of an expression without its `;` at the end of a cell,
-  which the REPL shows, from being discarded (`ANALISE.md` §26).
+  which the REPL shows, from being discarded (`NOTES.md` §26).
   `asan-cleanupret.patch` keeps ASan from clearing a frame's shadow at
   every exception cleanup inside the function, which made `main` of a C++
-  program many times bigger (`ANALISE.md` §34). `pattern-init.patch`
+  program many times bigger (`NOTES.md` §34). `pattern-init.patch`
   gives an uninitialized integer 0xAA… on wasm32 too, where clang gives
   it -1, which looks initialized; a pointer keeps 0xFFFFFFFF (§42).
   `repl-outside-function.patch` is for what a REPL cell has outside a
@@ -167,7 +167,7 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
 - `scripts/link.py` links the engine from the LLVM libraries and applies the
   cuts. `scripts/trim.py` builds the trimmed intrinsics table and
   `TargetLibraryInfo`. `attrib.py`, `cat2.py` and `o0passes.py` are for
-  measuring (see `ANALISE.md` §10). `scripts/flags.py` has the engine's flags:
+  measuring (see `NOTES.md` §10). `scripts/flags.py` has the engine's flags:
   `[c++|gnu17] [pic] [pcm|mod]` prints the cc1 flags, `--session c|c++
   <build>` a REPL session's arguments.
 - `test/corpus.py` runs the corpus through an engine (`WFLAGS=-Weverything`
@@ -182,18 +182,18 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   sources that crash the engine between good cells (`crash-`) and the
   memory over 1000 cells (`mem-`). `test/node/loader.mjs` is
   `src/loader.rs` in JS, and `test/node/scload` the `scload` over it
-  (`make test-split-node`, `ANALISE.md` §57). `test/node/wasm.mjs` is
+  (`make test-split-node`, `NOTES.md` §57). `test/node/wasm.mjs` is
   the host's primitives over the JS API, and `test/node/scload-rs` the
   `scload` of `sc.wasm` on them (`make test-split-node-rs`, §64). `test/repl/` has
   sequences of REPL inputs (`c1.c`, `c2.c`...).
 - `rt/sc_rt.c` is `libsc_rt`, in the sysroot: the handlers of UBSan's
   checks and of libc++'s hardening for the levels `on` and `strict` of
-  `--safety`, which say the error and trap (`ANALISE.md` §32).
+  `--safety`, which say the error and trap (`NOTES.md` §32).
   `rt/sc_asan.c`, in the same library, is ASan's runtime: the shadow, the
   allocator with its redzones and quarantine, and the checked libc
   functions, those that write (`scanf` among them, §39) and those that read
   the program's strings (§41), named as wasm-ld's `--wrap` names them
-  (`ANALISE.md` §34).
+  (`NOTES.md` §34).
   It asks the loader for the stacks where each block was allocated and
   freed, which the reports show (§36), and finds the blocks nothing
   reaches, the leaks of `strict` and of `:leaks` (§37). `rt/c_longjmp.s` is the tag of
@@ -261,7 +261,7 @@ demangled name. `make learn-session` (`scripts/learn_session.py`) learns it
 on `sc` with the cut `sc.wasm` being learned as its compiler (`SC_CWASM`),
 from the cut functions that trap in the session's slices (`ses-` and
 `seq-` and `crash-` with `-Weverything`, and `split-`), and puts back the
-objects they are in. Until `ANALISE.md` §68 the engine was also built
+objects they are in. Until `NOTES.md` §68 the engine was also built
 natively, and the list has what that one called too, matched by demangled
 names where `int64_t` was `long` and `std::` libstdc++'s.
 

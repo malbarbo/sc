@@ -2,7 +2,7 @@
 //! sgleam and spython: `sc` is the REPL, `sc FILE` runs a program.
 //!
 //! The compiler is sc.wasm's session in this process, on wasmtime
-//! ([`sc::engine::Guest`], ANALISE.md §68), and the code runs there too.
+//! ([`sc::engine::Guest`], NOTES.md §68), and the code runs there too.
 //! What a session reads is in the binary: the headers in sc.wasm, the
 //! arguments and the libraries in the pack ([`pack`]): `sc` copied anywhere
 //! runs.

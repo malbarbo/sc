@@ -1,4 +1,4 @@
-//! What the machine reads, embedded (build.rs, PLANO-REPL.md §5.4): a
+//! What the machine reads, embedded (build.rs, docs/plan-repl.md §5.4): a
 //! squashfs with the session's arguments at `repl/` and the libraries the
 //! loader asks for, with their `.cwasm`, at `sysroot/lib/` ([`read`]). The
 //! session's headers and libraries are in sc.wasm (engine/sc_pack.cpp). A

@@ -1,5 +1,5 @@
 //! What the loader asks of the wasm runtime it runs on: the primitives of
-//! the host API for wasm (ANALISE.md §63). wasmtime gives them in `sc`
+//! the host API for wasm (NOTES.md §63). wasmtime gives them in `sc`
 //! ([`super::native`]); the host gives them to sc.wasm as `env.wasm_*`
 //! imports. Everything else the loader needs (the memory, the table, the
 //! stack pointer, setting the table and the globals) it makes from them,

@@ -1,8 +1,8 @@
-// The files of sc_set_files (sc.h) in sc.wasm: the pack (PLANO-REPL.md
+// The files of sc_set_files (sc.h) in sc.wasm: the pack (docs/plan-repl.md
 // §5.4) is in the module, a squashfs without compression (build/pack/sc.sqfs,
 // scripts/pack.py) that squashfuse's library reads, so the session reads it
 // as the native one reads its own and the host gives no files
-// (PLANO-REPL.md §5.5). A host calls sc_pack after _initialize. What a read
+// (docs/plan-repl.md §5.5). A host calls sc_pack after _initialize. What a read
 // gives is copied out of the image once and kept, with a NUL after it, as
 // sc_files asks; the image itself is only read, and a host that snapshots
 // the memory may leave it out (sc_pack_image).

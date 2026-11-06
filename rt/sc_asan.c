@@ -1,4 +1,4 @@
-// libsc_rt: AddressSanitizer's runtime (PLANO-VERIFICACOES.md §5.2), for the
+// libsc_rt: AddressSanitizer's runtime (docs/plan-checks.md §5.2), for the
 // code sc compiles at the levels on and strict of --safety. A report says
 // what went wrong and stops the program through __sc_rt_report (sc_rt.c).
 //
@@ -127,7 +127,7 @@ __attribute__((weak)) void __sc_rt_blame(uint32_t allocated, uint32_t freed);
 
 // Only the first STACKS blocks keep their stacks: each costs a few
 // microseconds, and a std::map of 100 thousand keys took 5 times as long
-// with all of them (ANALISE.md)
+// with all of them (NOTES.md)
 #define STACKS 20000
 static uint32_t stacks;
 

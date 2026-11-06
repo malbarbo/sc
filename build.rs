@@ -1,6 +1,6 @@
 // The bindings of engine/sc.h (the machine feature), and with the engine
-// feature what sc embeds: the pack (PLANO-REPL.md §5.4), $OUT_DIR/sc.sqfs,
-// and sc.wasm compiled for wasmtime, $OUT_DIR/sc.cwasm.zst (ANALISE.md §68).
+// feature what sc embeds: the pack (docs/plan-repl.md §5.4), $OUT_DIR/sc.sqfs,
+// and sc.wasm compiled for wasmtime, $OUT_DIR/sc.cwasm.zst (NOTES.md §68).
 // Outside make, make sc-deps builds what they come from, so that cargo build
 // alone makes sc.
 use std::{env, path::PathBuf};

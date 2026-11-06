@@ -67,7 +67,7 @@ extern "C" {
 const CRASHED: &str = "sc: the engine crashed on this cell; the session is as it was before it\n";
 
 /// The session in this module (engine/sc_api.cpp), with the copy of the
-/// memory before each cell (ANALISE.md §65). A cell is called through the
+/// memory before each cell (NOTES.md §65). A cell is called through the
 /// host, `wasm_call` of this module's own `sc_session_cell` (the handle of
 /// `wasm_export(0, ...)`): a trap or an exit of the compiler comes back
 /// as an error to the machine, whose frames are above the cell's, and the

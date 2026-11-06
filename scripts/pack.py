@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""The pack sc.wasm embeds (engine/sc_pack.cpp, PLANO-REPL.md §5.5): what
+"""The pack sc.wasm embeds (engine/sc_pack.cpp, docs/plan-repl.md §5.5): what
 build.rs puts in the native sc's (§5.4), the same files at the same paths,
 without the .cwasm, in a squashfs without compression. The page's server
 compresses the module, and the whole of it compresses better than blocks
-of 128 KiB (ANALISE.md §59). mksquashfs makes it from a copy of the tree
+of 128 KiB (NOTES.md §59). mksquashfs makes it from a copy of the tree
 in build/pack/tree.
 
 usage: pack.py <out.sqfs>

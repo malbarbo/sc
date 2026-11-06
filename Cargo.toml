@@ -10,7 +10,7 @@ wasmparser = "0.254"
 # compiler already has this version
 wasm-encoder = "0.254"
 cpp_demangle = "0.5"
-# the minimal set (PLANO-REPL.md §5.3). gc turns on the exceptions; gc-drc
+# the minimal set (docs/plan-repl.md §5.3). gc turns on the exceptions; gc-drc
 # is the one collector. wasmtime-wasi's p1 brings p2, so async and
 # component-model come back with it
 # (the native feature: the loader's runtime in sc and scload)
@@ -57,7 +57,7 @@ native = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:windows-sys"]
 # sc.wasm links too (wasm/)
 machine = ["dep:bindgen"]
 # sc: the machine, with sc.wasm's session on wasmtime as the compiler
-# (src/engine/guest.rs, ANALISE.md §68), which build.rs embeds; build.rs
+# (src/engine/guest.rs, NOTES.md §68), which build.rs embeds; build.rs
 # asks make for it
 engine = ["native", "machine", "dep:backhand", "dep:wasmtime", "dep:zstd", "dep:bpaf", "dep:rustyline", "dep:dirs"]
 
@@ -99,7 +99,7 @@ opt-level = 2
 [profile.release.build-override]
 opt-level = 2
 
-# make dist, the binaries that ship (ANALISE.md §49): lto and strip take
+# make dist, the binaries that ship (NOTES.md §49): lto and strip take
 # scload from 24 MB to 10 MB. "s" compiles the libraries as fast as 3, "z"
 # is slower. No code catches a panic
 [profile.dist]

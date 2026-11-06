@@ -1,5 +1,5 @@
 //! A cell that fails to instantiate leaves nothing defined: what it
-//! defined from its bytes before is undone (ANALISE.md §60).
+//! defined from its bytes before is undone (NOTES.md §60).
 
 use sc::loader::native::Wasmtime;
 use sc::loader::{libdirs, Loader, Val, STACK};

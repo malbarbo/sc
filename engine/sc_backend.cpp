@@ -64,7 +64,7 @@ static void initTargetOptions(const CompilerInstance &CI, llvm::TargetOptions &O
 // The end of the O0 pipeline: PassBuilder's buildCoroWrapper, which lowers
 // the llvm.coro.* intrinsics of a C++20 coroutine (the backend cannot select
 // them), then ASan's pass, which BackendUtil's addSanitizers adds last
-// (PLANO-VERIFICACOES.md §5.2). The analysis managers hold only what these
+// (docs/plan-checks.md §5.2). The analysis managers hold only what these
 // passes ask for: ASan's stack safety analysis is off (-asan-use-stack-safety=0).
 static void runModulePasses(llvm::Module &M, TargetMachine &TM, const TargetLibraryInfoImpl &TLII,
                             const CodeGenOptions &CG, const LangOptions &LO) {

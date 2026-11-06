@@ -1,5 +1,5 @@
 //! The compiler of the native `sc`: sc.wasm's session in this process, on
-//! wasmtime (ANALISE.md §68), as the browser runs it. A cell that fails
+//! wasmtime (NOTES.md §68), as the browser runs it. A cell that fails
 //! leaves nothing: the session copies its memory before the cell and puts
 //! it back (SC_SNAPSHOT, §65). A trap or an exit of the compiler (a crash,
 //! a fatal error, Ctrl-C, the timeout, the memory) stops the call, and
@@ -158,7 +158,7 @@ pub struct Guest {
     dead: bool,
     /// The module's TMPDIR, removed with the instance: the session never
     /// ends as clang would remove the .pcm `#pragma clang module build`
-    /// writes there (ANALISE.md §70).
+    /// writes there (NOTES.md §70).
     _tmp: Option<TempDir>,
 }
 
@@ -207,7 +207,7 @@ impl Guest {
     /// A new instance, without a session. Each call is limited to
     /// `timeout`, and the module's memory, with the copy, to twice
     /// `memory`; above `memory`, after an accepted cell, a [`super::Repl`]
-    /// replays the log in another ([`Compiler::over`], PLANO-REPL.md §4).
+    /// replays the log in another ([`Compiler::over`], docs/plan-repl.md §4).
     pub fn new(timeout: Option<Duration>, memory: Option<u64>) -> io::Result<Guest> {
         let s = shared()?;
         let fail = |e: wasmtime::Error| io::Error::other(format!("sc.wasm: {e:?}"));

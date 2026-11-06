@@ -9,7 +9,7 @@ the runtime of the student's program. `src/` is the `sc` binary, which runs
 the session of `sc.wasm` on wasmtime, and `wasm/` is the Rust that `sc.wasm`
 links. `scripts/` builds and checks the cuts, and `test/` holds the corpus
 and the batteries. `README.md` has the layout, the build and how the cuts
-work. `ANALISE.md` records the measurements behind each decision. Add to it
+work. `NOTES.md` records the measurements behind each decision. Add to it
 when a size or a decision changes.
 
 ## Build and test
@@ -32,7 +32,7 @@ make test-split-node # test-split with the JS loader (test/node/loader.mjs) in p
 make test-split-node-rs # test-split with sc.wasm's loader on Node's primitives (test/node/wasm.mjs)
 make test-aluno-node-rs # test-aluno with sc inside sc.wasm (the machine) on Node's primitives
 make repl        # build/cargo/release/sc, the REPL (sc, sc FILE, sc help), unstripped:
-                 # sc.wasm's session on wasmtime is its compiler (ANALISE.md §68)
+                 # sc.wasm's session on wasmtime is its compiler (NOTES.md §68)
 cargo build --release # the same sc (build.rs runs make sc-deps)
 make dist        # build/cargo/dist/scload and sc: small, LTO (~4 min)
 make dist-windows # the same sc.exe and scload.exe for x86_64-pc-windows-msvc (cargo-xwin)
@@ -46,7 +46,7 @@ make test-dist   # before shipping: test-split, test-session, test-aluno, test-c
 ```
 
 The cuts keep the code of every warning. `make learn` runs the corpus with
-`-Weverything` (`ANALISE.md` §13).
+`-Weverything` (`NOTES.md` §13).
 
 A change to the engine or the cuts is done when `make test` reports no
 difference, and `make test-session` none for the session of `sc.wasm`. For

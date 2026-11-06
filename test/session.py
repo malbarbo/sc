@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Phase 3 of PLANO-REPL.md (§6): the REPL's session on sc (build/sc), whose
-compiler is sc.wasm's session on wasmtime (ANALISE.md §68), as the REPL
+"""Phase 3 of docs/plan-repl.md (§6): the REPL's session on sc (build/sc), whose
+compiler is sc.wasm's session on wasmtime (NOTES.md §68), as the REPL
 drives it, `<engine> --replay` (src/bin/sc/main.rs). split- is test/split.py.
 SC_CWASM puts another sc.wasm in place of the one sc embeds: the uncut one
 makes the base (Makefile).
@@ -57,7 +57,7 @@ ARGS = [a for a in sys.argv[1:] if a != '--update']
 ENG = os.path.realpath(ARGS[0] if ARGS else f'{B}/sc')
 BASE = f'{B}/res/{"wev-" if W_EXTRA else ""}base'
 OUT = os.path.realpath(ARGS[1] if len(ARGS) > 1 else f'{B}/res/session')
-# where a session is not the whole compile (ANALISE.md §46)
+# where a session is not the whole compile (NOTES.md §46)
 FILE = '__FILE__ (#include, #embed, __has_embed) names the cell, which is no file'
 MODULE = 'a module declaration cannot be in a cell'
 STMT = 'an expression at the top is a statement in a cell'
@@ -102,7 +102,7 @@ SKIP = {C + 'CodeGenCXX_mangle-ms-back-references-pr13207', C + 'CodeGenCXX_pr29
 
 def root(mod=False):
     """where the session's headers and libraries are: the pack sc embeds
-    (PLANO-REPL.md §5.4), but with std.pcm, which sc --cc1 builds from the
+    (docs/plan-repl.md §5.4), but with std.pcm, which sc --cc1 builds from the
     disk"""
     return B if mod else PACK
 

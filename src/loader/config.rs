@@ -1,10 +1,10 @@
 // wasmtime's configuration of the loader, which build.rs also compiles the
-// pack's libraries with (PLANO-REPL.md §5.4): Module::deserialize takes a
+// pack's libraries with (docs/plan-repl.md §5.4): Module::deserialize takes a
 // .cwasm only from an Engine with the same settings.
 use wasmtime::{Config, WasmBacktraceDetails};
 
 /// The epoch checks are always there, so that one .cwasm serves `sc FILE`
-/// and the REPL: they cost under 1% (ANALISE.md §49), and without Ctrl-C
+/// and the REPL: they cost under 1% (NOTES.md §49), and without Ctrl-C
 /// the epoch never moves.
 pub fn config() -> Config {
     let mut config = Config::new();

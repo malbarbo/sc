@@ -1,4 +1,4 @@
-//! The log that recreates a lost session (PLANO-REPL.md §3.6), over any
+//! The log that recreates a lost session (docs/plan-repl.md §3.6), over any
 //! [`Compiler`]: sc.wasm's session on wasmtime (`Guest`), or the session in
 //! the same module (inside sc.wasm).
 use super::{Mode, Status};
@@ -99,7 +99,7 @@ impl<C: Compiler> Repl<C> {
     /// Another compiler replays the log. It replaces the one before only
     /// once the whole log is replayed: on an error, the compiler and the
     /// log are as they were. The REPL calls it when the compiler takes too
-    /// much memory (PLANO-REPL.md §4).
+    /// much memory (docs/plan-repl.md §4).
     pub fn restart(&mut self) -> Result<(), ReplError> {
         let mut compiler = open(self.compiler.another()?, &self.args)?;
         for (i, e) in self.log.iter().enumerate() {

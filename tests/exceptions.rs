@@ -1,4 +1,4 @@
-//! Many exceptions on wasmtime's DRC collector (PLANO-REPL.md §5.3, step
+//! Many exceptions on wasmtime's DRC collector (docs/plan-repl.md §5.3, step
 //! 5), in a process of their own, so that only they count in its memory.
 //! Unix only: the memory is read with getrusage.
 #![cfg(unix)]

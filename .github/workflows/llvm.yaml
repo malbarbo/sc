@@ -2,7 +2,7 @@ name: llvm
 
 # The LLVM pin, built twice (native tools, then the wasm libraries): what
 # sc.wasm is linked from, for the release (release.yaml). It takes hours on
-# a runner (ANALISE.md §70), so it lives in a cache keyed by what it is
+# a runner (NOTES.md §70), so it lives in a cache keyed by what it is
 # built from (make llvm-key and llvm/). A cache made on main serves every
 # tag, one made on a tag only that tag: this runs on main when the pin
 # changes, and every week, so that the cache does not go unused for the 7

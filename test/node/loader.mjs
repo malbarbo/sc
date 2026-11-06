@@ -1,4 +1,4 @@
-// The REPL's loader in JS (PLANO-REPL.md §5.5): src/loader.rs over the JS
+// The REPL's loader in JS (docs/plan-repl.md §5.5): src/loader.rs over the JS
 // API of WebAssembly, for Node and, later, a browser's worker. It loads
 // wasm shared objects the same way: one memory, one table and the stack
 // pointer for all modules, dylink.0 read from the bytes, a stub that calls
@@ -6,7 +6,7 @@
 // for all modules. See the comment at the top of src/loader.rs. Unlike it,
 // each module is instantiated once with its GOT imports at their values,
 // which the bytes give (Loader.loadBytes), as a host that only instantiates
-// would need (ANALISE.md §60).
+// would need (NOTES.md §60).
 //
 // What the JS API does not give, the bytes do: the type of an import (no
 // type reflection), and whether an exported global is a constant. A

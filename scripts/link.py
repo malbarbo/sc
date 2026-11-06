@@ -81,7 +81,7 @@ flags = [t for t in toks if not t.endswith(('.a', '.obj', '.o')) and t not in ('
          and not t.startswith(('--dependency-file', '-Wl,--color-diagnostics', '-fdiagnostics-color'))]
 EXPORTS = ('sc_session_new', 'sc_session_free', 'sc_session_cell', 'sc_session_undo', 'sc_session_recover', 'sc_session_depth',
            'sc_result_ptr', 'sc_result_len', 'malloc', 'free', 'chdir',
-           # a host without fork restores it with the memory (PLANO-REPL.md §5.5)
+           # a host without fork restores it with the memory (docs/plan-repl.md §5.5)
            '__stack_pointer')
 # wasm/lib.rs's: scload and sc inside sc.wasm, and simplecode's REPL (its
 # ENGINE.md)

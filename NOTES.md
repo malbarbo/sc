@@ -976,7 +976,7 @@ medido.
 O REPL vai precisar de exceções em C++ (requisito do professor). O
 `setjmp`/`longjmp` do C usa o mesmo mecanismo do wasm, então entrou junto.
 Na mesma rodada, os padrões passaram a ser os mais novos: **gnu23** para C
-e **gnu++26** para C++ (`PLANO-REPL.md` §1.5 e §1.6).
+e **gnu++26** para C++ (`docs/plan-repl.md` §1.5 e §1.6).
 
 **A forma das exceções.**
 
@@ -1109,7 +1109,7 @@ do código de EH.
 
 O pin saiu do `main` de 8 de abril (`5fe235b9862f`) para a tag
 `llvmorg-23.1.3` (`0d261d1ca552`), antes do trabalho do REPL
-(`PLANO-REPL.md`, fase P). A 23.1.3 traz três correções do clang-repl de
+(`docs/plan-repl.md`, fase P). A 23.1.3 traz três correções do clang-repl de
 que o REPL precisa: a duplicação de vtable (#185648), o `Undo` que
 desliga a PTU retirada (#213235, backport `ea5cc83`) e as declarações
 anteriores mantidas quando uma entrada falha (#218149).
@@ -1167,7 +1167,7 @@ passam nos 13.819 arquivos sem diferença; o `checkinv` dá SAME.
 
 ## 22. Fase 0 do REPL: sessão com estado contra PCH encadeado
 
-A fase 0 do `PLANO-REPL.md` (§1.3) compara duas formas de compilar as
+A fase 0 do `docs/plan-repl.md` (§1.3) compara duas formas de compilar as
 células do REPL, cada uma levada até o loader. O spike não entra nos
 engines de sempre. `make spike` liga o `build/sc-spike`: o engine nativo
 sem cortes, com `engine/sc_session.cpp` e `engine/sc_spike.cpp`. O código
@@ -1560,7 +1560,7 @@ interface de linha de comando é a do sgleam e do spython:
   `scload` (`make test`) não precisa do `sc-proto`, cujo bindgen pede a
   libclang.
 
-**Decisões provisórias do front end** (PLANO-REPL.md §8):
+**Decisões provisórias do front end** (docs/plan-repl.md §8):
 - **A célula:** declarações e statements do topo, que o modo incremental
   aceita. Os statements rodam quando o `.so` da célula é carregado.
 - **O `main`:** roda só em `sc FILE`. No REPL ele é uma função como as
@@ -1834,7 +1834,7 @@ como deve ser para uma variável que não é `weak`. Um ponteiro tomado
 antes da definição continua apontando para o endereço provisório, e o
 trap então sai sem o nome.
 
-## 30. `--safety`: os níveis e os avisos (F1 do PLANO-VERIFICACOES.md)
+## 30. `--safety`: os níveis e os avisos (F1 do docs/plan-checks.md)
 
 **Os níveis.** O `sc` tem `--safety=off|on|strict` (o padrão é `on`) no
 REPL, no `sc FILE` e no `sc check`. No REPL, `:safety NÍVEL` recomeça a
@@ -1842,7 +1842,7 @@ sessão vazia, porque as células anteriores teriam de rodar de novo para
 compilar em outro nível. Os conjuntos estão em `scripts/flags.py`
 (`safety()`), e o `make repl` gera um arquivo de argumentos por linguagem,
 nível e modo: `build/repl/<ling>-<nível>[-file].args`. O `-file` é o do
-`sc FILE`, que liga o `-Wshadow` em C (PLANO §4.3). O engine não mudou os
+`sc FILE`, que liga o `-Wshadow` em C (docs/plan-checks.md §4.3). O engine não mudou os
 seus padrões: quem escolhe é o `flags.py`.
 
 | Nível | Avisos | Erros |
@@ -1954,7 +1954,7 @@ revisor tinha medido o grupo sem esse caso (W-A12). Os outros casos do
 O `-Wunreachable-code` continua no A. A nota do clang ensina o silêncio:
 `if ((MAX > 100))`.
 
-## 31. O local do erro em execução (F0 do PLANO-VERIFICACOES.md)
+## 31. O local do erro em execução (F0 do docs/plan-checks.md)
 
 Antes, um erro em execução dizia só o tipo, sem a linha:
 `error: wasm trap: integer divide by zero`. Agora o `sc` diz o erro em
@@ -2045,7 +2045,7 @@ depois (`proto/src/engine.rs`). Em 5 rodadas de 48, o erro não apareceu.
   `-Wpredefined-identifier-outside-function` (o `__func__` do `assert.h`
   fora de função) e imprime `(cell_6: : 1)`.
 
-## 32. As verificações em execução (F2 do PLANO-VERIFICACOES.md)
+## 32. As verificações em execução (F2 do docs/plan-checks.md)
 
 Nos níveis `on` e `strict`, o código do aluno agora é compilado com o
 UBSan, o hardening `EXTENSIVE` da libc++ e as locais inicializadas com um
@@ -2174,7 +2174,7 @@ E o `int-min.c` e o `vector-index.cpp` mudaram: no `on`, o primeiro diz
 UBSan pega antes do trap), e o segundo, `vector[] index out of bounds`. No
 `off`, o `v[5]` agora imprime 0 em silêncio (`NONE`).
 
-## 33. O DWARF no `sc.wasm` (F2b do PLANO-VERIFICACOES.md)
+## 33. O DWARF no `sc.wasm` (F2b do docs/plan-checks.md)
 
 A sessão sempre compila com `-gline-tables-only` (§31), mas o corpus não
 usava `-g`, e o `learn` tinha cortado o código do DWARF. O `sc.wasm`
@@ -2196,7 +2196,7 @@ ao do `sc-full.wasm`.
 O `make test`, o `test-warn` e o `test-native` deram 0 diferença, e o
 `checkinv` deu SAME.
 
-## 34. O ASan (F3 do PLANO-VERIFICACOES.md)
+## 34. O ASan (F3 do docs/plan-checks.md)
 
 No `on` e no `strict`, o `sc` passa a pegar os erros de memória: o
 estouro de um bloco, de uma variável local, de um global ou de um VLA, o
@@ -2799,7 +2799,7 @@ O `memset` do padrão só troca o byte.
 `uninit-count.c`, o contador de votos sem `= {0}`. O `uninit-pointer.c`
 continua dizendo "uninitialized pointer".
 
-## 43. O `return` no topo de uma célula (§3.7 do PLANO-REPL)
+## 43. O `return` no topo de uma célula (§3.7 do docs/plan-repl.md)
 
 Numa célula do REPL, o `return 1;` no topo, ou dentro de um `if` no topo,
 derrubava o engine. O `Sema::BuildReturnStmt` vê que não há função e
@@ -2959,7 +2959,7 @@ entradas novas.
 
 ## 46. Fase 3 do REPL: as fatias da sessão
 
-As fatias do §6 do PLANO-REPL ficaram no `test/session.py`
+As fatias do §6 do docs/plan-repl.md ficaram no `test/session.py`
 (`make test-session`), não no `corpus.py`. Elas rodam sobre o
 `sc-engine repl`, que só existe no nativo, e o `corpus.py` roda qualquer
 engine one-shot. O script recebe o engine e uma base, então a fase 4 roda o
@@ -3211,7 +3211,7 @@ mudança no engine ou nos cortes passou a incluir o `make test-session`
 ## 48. Fase 5 do REPL: o `sc.wasm` reactor com a sessão
 
 O `sc.wasm` passou a ser um módulo só, que roda como comando e exporta a
-sessão do `sc.h` (PLANO-REPL.md §5.2):
+sessão do `sc.h` (docs/plan-repl.md §5.2):
 - é ligado com `-mexec-model=reactor`, e o `_start` é nosso
   (`engine/sc_start.cpp`, só do wasm): `exit(__main_void())`. O
   `_initialize` do `crt1-reactor.o` roda os construtores, e o
@@ -3426,7 +3426,7 @@ O `node:wasi` recusa um módulo com `_initialize` e `_start`. O
 
 ## 49. Fase 6a do REPL: o loader mínimo
 
-O plano está no §5.3 do PLANO-REPL.md, e os seis passos estão feitos:
+O plano está no §5.3 do docs/plan-repl.md, e os seis passos estão feitos:
 - as features;
 - a saída do `wat`;
 - o `cache` e o `parallel-compilation`;
@@ -3609,7 +3609,7 @@ acima.
 ## 50. Fase 6b do REPL: um binário só
 
 O `build/sc` passa a ser o binário entregue: o REPL, o loader e o engine
-cortado com a sessão, num executável só (PLANO-REPL.md §1.1). Antes eram
+cortado com a sessão, num executável só (docs/plan-repl.md §1.1). Antes eram
 dois: o `sc` em Rust lançava como filho o `build/sc-engine` (C++ com o
 laço do protocolo) do diretório do build.
 
@@ -3701,7 +3701,7 @@ nele.
 
 **Fica para depois:** o host JS documentado (o `sc.wasm` no navegador,
 com a cópia da memória antes da célula no lugar do `fork`). Documentado em 2026-10-22,
-como proposta, no PLANO-REPL.md §5.5.
+como proposta, no docs/plan-repl.md §5.5.
 
 ## 51. Um crate só, e o `cargo build` constrói o `sc`
 
@@ -3930,7 +3930,7 @@ Testar a existência de `<engine>.wasm`, onde o host busca o seu engine, não
 serve: o `build/sc.wasm` fica ao lado do `build/sc` nativo. Por isso o
 `session.py` passou a receber `--wasm`, como o `learn_session.py`, e o host
 do `learn_session.py --wasm` passou a ser um `sc` qualquer. O
-`PLANO-REPL.md` §5 ganhou uma tabela que liga os nomes antigos aos de hoje.
+`docs/plan-repl.md` §5 ganhou uma tabela que liga os nomes antigos aos de hoje.
 
 Os limites do `Repl` (60 s por resposta e 1 GB) passaram a valer também para
 o primeiro filho. Antes, o `Repl::new` começava a sessão sem limites e só o
@@ -3972,7 +3972,7 @@ segmento a menos.
 
 ## 52. Fase 7 do REPL, passo 1: o pacote embutido no `sc`
 
-O `PLANO-REPL.md` §5.4 tem a proposta e as decisões. Neste passo, o `sc`
+O `docs/plan-repl.md` §5.4 tem a proposta e as decisões. Neste passo, o `sc`
 passa a levar o pacote dentro de si, mas nada o lê ainda. O `sc` continua
 lendo os `.args` de `build/repl` e os arquivos do disco.
 
@@ -4032,7 +4032,7 @@ O `test-aluno` e o `test-checks` passaram sem diferença.
 
 ## 53. Fase 7 do REPL, passos 2 a 4: o `sc` lê do pacote
 
-O `PLANO-REPL.md` §5.4 previa o VFS do clang (passo 2), o gancho no
+O `docs/plan-repl.md` §5.4 previa o VFS do clang (passo 2), o gancho no
 wasm-ld (passo 3) e o loader (passo 4) em passos separados. Eles foram
 feitos juntos (decidido em 2026-10-21), porque os `.args` do pacote dão
 `-L/sc/...` também ao link, e o loader lia as `.so` do `build/sysroot`:
@@ -4256,7 +4256,7 @@ cortados (`build/sc`, `build/sc-wasm`) passaram.
 
 ## 56. O host JS, passo 1: o snapshot da memória no Node
 
-O primeiro passo do host JS (PLANO-REPL.md §5.5) mede a recomendação do
+O primeiro passo do host JS (docs/plan-repl.md §5.5) mede a recomendação do
 §5.5: voltar uma célula que falha copiando a memória linear, no lugar do
 `fork`.
 

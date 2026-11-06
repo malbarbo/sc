@@ -8,7 +8,7 @@ use std::time::Duration;
 use wasmtime_wasi::WasiCtxBuilder;
 
 /// How long a cell may take to compile, and how much memory the compiler
-/// may keep: above it, a new one replays the cells (PLANO-REPL.md §4).
+/// may keep: above it, a new one replays the cells (docs/plan-repl.md §4).
 const TIMEOUT: Duration = Duration::from_secs(60);
 const MEMORY: u64 = 1 << 30;
 

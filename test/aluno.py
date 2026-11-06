@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A student's correct code (PLANO-VERIFICACOES.md §9): the programs in
+"""A student's correct code (docs/plan-checks.md §9): the programs in
 test/aluno through sc (make repl) at each level of --safety. What each one
 gets, its exit status and its warnings by flag, must be what
 test/aluno/expected.txt says; at the level on, no error.

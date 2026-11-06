@@ -1,4 +1,4 @@
-// Candidate A of the REPL (PLANO-REPL.md §3): a clang session in which each
+// Candidate A of the REPL (docs/plan-repl.md §3): a clang session in which each
 // cell is parsed on top of the ones before, as clang-repl does, but without
 // clangInterpreter: a minimal incremental action, a plain CodeGenerator and
 // sc's O0 backend (sc_backend.cpp) on the module of each cell.

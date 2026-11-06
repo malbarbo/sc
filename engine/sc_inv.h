@@ -33,7 +33,7 @@ struct ScOptions {
 // false, with the reason in Error, for a flag the engine does not take
 bool scParseArgs(llvm::ArrayRef<const char *> Args, ScOptions &O, std::string &Error);
 void scBuildInvocation(clang::CompilerInvocation &Inv, const ScOptions &O);
-// what a session changes in the invocation (PLANO-REPL.md §3.5): what
+// what a session changes in the invocation (docs/plan-repl.md §3.5): what
 // -fincremental-extensions, without -disable-free and
 // -clear-ast-before-backend, gives
 void scIncremental(clang::CompilerInvocation &Inv);

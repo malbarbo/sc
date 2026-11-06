@@ -36,13 +36,13 @@ CARGO := --locked
 RUST := Cargo.toml Cargo.lock build.rs $(shell find src -name '*.rs') engine/sc.h
 SCLOAD := $(B)/cargo/release/scload
 SC_REPL := $(B)/cargo/release/sc
-# what the sc binaries embed (build.rs, PLANO-REPL.md §5.4): sc.wasm, and
+# what the sc binaries embed (build.rs, docs/plan-repl.md §5.4): sc.wasm, and
 # the pack: the arguments of a session in the pack's view, the libraries
 PACK_ARGS := $(foreach l,c c++,$(foreach s,off on strict,$(B)/pack/repl/$l-$s.args $(B)/pack/repl/$l-$s-file.args))
 PACK = $(PACK_ARGS) $(SR)/lib/wasm32-wasip1/libc++.so $(RT).so $(SR)/.setjmp $(IGNORELIST) $(SR)/.ctype
 
 # the engine with the session (sc.h); sc.wasm is a reactor, with its _start
-# (PLANO-REPL.md §5.2). scripts/link.py has the same lists
+# (docs/plan-repl.md §5.2). scripts/link.py has the same lists
 ENGINE := sc_entry sc_main sc_inv sc_backend sc_cuts sc_session sc_api sc_files
 WENGINE := $(ENGINE) sc_start sc_pack
 ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI_EMULATED_MMAN \
@@ -115,7 +115,7 @@ llvm-key:
 # libunwind goes inside libc++abi, which the wasm unwinder calls back. A
 # failed check of the hardening calls __libcpp_verbose_abort with its reason
 # (enforce), which libsc_rt says in its words; quick_enforce's trap keeps it
-# only in the debug info, where wasmtime does not find it (ANALISE.md §32)
+# only in the debug info, where wasmtime does not find it (NOTES.md §32)
 SR := $(B)/sysroot
 RT_EH := -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false -resource-dir $(W)/lib/clang/21
 RT_OPTS := -DCMAKE_BUILD_TYPE=MinSizeRel -DLLVM_COMPILER_CHECKED=ON -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
@@ -162,7 +162,7 @@ $(RT).a: $(RT_OBJS)
 $(RT).so: $(RT_OBJS)
 	$(N)/bin/wasm-ld -shared --experimental-pic --unresolved-symbols=import-dynamic $^ -L$(SR)/lib/wasm32-wasip1 -lc -o $@
 
-# where U-estrito stays off: the sysroot's headers (ANALISE.md §40)
+# where U-estrito stays off: the sysroot's headers (NOTES.md §40)
 IGNORELIST := $(SR)/share/sc/ignorelist.txt
 $(IGNORELIST): rt/ignorelist.txt | $(SR)/lib/wasm32-wasip1/libc++.so
 	@mkdir -p $(@D)
@@ -170,7 +170,7 @@ $(IGNORELIST): rt/ignorelist.txt | $(SR)/lib/wasm32-wasip1/libc++.so
 
 # musl's isdigit, isalpha... are macros that wrap an unsigned on purpose, in
 # the program's code, where the ignorelist does not reach: without them they
-# are libc's functions (ANALISE.md §40)
+# are libc's functions (NOTES.md §40)
 $(SR)/.ctype: | $(SR)/lib/wasm32-wasip1/libc++.so
 	sed -i '/^#define isw\?[a-z]*(a) (0 ? isw\?[a-z]*(a) : .*(unsigned)(a)/d' \
 	  $(addprefix $(SR)/include/wasm32-wasip1/,ctype.h wchar.h wctype.h)
@@ -236,7 +236,7 @@ $(B)/sc.wasm: $(B)/sc-cut.wasm
 	wasm-opt -Oz --strip-debug --strip-producers $< -o $@
 
 # --- the REPL's batteries, on sc (build/sc): its compiler is sc.wasm's
-# session on wasmtime (src/engine/guest.rs, ANALISE.md §68). SC_CWASM puts
+# session on wasmtime (src/engine/guest.rs, NOTES.md §68). SC_CWASM puts
 # another sc.wasm in place of the one sc embeds, compiled by sc --precompile:
 # the uncut one makes the bases
 $(B)/sc: $(SC_REPL)
@@ -249,7 +249,7 @@ $(B)/sc-full.cwasm: $(B)/sc-full.wasm $(SC_REPL)
 test-split: $(B)/sc $(SCLOAD) $(B)/res/base/summary.json
 	test/split.py $(B)/sc
 
-# the slices of the session (PLANO-REPL.md phase 3, §6): ses-, seq-, crash-,
+# the slices of the session (docs/plan-repl.md phase 3, §6): ses-, seq-, crash-,
 # mem-; on the uncut engine they are the base of the cut one's
 $(B)/res/session-base/summary.json: $(B)/sc-full.cwasm $(B)/sc test/session.py scripts/flags.py | $(SCLOAD) $(B)/res/base/summary.json
 	SC_CWASM=$(CURDIR)/$< test/session.py $(B)/sc $(@D)
@@ -280,13 +280,13 @@ test-split-node-rs: $(B)/sc $(B)/sc.wasm $(SCLOAD) $(B)/res/base/summary.json
 # test-aluno with sc inside sc.wasm (the machine, wasm/lib.rs's sc_cli), on
 # Node with only the host's primitives (test/node/sc-rs). test/checks.py
 # test/node/sc-rs differs only in the frames, which the host's do not tie to
-# an instance (ANALISE.md §66)
+# an instance (NOTES.md §66)
 test-aluno-node-rs: $(B)/sc.wasm
 	test/aluno.py test/node/sc-rs
 
 # --- the REPL's loader, runs the shared objects (native, wasmtime): scload,
 # for the batteries, without the engine; and sc, the REPL, whose compiler is
-# the sc.wasm it embeds, with the pack (PLANO-REPL.md §1.1, ANALISE.md §68)
+# the sc.wasm it embeds, with the pack (docs/plan-repl.md §1.1, NOTES.md §68)
 $(SCLOAD): $(RUST)
 	cargo build --release $(CARGO) --no-default-features --features native --bin scload
 $(SC_REPL): $(RUST) $(PACK) $(B)/sc.wasm
@@ -295,7 +295,7 @@ $(SC_REPL): $(RUST) $(PACK) $(B)/sc.wasm
 loader: $(SCLOAD)
 
 # the binaries that ship, with the profile that makes them small
-# (ANALISE.md §49): build/cargo/dist/scload and sc
+# (NOTES.md §49): build/cargo/dist/scload and sc
 dist: $(PACK) $(B)/sc.wasm
 	cargo build $(CARGO) --profile dist --bins
 
@@ -322,14 +322,14 @@ rs-wasm: $(RS_WASM)
 test-loader:
 	cargo test --release $(CARGO) --no-default-features --features native --lib --test signal --test exceptions --test undo
 
-# Ctrl-C in sc's REPL in a terminal (ANALISE.md §70); on Windows by hand,
+# Ctrl-C in sc's REPL in a terminal (NOTES.md §70); on Windows by hand,
 # test/ctrlc.py ssh:HOST
 test-ctrl-c: $(SC_REPL)
 	test/ctrlc.py $(SC_REPL)
 
 # a session's arguments: <lang>-<safety level>[-file].args, -file for `sc
 # FILE`, in the pack's view. build.rs puts them in the pack sc embeds
-# (PLANO-REPL.md §5.4), with the libraries
+# (docs/plan-repl.md §5.4), with the libraries
 $(B)/pack/repl/%.args: scripts/flags.py
 	mkdir -p $(B)/pack/repl
 	scripts/flags.py --session $(firstword $(subst -, ,$*)) /sc $(wordlist 2,3,$(subst -, ,$*)) > $@
@@ -339,7 +339,7 @@ repl: $(SC_REPL) sc-deps
 # what cargo build asks for (build.rs): what sc embeds
 sc-deps: $(PACK) $(B)/sc.wasm
 
-# a student's correct code at each level of --safety (PLANO-VERIFICACOES.md §9)
+# a student's correct code at each level of --safety (docs/plan-checks.md §9)
 test-aluno: repl
 	test/aluno.py
 
@@ -407,7 +407,7 @@ checkinv: $(B)/checkinv
 	done
 	$< $$(scripts/flags.py pic on g) -o - /c/x.c
 	$< $$(scripts/flags.py c++ pic mod on g) -o - /c/x.cpp
-	# a session's flags (PLANO-REPL.md §3.5): scIncremental in place of
+	# a session's flags (docs/plan-repl.md §3.5): scIncremental in place of
 	# -disable-free and -clear-ast-before-backend
 	for a in $(PACK_ARGS:$(B)/pack/repl/%.args=%); do \
 	  set -- $$(echo $$a | tr - ' '); l=$$1; shift; \

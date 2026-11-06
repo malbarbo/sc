@@ -249,7 +249,7 @@ indica o ruído.
 
 ### 4.5 Diferenças por modo
 
-O §29 do ANALISE.md já tira do REPL os avisos de fim de unidade.
+O §29 do NOTES.md já tira do REPL os avisos de fim de unidade.
 
 Nesta proposta, só `-Wshadow` muda por modo: fica no `sc FILE` em C. O E vale
 nos dois modos.
@@ -279,7 +279,7 @@ Um erro numa função esconde os avisos de análise das funções seguintes
 | `nonnull-attribute`, `returns-nonnull-attribute` | `NULL` para um parâmetro `nonnull` da libc | **U** |
 | `local-bounds` | — | não emite nada a `-O0` (medido) |
 | `object-size` | — | não tem efeito a `-O0` (o clang avisa) |
-| `unsigned-integer-overflow`, `unsigned-shift-base`, `implicit-conversion`, `float-divide-by-zero` | volta de `unsigned`, truncamento implícito, `1.0/0` | **U-estrito**: disparam nos geradores dos headers e nas macros da `ctype.h`, que ficam de fora (ANALISE.md §40) |
+| `unsigned-integer-overflow`, `unsigned-shift-base`, `implicit-conversion`, `float-divide-by-zero` | volta de `unsigned`, truncamento implícito, `1.0/0` | **U-estrito**: disparam nos geradores dos headers e nas macros da `ctype.h`, que ficam de fora (NOTES.md §40) |
 | `nullability-*` | — | só com `_Nonnull` |
 | `function` | — | não suportado no wasm, e o wasm já faz trap |
 | `vptr` | — | só no Emscripten, precisa de um runtime C++ |
@@ -318,7 +318,7 @@ ganho dos handlers.
 | `address`, `use-after-scope` | **on** |
 | `use-after-return` | `=never`: precisa da *fake stack*, e o `-Wreturn-stack-address` pega o caso comum |
 | `pointer-compare`, `pointer-subtract` | não: o driver recusa no wasm |
-| `leak` | **strict**, no fim do `sc FILE`; o `:leaks` no `on` e no `strict`. Só o bloco que nada alcança (ANALISE §37) |
+| `leak` | **strict**, no fim do `sc FILE`; o `:leaks` no `on` e no `strict`. Só o bloco que nada alcança (NOTES.md §37) |
 | `init-order` | não. `__asan_before_dynamic_init` e `__asan_after_dynamic_init` são emitidos mesmo assim e viram no-op (R7) |
 
 **O passe precisa entrar no engine (T1).**
@@ -327,7 +327,7 @@ ganho dos handlers.
   AlwaysInliner, as corrotinas e o codegen. O `addSanitizers` não existe em
   nenhum dos engines.
 - O `sc_backend` passa a rodar o `AddressSanitizerPass` no novo PM, como o
-  `runCoroPasses` (ANALISE §16).
+  `runCoroPasses` (NOTES.md §16).
 - Com `-asan-use-stack-safety=0`. Sem isso, o `StackSafetyGlobalAnalysis`
   puxa o ScalarEvolution (436 KB, cortado hoje).
 - As opções `-asan-*` são `cl::opt`. O `sc_inv` as fixa em `LLVMArgs`
@@ -388,7 +388,7 @@ ganho dos handlers.
   `snprintf`, `fgets`, `fread` e `read`.
   - O loader entrega a libc ao runtime como `__real_*`.
   - Uma chamada de dentro da libc não é interceptada.
-  - `scanf("%s")` ficou para a F4 (ANALISE.md §39).
+  - `scanf("%s")` ficou para a F4 (NOTES.md §39).
 - **Exceções e `longjmp` (R9).**
   - O `__asan_handle_no_return` é emitido antes do `__cxa_throw` do aluno e
     do `longjmp` (testado).
@@ -408,7 +408,7 @@ ganho dos handlers.
 **Para depois: a libc instrumentada.** Construir a wasi-libc com ASan e
 `MALLOC_IMPL=none` pegaria `scanf` e `printf("%s")` dentro da libc. Isso exige
 construir a libc a partir do fonte. Na F4, ficou nos interceptores das
-funções que leem (ANALISE.md §41).
+funções que leem (NOTES.md §41).
 
 ### 5.3 libc++ (R4, R5)
 
@@ -448,7 +448,7 @@ de 32 bits fazem o `PatternInit.cpp:17-20` escolher `0xFF…`:
 
 O -1 é menos visível que um padrão. Um patch de uma linha poria 0xAAAAAAAA
 nos inteiros e deixaria o ponteiro em 0xFFFFFFFF. Ele fica para depois de
-medir. **Medido e feito** (ANALISE.md §42): o contador que o aluno esqueceu
+medir. **Medido e feito** (NOTES.md §42): o contador que o aluno esqueceu
 de zerar saía com um a menos; o `llvm/pattern-init.patch` põe 0xAA… nos
 inteiros, sem mudar o tamanho do código.
 
@@ -586,7 +586,7 @@ libc++ ganham todas as verificações. No modo `trap`, o fator cai para 1,35×
 ## 8. Fases (reordenadas por T)
 
 Cada fase fecha com o `make test` com 0 diferenças, o `test-split`, o
-`checkinv` SAME e o registro no ANALISE.md.
+`checkinv` SAME e o registro no NOTES.md.
 
 | Fase | Entrega | Tamanho |
 |---|---|---|
@@ -597,53 +597,53 @@ Cada fase fecha com o `make test` com 0 diferenças, o `test-split`, o
 | **F3** | o passe do ASan no `sc_backend` (T1); o `libsc_rt`; o layout com offset (R2); o alocador e o loader (R8); o `__cxa_throw` (R9); o relato com pilha | grande |
 | **F4** | `strict`: U-estrito, vazamentos, libc++ `DEBUG`, `scanf("%s")`; opcional: libc instrumentada | média |
 
-**A F1 está feita** (ANALISE.md §30).
+**A F1 está feita** (NOTES.md §30).
 - A célula passou a contar como o arquivo principal
   (`llvm/incremental-main-file.patch`). Antes disso, o `-Wunreachable-code`
   não disparava, e o `-Wheader-hygiene` dava falso positivo.
 - O `-Wmissing-prototypes` saiu do S para o N: disparava em 16 dos 20
   programas corretos do `test/aluno` no `strict`.
 
-**A F0 está feita** (ANALISE.md §31): o erro em palavras e os frames do
+**A F0 está feita** (NOTES.md §31): o erro em palavras e os frames do
 aluno, com `-gline-tables-only` em toda sessão; o `test-split` com `-g`
 (T8) e o `make test-checks`.
 
-**A F2 está feita** (ANALISE.md §32): o UBSan com handlers na `libsc_rt`
+**A F2 está feita** (NOTES.md §32): o UBSan com handlers na `libsc_rt`
 (`rt/`), o `EXTENSIVE` da libc++ com a semântica `enforce` no sysroot, o
 `pattern`, e um `std.pcm` por nível no corpus. Uma célula leva 102 ms no
 `on` contra 61 ms no `off`.
 
-**A F2b está feita** (ANALISE.md §33): o corpus compila os `pic-`, os
+**A F2b está feita** (NOTES.md §33): o corpus compila os `pic-`, os
 `repl-` e os níveis com `-gline-tables-only`, e o `learn` devolveu o DWARF
 ao `sc.wasm` (+211 KB).
 
-**A F3 está feita** (ANALISE.md §34): o passe do ASan no `sc_backend`, o
+**A F3 está feita** (NOTES.md §34): o passe do ASan no `sc_backend`, o
 runtime em `rt/sc_asan.c`, a *shadow* em 0x110000, o alocador com
 quarentena, os nomes do `--wrap` no loader e o `__cxa_throw`. O
 `llvm/asan-cleanupret.patch` corrige o ASan com as exceções do wasm. O
 `-Wdeprecated-copy-with-user-provided-dtor` foi para o S. Uma célula leva
 115 ms no `on` contra 68 ms no `off`, e o `sc.wasm` cresceu 78 KB.
 
-**A F3b está feita** (ANALISE.md §36). O relato diz onde o bloco foi
+**A F3b está feita** (NOTES.md §36). O relato diz onde o bloco foi
 liberado e alocado, com pilhas capturadas pelo loader e simbolizadas por
 ele só no relato. Só os primeiros 20 mil blocos guardam a pilha, e o
 `std::map` de 100 mil chaves fica no tempo de antes (R12). O `sc FILE` com
 `setjmp`/`longjmp` também foi corrigido (§35).
 
-**Os vazamentos da F4 estão feitos** (ANALISE.md §37): no fim do `sc FILE`
+**Os vazamentos da F4 estão feitos** (NOTES.md §37): no fim do `sc FILE`
 no `strict` e no `:leaks` do REPL.
 
-**O libc++ `DEBUG` da F4 está feito** (ANALISE.md §38): o `strict` pega o
+**O libc++ `DEBUG` da F4 está feito** (NOTES.md §38): o `strict` pega o
 comparador que não é uma ordem estrita fraca, como o `<=` no `std::sort`.
 
-**O `scanf("%s")` da F4 está feito** (ANALISE.md §39): no `on` e no
+**O `scanf("%s")` da F4 está feito** (NOTES.md §39): no `on` e no
 `strict`, como os outros interceptores.
 
-**O U-estrito da F4 está feito** (ANALISE.md §40): no `strict`, fora dos
+**O U-estrito da F4 está feito** (NOTES.md §40): no `strict`, fora dos
 headers do sysroot (uma ignorelist), e sem as macros `isdigit`... da musl,
 que dão a volta no código do aluno.
 
-**A libc instrumentada da F4 ficou nos interceptores** (ANALISE.md §41): as
+**A libc instrumentada da F4 ficou nos interceptores** (NOTES.md §41): as
 funções que leem as strings do programa (`strlen`, `strcmp`, `printf("%s")`,
 `puts`, `atoi`...) conferem o que leem, com o `--wrap` de antes, sem uma
 segunda libc. A F4 está feita.
@@ -718,7 +718,7 @@ obrigatório (R5).
 5. **Os vazamentos aparecem só no `strict`.** O `:leaks` do REPL funciona no
    `on` e no `strict`: o `off` não tem o alocador que conhece os blocos
    (2026-10-16). Vazamento é o bloco que nada alcança, como no LSan, e ele
-   muda um status 0 para 1 (ANALISE §37).
+   muda um status 0 para 1 (NOTES.md §37).
 6. **O `strict` só liga `-Wpedantic`.** O dialeto continua `gnu23` e
    `gnu++26`.
 7. **O controle se chama `--safety=off|on|strict`**, no REPL `:safety
