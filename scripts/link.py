@@ -301,7 +301,7 @@ for o in sorted(objs - nm.keys()):
     r = sh([f'{W}/bin/llvm-nm', '--defined-only', '-g', p])
     # only strong definitions: --wrap of a weak one leaves __real_ undefined
     mangled = [x.split()[-1] for x in r.stdout.splitlines() if x.split()[1:2] == ['T']]
-    dem = subprocess.run(['llvm-cxxfilt'], input='\n'.join(mangled), capture_output=True, text=True).stdout.splitlines()
+    dem = subprocess.run([f'{W}/bin/llvm-cxxfilt'], input='\n'.join(mangled), capture_output=True, text=True).stdout.splitlines()
     nm[o] = list(zip(mangled, dem))
 json.dump(nm, open(nmfile, 'w'))
 noops, cands = {}, {}

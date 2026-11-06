@@ -5263,7 +5263,8 @@ um C e um C++ com exceção.
 O LLVM do pin custa, pelos `.ninja_log` daqui (a soma das tarefas, só
 dos alvos que o make pede), ~274 min nas ferramentas nativas e ~267 min
 nas bibliotecas wasm, além de ~6 min nos runtimes: ~2,3 h num runner de
-4 núcleos e ~4,6 h num de 2 (o repositório é privado). Por isso fica em
+4 núcleos (o `ubuntu-24.04` de repositório público) e ~4,6 h num de 2
+(o de repositório privado). Por isso fica em
 `.github/workflows/llvm.yaml`, em dois jobs (cada um bem abaixo do limite
 de 6 h), com cache com chave tirada de `make llvm-key` e de `llvm/*`:
 `build/native/bin` e `lib/clang` (~150 MB) e `build/wasm` inteiro
@@ -5274,3 +5275,32 @@ e o release o chama. Num clone limpo, só com o cache, o `make -n
 sc-deps` não chama nenhum `ninja` do LLVM. Também rodaram aqui o
 `cargo build --profile dist` de um alvo só com o artefato, o arquivo e o
 teste do binário.
+
+A primeira rodada na CI mostrou duas coisas. Com o repositório privado,
+nenhum job chegou a começar ("recent account payments have failed or your
+spending limit needs to be increased"): a cota de minutos de repositório
+privado tinha acabado, e os do LLVM nem caberiam nela. Com o repositório
+público, os minutos dos runners padrão não contam. E o `llvm.yaml` parou no
+`patch` do lld: o `llvm/lld-files.patch` tinha sido regerado (d34ad05) com
+o `lld-undef-index.patch` já aplicado e trazia de novo o hunk dele em
+`lld/wasm/InputFiles.cpp`. Aqui o `build/src` não é refeito do zero, e
+ninguém notou. Sem o hunk (1a4fc6e), os 16 patches, na ordem do Makefile,
+sobre os arquivos do pin dão exatamente o `build/src`, e todo arquivo que o
+`build/src` muda é coberto por um patch. Na mesma rodada a `ci.yaml` passou
+nos 9 jobs, com o `windows-11-arm` (testes do loader e clippy com o motor
+no aarch64-pc-windows-msvc). A imagem dele tem 7-Zip, OpenSSL e LLVM 20,
+o que o release usa.
+
+Na CI de fato (run 42262528778, `ubuntu-24.04` de 4 núcleos), o job das
+ferramentas nativas levou 48 min e o das bibliotecas wasm 34 min: 1h22 ao
+todo, bem menos que a conta dos `.ninja_log`, que são de uma máquina com
+outra carga. Os caches ficam com 46 MiB (`llvm-native-`) e 277 MiB
+(`llvm-wasm-`) comprimidos, longe do limite de 10 GB.
+
+A primeira rodada do release (run 42275091835) achou o cache (os dois jobs
+do `llvm.yaml` levaram segundos) e parou no `link.py`: o runner não tem o
+`wasm-tools`, que ele chama pelo nome, nem o `mksquashfs` do pack, nem o
+`llvm-cxxfilt`. Os dois primeiros o job instala (o `wasm-tools` 1.220.0
+daqui); o `llvm-cxxfilt` o `link.py` passa a tomar do wasi-sdk, como já faz
+com o `llvm-nm`. Sobre os 12 777 nomes do `build/link-nm.json` ele demangla
+igual ao do sistema.
