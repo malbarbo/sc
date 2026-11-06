@@ -5304,3 +5304,11 @@ do `llvm.yaml` levaram segundos) e parou no `link.py`: o runner não tem o
 daqui); o `llvm-cxxfilt` o `link.py` passa a tomar do wasi-sdk, como já faz
 com o `llvm-nm`. Sobre os 12 777 nomes do `build/link-nm.json` ele demangla
 igual ao do sistema.
+
+Com isso o release passou inteiro (run 42280578981, 30 min): o cache em
+segundos, o `sc.wasm` em 5 min e os seis alvos em paralelo, de 6 min
+(aarch64 musl) a 24 min (macOS x86_64), cada um com o teste do binário. O
+artefato `sc-deps` tem 11,7 MB e os arquivos (artefato zip, perto do
+tamanho do `.tar.gz`/`.zip`): 27,4 MB (x86_64 musl), 24,0 MB (aarch64
+musl), 27,1 MB (x86_64 Windows), 23,6 MB (aarch64 Windows), 27,2 MB
+(x86_64 macOS), 23,9 MB (aarch64 macOS).
