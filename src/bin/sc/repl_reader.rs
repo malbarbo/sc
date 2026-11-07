@@ -19,7 +19,7 @@ use crate::platform::Shell;
 use sc::repl::{Enter, INDENT};
 
 
-pub struct Reader {
+pub struct ReplReader {
     // `next` takes the editor to read and gives it back, except on the read
     // that ends the session, which is how the iteration stops.
     editor: Option<Editor<InputHelper, FileHistory>>,
@@ -32,8 +32,8 @@ pub fn color(terminal: bool) -> bool {
     !set("NO_COLOR") && (terminal || set("FORCE_COLOR"))
 }
 
-impl Reader {
-    pub fn new(shell: Arc<Mutex<Shell>>, completions: Vec<String>, theme: Theme) -> rustyline::Result<Reader> {
+impl ReplReader {
+    pub fn new(shell: Arc<Mutex<Shell>>, completions: Vec<String>, theme: Theme) -> rustyline::Result<ReplReader> {
         let config = Config::builder().completion_type(CompletionType::List).build();
         let mut editor = Editor::with_config(config)?;
         editor.set_helper(Some(InputHelper {
@@ -52,7 +52,7 @@ impl Reader {
         if let Some(history) = history_path() {
             let _ = editor.load_history(&history);
         }
-        Ok(Reader { editor: Some(editor) })
+        Ok(ReplReader { editor: Some(editor) })
     }
 
     /// The names Tab offers, which grow with every cell.
@@ -84,7 +84,7 @@ impl Prompt for ReplPrompt {
     }
 }
 
-impl Iterator for Reader {
+impl Iterator for ReplReader {
     type Item = String;
 
     fn next(&mut self) -> Option<String> {

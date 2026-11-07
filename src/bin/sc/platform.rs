@@ -1,6 +1,6 @@
 //! The platform of the native `sc`: the compiler is sc.wasm's session in
 //! this process, the code on wasmtime, the pack embedded.
-use crate::{pack, reader};
+use crate::{pack, repl_reader};
 use sc::engine::Guest;
 use sc::loader::native::Wasmtime;
 use std::io::{self, IsTerminal};
@@ -43,6 +43,6 @@ impl sc::repl::Platform for Native {
     }
 
     fn color(&self) -> bool {
-        reader::color(io::stderr().is_terminal())
+        repl_reader::color(io::stderr().is_terminal())
     }
 }

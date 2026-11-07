@@ -20,7 +20,7 @@
 mod config;
 mod pack;
 mod platform;
-mod reader;
+mod repl_reader;
 mod shell;
 
 use bpaf::{Bpaf, Parser};

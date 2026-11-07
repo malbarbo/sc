@@ -1,7 +1,7 @@
 //! The REPL's loop with its line editor, over the library's shell
 //! (`sc::shell`), to which it adds `:theme`.
 use crate::platform::{Repl, Shell};
-use crate::reader::{Reader, Theme};
+use crate::repl_reader::{ReplReader, Theme};
 use crate::{config, Result};
 use sc::shell::Status;
 use sc::repl::{Lang, Safety};
@@ -24,7 +24,7 @@ pub fn run(repl: Repl) -> Result<i32> {
     shell.add(":theme", Some("[light|dark]"), "Show or switch the theme", theme_action(Arc::clone(&theme)));
     let completions = shell.completions();
     let shell = Arc::new(Mutex::new(shell));
-    let mut reader = Reader::new(Arc::clone(&shell), completions, *theme.lock().unwrap())?;
+    let mut reader = ReplReader::new(Arc::clone(&shell), completions, *theme.lock().unwrap())?;
     let mut status = 0;
     while let Some(input) = reader.next() {
         let mut s = shell.lock().unwrap();

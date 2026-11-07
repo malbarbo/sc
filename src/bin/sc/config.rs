@@ -1,5 +1,5 @@
 //! The theme, saved in `config_dir()/sc/config` as a `key=value` line.
-use crate::reader::Theme;
+use crate::repl_reader::Theme;
 use std::path::PathBuf;
 
 pub struct Config {

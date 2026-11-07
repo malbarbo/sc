@@ -76,7 +76,7 @@ change is more than one, and it becomes more than one commit.
   the LLVM that `.github/workflows/llvm.yaml` keeps in a cache, and each
   target compiles `sc` around it. A change to the pin or to `llvm/` costs a
   new LLVM build in the CI, about 1h20.
-- Colour is decided in `src/bin/sc/reader.rs`, and nowhere else. A
+- Colour is decided in `src/bin/sc/repl_reader.rs`, and nowhere else. A
   non-empty `NO_COLOR` keeps the escape codes out, as
   <https://no-color.org> asks, and a non-empty `FORCE_COLOR` asks for them
   where no terminal is watching.
