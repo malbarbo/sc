@@ -14,7 +14,7 @@ use wasmtime_wasi::I32Exit;
 mod ctrl_c;
 pub use ctrl_c::InRawMode;
 
-struct Host {
+struct Ctx {
     wasi: WasiP1Ctx,
     stacks: Stacks,
 }
@@ -34,8 +34,8 @@ enum Item {
 
 pub struct Wasmtime {
     engine: Engine,
-    store: Store<Host>,
-    linker: Linker<Host>,
+    store: Store<Ctx>,
+    linker: Linker<Ctx>,
     handles: Vec<Item>, // handle k + 1
     instances: Vec<(Module, H)>, // for the instance of a frame
     wasi: HashMap<(H, String), Func>, // the WASI functions on each memory
@@ -45,9 +45,9 @@ pub struct Wasmtime {
 impl Wasmtime {
     pub fn new(wasi: WasiP1Ctx) -> wasmtime::Result<Wasmtime> {
         let engine = Engine::new(&config::config())?;
-        let store = Store::new(&engine, Host { wasi, stacks: Stacks::default() });
+        let store = Store::new(&engine, Ctx { wasi, stacks: Stacks::default() });
         let mut linker = Linker::new(&engine);
-        p1::add_to_linker_sync(&mut linker, |h: &mut Host| &mut h.wasi)?;
+        p1::add_to_linker_sync(&mut linker, |h: &mut Ctx| &mut h.wasi)?;
         Ok(Wasmtime { engine, store, linker, handles: Vec::new(), instances: Vec::new(), wasi: HashMap::new(), stack: None })
     }
 
@@ -117,7 +117,7 @@ impl Wasmtime {
             return f;
         }
         let ty = FuncType::new(&self.engine, [], [ValType::I32]);
-        let f = Func::new(&mut self.store, ty, |mut caller: wasmtime::Caller<'_, Host>, _, r| {
+        let f = Func::new(&mut self.store, ty, |mut caller: wasmtime::Caller<'_, Ctx>, _, r| {
             let bt = WasmBacktrace::capture(&caller);
             let key: Vec<(usize, usize)> = bt.frames().iter()
                 .map(|f| (f.module().image_range().start as usize, f.module_offset().unwrap_or(0))).collect();
