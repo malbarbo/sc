@@ -190,7 +190,7 @@ struct Info {
 struct Pending<'a> {
     name: String,
     bytes: Cow<'a, [u8]>,
-    compiled: Option<&'static [u8]>,
+    cwasm: Option<&'static [u8]>,
     info: Info,
     debug: Option<DebugInfo>,
 }
@@ -653,7 +653,7 @@ impl<R: Runtime> Loader<R> {
 
     /// The module `name` and the libraries it needs, not loaded yet,
     /// dependencies first.
-    fn collect<'a>(&self, name: &str, bytes: Cow<'a, [u8]>, compiled: Option<&'static [u8]>, seen: &mut HashSet<String>,
+    fn collect<'a>(&self, name: &str, bytes: Cow<'a, [u8]>, cwasm: Option<&'static [u8]>, seen: &mut HashSet<String>,
                    out: &mut Vec<Pending<'a>>) -> Result<()> {
         if self.loaded.contains(name) || !seen.insert(name.to_string()) {
             return Ok(());
@@ -667,7 +667,7 @@ impl<R: Runtime> Loader<R> {
             self.collect(n, lib.wasm, lib.cwasm, seen, out)?;
         }
         let debug = debug(&bytes)?;
-        out.push(Pending { name: name.to_string(), bytes, compiled, info, debug });
+        out.push(Pending { name: name.to_string(), bytes, cwasm, info, debug });
         Ok(())
     }
 
@@ -1015,7 +1015,7 @@ impl<R: Runtime> Loader<R> {
                     _ => fail!("{}: unsupported import {m}.{n}", p.name),
                 });
             }
-            let inst = self.rt.instantiate(&p.bytes, p.compiled, &mut imports)?;
+            let inst = self.rt.instantiate(&p.bytes, p.cwasm, &mut imports)?;
             for (i, n) in later {
                 if let Import::Handle(g) = imports[i] {
                     self.unresolved.later.push((n, g));
