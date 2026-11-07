@@ -5506,3 +5506,21 @@ session passes. No corpus can learn a call like that, so
 `cuts/symbols.txt` keeps the whole trait (`EqualKey` calls `getFile`,
 which was cut too). `sc.wasm` grows from 39,561,749 to 39,563,151 bytes
 (+1,402).
+
+## 72. The compiler's stack
+
+Testing sc in simplecode found that a template's infinite recursion
+(`template <int N> struct F { static const int v = F<N+1>::v; };`) gives
+"the engine crashed on this cell" in place of clang's error. The trap is
+`call stack exhausted`, in wasmtime's native stack (`max_wasm_stack`,
+512 KiB by default), not in sc.wasm's 8 MB of linear stack. With 512 KiB
+a template instantiated 200 deep crashes, and so does a constexpr call 300
+deep. clang's limits are 1024 and 512. With 4 MiB both reach the limit
+and give the error. So `Guest` takes `COMPILER_STACK`, 8 MiB, and `sc`
+runs on a thread with twice that, because the main thread of Windows has
+1 MB. A sum of 200,000 terms still overflows 8 MiB. That trap, natively
+and inside sc.wasm, now answers "the compiler ran out of stack on this
+cell (a recursion too deep?)", and the session goes on. On Node, V8's
+stack fits a template 200 deep and not 400, and the browser's is out of
+sc's hands. Five sources that overflow 512 KiB in the corpus compile in
+the session now, and `test/session.py` lists them as known.

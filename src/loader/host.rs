@@ -53,7 +53,7 @@ unsafe extern "C" {
 
 /// The kind of a trap's code, and wasmtime's words for it, which the
 /// loader's users print (a host's differ from one to another).
-fn kind(code: u64) -> (TrapKind, Option<&'static str>) {
+pub fn kind(code: u64) -> (TrapKind, Option<&'static str>) {
     match code {
         1 => (TrapKind::Interrupt, Some("interrupt")),
         2 => (TrapKind::StackOverflow, Some("call stack exhausted")),

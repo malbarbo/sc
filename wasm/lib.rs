@@ -6,9 +6,9 @@
 //! simplecode, says what each one asks of its pointers.
 #![allow(clippy::missing_safety_doc)]
 
-use sc::engine::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, Session, CRASHED};
+use sc::engine::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, Session, CRASHED, OVERFLOWED};
 use sc::loader::host::{self, Host};
-use sc::loader::{libdirs, Error, Loader, STACK};
+use sc::loader::{libdirs, Error, Loader, TrapKind, STACK};
 use sc::shell::{self, Shell};
 use sc::repl::{Enter, Lang, Outcome, Platform, Repl, Safety, INDENT, ROOT};
 use std::ffi::{c_char, c_int, c_ulonglong, CString};
@@ -116,6 +116,9 @@ impl Compiler for Local {
             // the memory back first: what the host's error allocates would
             // be lost with what the cell allocated
             st => match unsafe { sc_session_restore(raw) } as u32 {
+                sys::sc_status::SC_ERROR if st == host::TRAP && host::kind(vals[0]).0 == TrapKind::StackOverflow => {
+                    Ok(Answer::bare(CellStatus::Error, OVERFLOWED.into()))
+                }
                 sys::sc_status::SC_ERROR => Ok(Answer::bare(CellStatus::Error, CRASHED.into())),
                 _ => {
                     // what the cell left of it cannot be freed

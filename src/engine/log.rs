@@ -38,6 +38,10 @@ pub struct TypeOf {
 /// session back.
 pub const CRASHED: &str = "sc: the engine crashed on this cell; the session is as it was before it\n";
 
+/// What a cell answers when the compiler ran out of stack on it, as in a
+/// recursion of templates or constexpr deeper than the stack allows.
+pub const OVERFLOWED: &str = "sc: the compiler ran out of stack on this cell (a recursion too deep?)\n";
+
 /// A compiler with one session at a time, which a [`Log`] drives. A
 /// failed cell leaves nothing in it: the session is as before the cell.
 pub trait Compiler: Sized {

@@ -16,7 +16,7 @@
 //! `SC_CWASM` names another module, compiled by [`precompile`]: the
 //! batteries run the uncut engine (sc-full.wasm) and the cuts being learned
 //! so. The trap of a function the cuts removed says its name on stderr.
-use super::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, CRASHED};
+use super::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, CRASHED, OVERFLOWED};
 use crate::repl::ROOT;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -338,6 +338,7 @@ impl Guest {
             Some(Stop::Interrupted) => "sc: interrupted\n".into(),
             Some(Stop::TimedOut) => format!("sc: the compiler took more than {t} s\n"),
             _ if self.store.data().over => format!("sc: the compiler took more than {m} MB\n"),
+            _ if e.downcast_ref::<wasmtime::Trap>() == Some(&wasmtime::Trap::StackOverflow) => OVERFLOWED.into(),
             _ => {
                 // the cut function a crash called (frame 0 `__wrap_`,
                 // scripts/link.py), for make learn-session; the engine has
