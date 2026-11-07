@@ -216,13 +216,29 @@ pub struct Loader<R: Runtime = Native> {
     later: Vec<(String, H)>,      // GOT.mem imports of symbols not defined yet
     undefined: Vec<String>,       // what the addresses from UNDEFINED stand for
     missing: Vec<String>,         // the functions not defined yet that a call may reach, from 1
-    slots: HashMap<String, (u32, bool)>, // table slots of functions not defined yet: whether filled
+    slots: HashMap<String, Reserved>, // table slots of functions not defined yet
     asan: bool,                   // the memory has ASan's shadow
     debug: Vec<Debug>,            // of the modules with DWARF
     data: Vec<Data>,
     journal: Option<Vec<(String, Option<Sym>)>>, // what a group being defined replaced
     catchers: HashMap<(String, H), H>, // gen::catcher's try, by signature and tag
     scratch: Option<u32>,         // the table slot of the function a catcher calls
+}
+
+/// The table slot of a function not defined yet.
+#[derive(Clone, Copy)]
+struct Reserved {
+    slot: u32,
+    /// The slot holds a function that says which one is missing (a call),
+    /// not null (only an address, GOT.func).
+    filled: bool,
+}
+
+/// A GOT entry's value.
+enum Got {
+    Now(u32),
+    /// An address from UNDEFINED, to be set when the variable comes.
+    Later(u32),
 }
 
 /// Gives `sym`, a function, the table slot `s`.
@@ -709,16 +725,14 @@ impl<R: Runtime> Loader<R> {
     /// it is to be filled now: with its type, if known (a call, not only an
     /// address), a function that says which one is missing.
     fn reserve_slot(&mut self, name: &str, ft: bool) -> Result<(u32, bool)> {
-        if let Some(&(s, filled)) = self.slots.get(name) {
+        if let Some(r) = self.slots.get_mut(name) {
             // reserved by an address (GOT.func), which left it null
-            if ft && !filled {
-                self.slots.insert(name.to_string(), (s, true));
-                return Ok((s, true));
-            }
-            return Ok((s, false));
+            let fill = ft && !r.filled;
+            r.filled |= fill;
+            return Ok((r.slot, fill));
         }
         let s = self.table_grow(1)?;
-        self.slots.insert(name.to_string(), (s, ft));
+        self.slots.insert(name.to_string(), Reserved { slot: s, filled: ft });
         Ok((s, ft))
     }
 
@@ -788,16 +802,16 @@ impl<R: Runtime> Loader<R> {
     /// The slots reserved for functions now defined become theirs: a
     /// function of a group being loaded fills its slot once its module is
     /// instantiated. Returns the slots taken.
-    fn forward(&mut self) -> Result<Vec<(String, (u32, bool))>> {
-        let slots: Vec<(String, (u32, bool), Option<H>)> = self.slots.iter()
+    fn forward(&mut self) -> Result<Vec<(String, Reserved)>> {
+        let slots: Vec<(String, Reserved, Option<H>)> = self.slots.iter()
             .filter_map(|(n, &s)| match self.syms.get(n) { Some(Sym::Func { handle, slot: None, .. }) => Some((n.clone(), s, *handle)), _ => None })
             .collect();
         let mut taken = Vec::new();
         for (n, s, f) in slots {
             if let Some(f) = f {
-                self.world("table_set", &[s.0 as u64, f as u64])?;
+                self.world("table_set", &[s.slot as u64, f as u64])?;
             }
-            set_slot(self.syms.get_mut(&n), s.0);
+            set_slot(self.syms.get_mut(&n), s.slot);
             self.slots.remove(&n);
             taken.push((n, s));
         }
@@ -893,7 +907,7 @@ impl<R: Runtime> Loader<R> {
     /// The group's symbols from the bytes, then each module instantiated:
     /// the instances and their memory bases. `taken`: the reserved slots
     /// the group's functions took.
-    fn instantiate(&mut self, name: &str, group: &mut [Pending], shadow: bool, taken: &mut Vec<(String, (u32, bool))>)
+    fn instantiate(&mut self, name: &str, group: &mut [Pending], shadow: bool, taken: &mut Vec<(String, Reserved)>)
                    -> Result<Vec<(H, u32)>> {
         let mut bases = Vec::new();
         let mut owner: HashMap<String, usize> = HashMap::new(); // the module of each function defined
@@ -955,10 +969,13 @@ impl<R: Runtime> Loader<R> {
                     ("env", "__table_base", _) => Import::I32 { value: table_base as i32, mutable: false },
                     ("GOT.mem" | "GOT.func", _, Kind::Global) => {
                         let t = self.target(n);
-                        let (v, l) = self.got(&t, m == "GOT.func", weak)?;
-                        if l {
-                            later.push((imports.len(), t));
-                        }
+                        let v = match self.got(&t, m == "GOT.func", weak)? {
+                            Got::Now(v) => v,
+                            Got::Later(v) => {
+                                later.push((imports.len(), t));
+                                v
+                            }
+                        };
                         Import::I32 { value: v as i32, mutable: true }
                     }
                     ("wasi_snapshot_preview1", _, _) => Import::Default,
@@ -1011,16 +1028,15 @@ impl<R: Runtime> Loader<R> {
         Ok(insts)
     }
 
-    /// The value of a GOT entry, an address or a table slot, and whether
-    /// it is to be set when the variable comes.
-    fn got(&mut self, n: &str, func: bool, weak: bool) -> Result<(u32, bool)> {
+    /// The value of a GOT entry, an address or a table slot.
+    fn got(&mut self, n: &str, func: bool, weak: bool) -> Result<Got> {
         Ok(match self.syms.get(n).copied() {
-            Some(Sym::Data(a)) if !func => (a, false),
-            Some(Sym::Func { .. }) if func => (self.slot(n)?, false),
+            Some(Sym::Data(a)) if !func => Got::Now(a),
+            Some(Sym::Func { .. }) if func => Got::Now(self.slot(n)?),
             Some(_) => fail!("{n}: GOT.{} of a {}", if func { "func" } else { "mem" }, if func { "data" } else { "function" }),
-            None if weak => (0, false),
-            None if func => (self.reserve_slot(n, false)?.0, false),
-            None => (self.undefined_address(n), true),
+            None if weak => Got::Now(0),
+            None if func => Got::Now(self.reserve_slot(n, false)?.0),
+            None => Got::Later(self.undefined_address(n)),
         })
     }
 
