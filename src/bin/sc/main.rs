@@ -163,9 +163,18 @@ fn replay(args: &[String]) -> Result<()> {
     let mut sos: Vec<PathBuf> = vec![];
     let mut out = io::stdout().lock();
     for (k, cell) in cells.iter().enumerate() {
-        // None: a restart, which has no answer of its own
+        if cell == "%undo" {
+            match r.undo() {
+                Ok(()) => {
+                    writeln!(out, "== {cell} ok")?;
+                    fs::remove_file(sos.pop().ok_or("undo without a shared object")?)?;
+                }
+                Err(why) => write!(out, "== {cell} error\n{why}")?,
+            }
+            continue;
+        }
+        // a restart has no answer of its own
         let a = match cell.as_str() {
-            "%undo" => r.undo().map(Some),
             "%restart" => r.restart().map(|()| None),
             _ => r.cell(&fs::read(cell)?).map(Some),
         };
@@ -185,9 +194,7 @@ fn replay(args: &[String]) -> Result<()> {
         };
         writeln!(out, "== {cell} {st}")?;
         out.write_all(a.diags.as_bytes())?;
-        if cell == "%undo" && a.status == Status::Ok {
-            fs::remove_file(sos.pop().ok_or("undo without a shared object")?)?;
-        } else if a.status == Status::Ok {
+        if a.status == Status::Ok {
             let so = PathBuf::from(dir).join(format!("{:03}.so", k + 1));
             fs::write(&so, &a.so)?;
             sos.push(so);

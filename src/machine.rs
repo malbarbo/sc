@@ -216,11 +216,11 @@ impl<P: Platform> Machine<P> {
 
     /// Writes the type of `expr` without running it: whether it is one.
     pub fn type_of(&mut self, expr: &str) -> Result<bool> {
-        let a = self.repl.type_of(expr.as_bytes())?;
-        eprint!("{}", a.diags);
-        match a.syms.first() {
-            Some(t) if a.status == Status::Ok => println!("{t}"),
-            _ => return Ok(false),
+        let t = self.repl.type_of(expr.as_bytes())?;
+        eprint!("{}", t.diags);
+        match t.ty {
+            Some(ty) => println!("{ty}"),
+            None => return Ok(false),
         }
         Ok(true)
     }
@@ -279,17 +279,21 @@ impl<P: Platform> Machine<P> {
         if !self.loader.is_loaded(&name) {
             // nothing of it is in the loader (an import of another type):
             // nor is it in the compiler, so that it can be written again
-            eprint!("{}", self.repl.undo()?.diags);
+            if let Err(why) = self.repl.undo() {
+                eprint!("{why}");
+            }
         }
         Ok(out)
     }
 
     /// Undoes the last accepted cell in the compiler: its names can be
-    /// defined again. What its code did stays done.
-    pub fn undo(&mut self) -> Result<bool> {
-        let a = self.repl.undo()?;
-        eprint!("{}", a.diags);
-        Ok(a.status == Status::Ok)
+    /// defined again. What its code did stays done. Whether it did.
+    pub fn undo(&mut self) -> bool {
+        let r = self.repl.undo();
+        if let Err(why) = &r {
+            eprint!("{why}");
+        }
+        r.is_ok()
     }
 
     /// Runs `main` and exits.

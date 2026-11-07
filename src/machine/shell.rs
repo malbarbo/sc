@@ -164,7 +164,7 @@ impl<P: Platform> Shell<P> {
             }
             Builtin::Quit => Status::Quit,
             Builtin::Type => ok(m.type_of(arg)?),
-            Builtin::Undo => ok(m.undo()?),
+            Builtin::Undo => ok(m.undo()),
             Builtin::Leaks if m.safety() == Safety::Off => {
                 println!("The :leaks command needs safety on or strict.");
                 Status::Error

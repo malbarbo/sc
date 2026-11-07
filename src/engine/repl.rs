@@ -13,15 +13,25 @@ pub struct Answer {
     pub diags: String,
     /// The cell as a wasm shared object.
     pub so: Vec<u8>,
-    /// The names the cell exports; [`Mode::Type`]: the type.
-    pub syms: Vec<String>,
+    /// The names the cell exports; [`Mode::Type`]: the type, which
+    /// [`Repl::type_of`] takes out.
+    pub names: Vec<String>,
 }
 
 impl Answer {
     /// An answer with diagnostics alone.
     pub fn bare(status: Status, diags: String) -> Answer {
-        Answer { status, diags, so: vec![], syms: vec![] }
+        Answer { status, diags, so: vec![], names: vec![] }
     }
+}
+
+/// The type of an expression ([`Repl::type_of`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypeOf {
+    /// None if the source is not an expression.
+    pub ty: Option<String>,
+    /// The diagnostics, as clang prints them.
+    pub diags: String,
 }
 
 /// A compiler with one session at a time, which a [`Repl`] drives. A
@@ -30,8 +40,9 @@ pub trait Compiler: Sized {
     /// Another compiler as this one, without a session.
     fn another(&self) -> Result<Self, CompilerError>;
     /// A session of `args`, in place of the one before: see
-    /// [`super::sys::sc_session_new`].
-    fn new_session(&mut self, args: &[String]) -> Result<Answer, CompilerError>;
+    /// [`super::sys::sc_session_new`]. [`CompilerError::Start`] if it does
+    /// not start.
+    fn new_session(&mut self, args: &[String]) -> Result<(), CompilerError>;
     fn cell(&mut self, src: &[u8], mode: Mode) -> Result<Answer, CompilerError>;
     /// See [`super::sys::sc_session_depth`].
     fn depth(&mut self, src: &[u8]) -> Result<u32, CompilerError>;
@@ -47,6 +58,8 @@ pub trait Compiler: Sized {
 pub enum CompilerError {
     /// The compiler ended, and the session with it: why.
     Lost(String),
+    /// The session did not start: the diagnostics.
+    Start(String),
     /// The compiler did not start, or it refused the request.
     Io(io::Error),
 }
@@ -55,6 +68,7 @@ impl fmt::Display for CompilerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CompilerError::Lost(why) => write!(f, "the engine ended ({why})"),
+            CompilerError::Start(d) => write!(f, "the session did not start: {d}"),
             CompilerError::Io(e) => write!(f, "{e}"),
         }
     }
@@ -72,8 +86,6 @@ impl From<io::Error> for CompilerError {
 #[derive(Debug)]
 pub enum ReplError {
     Compiler(CompilerError),
-    /// The session did not start: the diagnostics.
-    Start(String),
     /// The replay of the cell at this index of the log did not give what it
     /// gave the first time: the student must restart the session.
     Diverged(usize),
@@ -83,7 +95,6 @@ impl fmt::Display for ReplError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ReplError::Compiler(e) => write!(f, "{e}"),
-            ReplError::Start(d) => write!(f, "the session did not start: {d}"),
             ReplError::Diverged(i) => write!(f, "the replay of cell {} diverged", i + 1),
         }
     }
@@ -100,7 +111,7 @@ impl From<CompilerError> for ReplError {
 /// An accepted cell of the log: its source and the names it exported.
 struct Entry {
     src: Vec<u8>,
-    syms: Vec<String>,
+    names: Vec<String>,
 }
 
 /// A session, with the log of its accepted cells. A failed cell leaves
@@ -128,7 +139,7 @@ impl<C: Compiler> Repl<C> {
         let mut compiler = open(self.compiler.another()?, &self.args)?;
         for (i, e) in self.log.iter().enumerate() {
             let a = compiler.cell(&e.src, Mode::Replay)?;
-            if a.status != Status::Ok || a.syms != e.syms {
+            if a.status != Status::Ok || a.names != e.names {
                 return Err(ReplError::Diverged(i));
             }
         }
@@ -148,7 +159,7 @@ impl<C: Compiler> Repl<C> {
 
     /// The names the accepted cells export.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.log.iter().flat_map(|e| &e.syms).map(String::as_str)
+        self.log.iter().flat_map(|e| &e.names).map(String::as_str)
     }
 
     /// Compiles a cell. [`Status::Lost`]: the cell ended the session (its
@@ -164,10 +175,12 @@ impl<C: Compiler> Repl<C> {
         self.compile(src, Mode::Whole)
     }
 
-    /// The type of `src`, an expression without its `;`, if
-    /// [`Status::Ok`]. Nothing of it is kept.
-    pub fn type_of(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
-        self.compile(src, Mode::Type)
+    /// The type of `src`, an expression without its `;`. Nothing of it is
+    /// kept.
+    pub fn type_of(&mut self, src: &[u8]) -> Result<TypeOf, ReplError> {
+        let a = self.compile(src, Mode::Type)?;
+        let ty = if a.status == Status::Ok { a.names.into_iter().next() } else { None };
+        Ok(TypeOf { ty, diags: a.diags })
     }
 
     /// See [`super::sys::sc_session_depth`].
@@ -188,7 +201,7 @@ impl<C: Compiler> Repl<C> {
             Err(e) => return Err(e.into()),
         };
         match a.status {
-            Status::Ok if mode != Mode::Type => self.log.push(Entry { src: src.to_vec(), syms: a.syms.clone() }),
+            Status::Ok if mode != Mode::Type => self.log.push(Entry { src: src.to_vec(), names: a.names.clone() }),
             Status::Ok | Status::Error | Status::Incomplete => {}
             // a replay that fails (interrupted too, or above the limits)
             // leaves the compiler that ended: the next request replays again
@@ -206,27 +219,24 @@ impl<C: Compiler> Repl<C> {
         Ok(a)
     }
 
-    /// Undoes the last accepted cell: [`Status::Ok`] once the session is
-    /// back without it, [`Status::Error`] if there is none or the replay
-    /// failed (the session stays as it was).
-    pub fn undo(&mut self) -> Result<Answer, ReplError> {
+    /// Undoes the last accepted cell. An `Err` says why not, for the
+    /// student: there is none, or the replay failed, and the session stays
+    /// as it was.
+    pub fn undo(&mut self) -> Result<(), String> {
         let Some(last) = self.log.pop() else {
-            return Ok(Answer::bare(Status::Error, "sc: no cell to undo\n".into()));
+            return Err("sc: no cell to undo\n".into());
         };
         // the generated code cannot be undone in the session (§3.3)
         if let Err(e) = self.restart() {
             self.log.push(last);
-            return Ok(Answer::bare(Status::Error, format!("sc: the cell was not undone: {e}\n")));
+            return Err(format!("sc: the cell was not undone: {e}\n"));
         }
-        Ok(Answer::bare(Status::Ok, String::new()))
+        Ok(())
     }
 }
 
 /// `compiler` with a session of `args`.
 fn open<C: Compiler>(mut compiler: C, args: &[String]) -> Result<C, ReplError> {
-    let a = compiler.new_session(args)?;
-    if a.status != Status::Ok {
-        return Err(ReplError::Start(a.diags));
-    }
+    compiler.new_session(args)?;
     Ok(compiler)
 }

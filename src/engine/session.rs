@@ -188,7 +188,7 @@ impl<'s> Reply<'s> {
 
     /// The names the cell exports, to check a replay; [`Mode::Type`]: the
     /// type.
-    pub fn syms(&self) -> impl Iterator<Item = Cow<'s, str>> {
+    pub fn names(&self) -> impl Iterator<Item = Cow<'s, str>> {
         self.session.part(sys::sc_part::SC_SYMS).split(|&b| b == b'\n').filter(|l| !l.is_empty()).map(String::from_utf8_lossy)
     }
 }

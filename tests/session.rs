@@ -75,7 +75,7 @@ fn cells() {
     assert_eq!(a.status, Status::Error);
     assert_eq!(cell(&mut r, &mut sos, "#include <stdio.h>\nint p(void) { return EOF; }").status, Status::Ok);
     sos.pop();
-    assert_eq!(r.undo().unwrap().status, Status::Ok);
+    assert_eq!(r.undo(), Ok(()));
     // a crash traps, and the copy from before the cell puts the session back
     let a = cell(&mut r, &mut sos, "#pragma clang __debug crash");
     assert_eq!(a.status, Status::Error);
@@ -83,7 +83,7 @@ fn cells() {
     assert_eq!(r.len(), 3);
     // undo replays the log without the last accepted cell
     assert_eq!(cell(&mut r, &mut sos, "int bad(void) { return 1; }").status, Status::Ok);
-    assert_eq!(r.undo().unwrap().status, Status::Ok);
+    assert_eq!(r.undo(), Ok(()));
     sos.pop();
     assert_eq!(r.len(), 3);
     // the static of the first instance is the one of the cells after the replays
@@ -93,7 +93,7 @@ fn cells() {
 
     // nothing to undo
     let mut r = repl(false);
-    assert_eq!(r.undo().unwrap().status, Status::Error);
+    assert!(r.undo().is_err());
 }
 
 /// Above a limit (a timeout of 0, Ctrl-C, the memory) the call stops, and
@@ -113,9 +113,8 @@ fn limits() {
     assert_eq!(r.cell(b"int x2 = x1;").unwrap().status, Status::Ok);
     // the replay of <regex> takes more than the watchdog's tick
     r.limit(Some(std::time::Duration::ZERO), None);
-    let a = r.undo().unwrap();
-    assert_eq!(a.status, Status::Error);
-    assert!(a.diags.contains("the cell was not undone"), "{a:?}");
+    let why = r.undo().unwrap_err();
+    assert!(why.contains("the cell was not undone"), "{why}");
     assert_eq!(r.len(), 3);
     r.limit(None, None);
     assert_eq!(r.cell(b"int x3 = x2;").unwrap().status, Status::Ok);
@@ -224,18 +223,18 @@ fn type_of() {
     let mut r = repl(false);
     assert_eq!(r.cell(b"int x = 3; struct p { int a; } q;").unwrap().status, Status::Ok);
     let mut ty = |src: &str| {
-        let a = r.type_of(src.as_bytes()).unwrap();
-        (a.status, a.syms.join(""), a.diags)
+        let t = r.type_of(src.as_bytes()).unwrap();
+        (t.ty, t.diags)
     };
     for (src, want) in [("x", "int"), ("q", "struct p"), ("&q.a", "int *"), ("sizeof x", "size_t"),
                         ("\"ab\"", "char[3]"), ("x / 2.0", "double"), ("(struct r { int b; }){1}", "struct r")] {
-        let (st, t, d) = ty(src);
-        assert_eq!((st, t.as_str()), (Status::Ok, want), "{src:?}: {d}");
+        let (t, d) = ty(src);
+        assert_eq!(t.as_deref(), Some(want), "{src:?}: {d}");
         assert!(d.is_empty(), "{src:?}: {d}");
     }
     for src in ["int", "x;", "1; 2", "y", ""] {
-        let (st, t, d) = ty(src);
-        assert_eq!((st, t.as_str()), (Status::Error, ""), "{src:?}");
+        let (t, d) = ty(src);
+        assert_eq!(t, None, "{src:?}");
         assert!(d.contains("error:"), "{src:?}: {d}");
     }
     // the struct of the expression is gone, and the log has the one cell
@@ -249,8 +248,8 @@ fn type_of() {
     assert_eq!(r.cell(src.as_bytes()).unwrap().status, Status::Ok);
     for (src, want) in [("s", "std::string"), ("s + \"c\"", "std::string"), ("s.size()", "size_t"),
                         ("v[0]", "int"), ("v.begin()", "std::__wrap_iter<int *>"), ("T(t)", "T")] {
-        let a = r.type_of(src.as_bytes()).unwrap();
-        assert_eq!((a.status, a.syms.join("")), (Status::Ok, want.to_string()), "{src:?}: {}", a.diags);
+        let t = r.type_of(src.as_bytes()).unwrap();
+        assert_eq!(t.ty.as_deref(), Some(want), "{src:?}: {}", t.diags);
     }
     assert_eq!(r.cell(b"T u = t;").unwrap().status, Status::Ok);
 }

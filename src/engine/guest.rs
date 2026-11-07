@@ -291,12 +291,12 @@ impl Guest {
     }
 
     fn answer(&mut self, st: i32) -> wasmtime::Result<Answer> {
-        let [diags, so, syms] = [sys::sc_part::SC_DIAGS, sys::sc_part::SC_SO, sys::sc_part::SC_SYMS].map(|p| self.part(p));
+        let [diags, so, names] = [sys::sc_part::SC_DIAGS, sys::sc_part::SC_SO, sys::sc_part::SC_SYMS].map(|p| self.part(p));
         Ok(Answer {
             status: Status::from_raw(st as u32),
             diags: String::from_utf8_lossy(&diags?).into_owned(),
             so: so?,
-            syms: String::from_utf8_lossy(&syms?).lines().map(String::from).collect(),
+            names: String::from_utf8_lossy(&names?).lines().map(String::from).collect(),
         })
     }
 
@@ -351,7 +351,7 @@ impl Compiler for Guest {
         Ok(Guest::new(self.timeout, self.memory)?)
     }
 
-    fn new_session(&mut self, args: &[String]) -> Result<Answer, CompilerError> {
+    fn new_session(&mut self, args: &[String]) -> Result<(), CompilerError> {
         if self.dead {
             return Err(lost("a session before"));
         }
@@ -375,10 +375,14 @@ impl Compiler for Guest {
             g.session = u32::from_le_bytes(s);
             g.answer(st)
         });
-        r.map_err(|(e, _)| {
+        let a = r.map_err(|(e, _)| {
             self.dead = true;
             lost(e)
-        })
+        })?;
+        if a.status != Status::Ok {
+            return Err(CompilerError::Start(a.diags));
+        }
+        Ok(())
     }
 
     fn cell(&mut self, src: &[u8], mode: Mode) -> Result<Answer, CompilerError> {

@@ -88,18 +88,18 @@ impl Compiler for Local {
         Ok(Local::default())
     }
 
-    fn new_session(&mut self, args: &[String]) -> Result<Answer, CompilerError> {
+    fn new_session(&mut self, args: &[String]) -> Result<(), CompilerError> {
         self.session = None;
         // SAFETY: only sets a flag
         unsafe { sc_session_snapshot(1) };
-        Ok(match Session::new(args) {
+        match Session::new(args) {
             Ok(s) => {
                 self.session = Some(s);
-                Answer::bare(Status::Ok, String::new())
+                Ok(())
             }
-            Err(sc::engine::Error::Start(d)) => Answer::bare(Status::Error, d),
-            Err(e) => Answer::bare(Status::Error, format!("sc: {e}\n")),
-        })
+            Err(sc::engine::Error::Start(d)) => Err(CompilerError::Start(d)),
+            Err(e) => Err(CompilerError::Start(format!("sc: {e}\n"))),
+        }
     }
 
     fn cell(&mut self, src: &[u8], mode: Mode) -> Result<Answer, CompilerError> {
@@ -112,7 +112,7 @@ impl Compiler for Local {
         match host::call(cell_export(), "iiii:i", &mut vals) {
             host::OK => {
                 let r = s.reply(vals[0] as u32 as c_int);
-                Ok(Answer { status: r.status(), diags: r.diags().into_owned(), so: r.so().to_vec(), syms: r.syms().map(String::from).collect() })
+                Ok(Answer { status: r.status(), diags: r.diags().into_owned(), so: r.so().to_vec(), names: r.names().map(String::from).collect() })
             }
             // SAFETY: the session is the one the cell stopped in
             // the memory back first: what the host's error allocates would
