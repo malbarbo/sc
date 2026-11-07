@@ -5,7 +5,7 @@
 //! accepts. Where the compiler and the code run is the [`Platform`]'s: the
 //! native `sc` has the compiler in a child and wasmtime; sc.wasm, the
 //! session in the same module and the host's primitives.
-use crate::engine::{Answer, Compiler, Repl, Status};
+use crate::engine::{Answer, CellStatus, Compiler, Repl};
 use crate::loader::runtime::Runtime;
 use crate::loader::{self, source_name, Error, Frame, Lib, Loader, Shown, TrapKind, Val, STACK};
 use std::io;
@@ -211,7 +211,7 @@ impl<P: Platform> Machine<P> {
     pub fn compile(&mut self, src: &str) -> Result<bool> {
         let a = self.repl.cell(src.as_bytes())?;
         eprint!("{}", a.diags);
-        Ok(a.status == Status::Ok)
+        Ok(a.status == CellStatus::Ok)
     }
 
     /// Writes the type of `expr` without running it: whether it is one.
@@ -253,7 +253,7 @@ impl<P: Platform> Machine<P> {
             return Enter::Run;
         }
         match self.repl.cell_if_whole(input.as_bytes()) {
-            Ok(a) if a.status == Status::Incomplete => Enter::Open(0),
+            Ok(a) if a.status == CellStatus::Incomplete => Enter::Open(0),
             Ok(a) => {
                 self.pending = Some((input.to_string(), a));
                 Enter::Run
@@ -270,7 +270,7 @@ impl<P: Platform> Machine<P> {
             _ => self.repl.cell(src.as_bytes())?,
         };
         eprint!("{}", a.diags);
-        if a.status != Status::Ok {
+        if a.status != CellStatus::Ok {
             return Ok(Outcome::Error);
         }
         self.loaded += 1;

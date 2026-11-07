@@ -2,7 +2,7 @@
 //! that sc embeds): a cell with an error, a crash, the replay, undo, the
 //! limits, Enter, the shown values and `:type`. The shared objects run in
 //! the loader (build/cargo/release/scload).
-use sc::engine::{Guest, Repl, Status};
+use sc::engine::{CellStatus, Guest, Repl};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::{fs, io::Write};
@@ -61,33 +61,33 @@ fn cells() {
     let mut sos = vec![];
     fn cell(r: &mut Repl<Guest>, sos: &mut Vec<Vec<u8>>, src: &str) -> sc::engine::Answer {
         let a = r.cell(src.as_bytes()).unwrap();
-        if a.status == Status::Ok {
+        if a.status == CellStatus::Ok {
             sos.push(a.so.clone());
         }
         a
     }
     for src in &C[..3] {
-        assert_eq!(cell(&mut r, &mut sos, src).status, Status::Ok);
+        assert_eq!(cell(&mut r, &mut sos, src).status, CellStatus::Ok);
     }
-    assert_eq!(cell(&mut r, &mut sos, "int y = ;").status, Status::Error);
+    assert_eq!(cell(&mut r, &mut sos, "int y = ;").status, CellStatus::Error);
     // a failed cell leaves nothing behind, not even the guard of a header
     let a = cell(&mut r, &mut sos, "#include <stdio.h>\nint z = ;");
-    assert_eq!(a.status, Status::Error);
-    assert_eq!(cell(&mut r, &mut sos, "#include <stdio.h>\nint p(void) { return EOF; }").status, Status::Ok);
+    assert_eq!(a.status, CellStatus::Error);
+    assert_eq!(cell(&mut r, &mut sos, "#include <stdio.h>\nint p(void) { return EOF; }").status, CellStatus::Ok);
     sos.pop();
     assert_eq!(r.undo(), Ok(()));
     // a crash traps, and the copy from before the cell puts the session back
     let a = cell(&mut r, &mut sos, "#pragma clang __debug crash");
-    assert_eq!(a.status, Status::Error);
+    assert_eq!(a.status, CellStatus::Error);
     assert!(a.diags.contains("the engine crashed"), "{a:?}");
     assert_eq!(r.len(), 3);
     // undo replays the log without the last accepted cell
-    assert_eq!(cell(&mut r, &mut sos, "int bad(void) { return 1; }").status, Status::Ok);
+    assert_eq!(cell(&mut r, &mut sos, "int bad(void) { return 1; }").status, CellStatus::Ok);
     assert_eq!(r.undo(), Ok(()));
     sos.pop();
     assert_eq!(r.len(), 3);
     // the static of the first instance is the one of the cells after the replays
-    assert_eq!(cell(&mut r, &mut sos, C[4]).status, Status::Ok);
+    assert_eq!(cell(&mut r, &mut sos, C[4]).status, CellStatus::Ok);
     assert_eq!(run("repl", &sos), "2\n");
     drop(r);
 
@@ -102,28 +102,28 @@ fn cells() {
 #[test]
 fn limits() {
     let mut r = repl(true);
-    assert_eq!(r.cell(b"int x1 = 1;").unwrap().status, Status::Ok);
+    assert_eq!(r.cell(b"int x1 = 1;").unwrap().status, CellStatus::Ok);
     r.limit(Some(std::time::Duration::ZERO), None);
     let a = r.cell(b"#include <regex>").unwrap();
-    assert_eq!(a.status, Status::Error);
+    assert_eq!(a.status, CellStatus::Error);
     assert!(a.diags.contains("the compiler took more than 0 s"), "{a:?}");
     assert_eq!(r.len(), 1);
     r.limit(None, None);
-    assert_eq!(r.cell(b"#include <regex>").unwrap().status, Status::Ok);
-    assert_eq!(r.cell(b"int x2 = x1;").unwrap().status, Status::Ok);
+    assert_eq!(r.cell(b"#include <regex>").unwrap().status, CellStatus::Ok);
+    assert_eq!(r.cell(b"int x2 = x1;").unwrap().status, CellStatus::Ok);
     // the replay of <regex> takes more than the watchdog's tick
     r.limit(Some(std::time::Duration::ZERO), None);
     let why = r.undo().unwrap_err();
     assert!(why.contains("the cell was not undone"), "{why}");
     assert_eq!(r.len(), 3);
     r.limit(None, None);
-    assert_eq!(r.cell(b"int x3 = x2;").unwrap().status, Status::Ok);
+    assert_eq!(r.cell(b"int x3 = x2;").unwrap().status, CellStatus::Ok);
     assert_eq!(r.len(), 4);
 
     let mut r = repl(true);
     r.limit(None, Some(1));
     let a = r.cell(b"#include <regex>").unwrap();
-    assert_eq!(a.status, Status::Error);
+    assert_eq!(a.status, CellStatus::Error);
     assert!(a.diags.contains("the compiler took more than 0 MB"), "{a:?}");
 }
 
@@ -142,24 +142,24 @@ fn whole() {
         "int y = 1 +",
         "int main(void) // the body comes next",
     ] {
-        assert_eq!(st(src), Status::Incomplete, "{src:?}");
+        assert_eq!(st(src), CellStatus::Incomplete, "{src:?}");
     }
     for (src, want) in [
-        ("#include <stdio.h>", Status::Ok),
-        ("int x = 5;", Status::Ok),
-        ("x", Status::Ok),
-        ("x * 2", Status::Ok),
-        ("printf(\"%d\\n\", x)", Status::Ok),
-        ("y", Status::Error),
-        ("int z = );", Status::Error),
-        ("int w = 1 + nada", Status::Error),
+        ("#include <stdio.h>", CellStatus::Ok),
+        ("int x = 5;", CellStatus::Ok),
+        ("x", CellStatus::Ok),
+        ("x * 2", CellStatus::Ok),
+        ("printf(\"%d\\n\", x)", CellStatus::Ok),
+        ("y", CellStatus::Error),
+        ("int z = );", CellStatus::Error),
+        ("int w = 1 + nada", CellStatus::Error),
     ] {
         assert_eq!(st(src), want, "{src:?}");
     }
     // a type the session knows: a declaration, not a product
-    assert_eq!(st("typedef int T;"), Status::Ok);
-    assert_eq!(st("T *f(T n)"), Status::Incomplete);
-    assert_eq!(st("x * f(2)"), Status::Error);
+    assert_eq!(st("typedef int T;"), CellStatus::Ok);
+    assert_eq!(st("T *f(T n)"), CellStatus::Incomplete);
+    assert_eq!(st("x * f(2)"), CellStatus::Error);
     let a = r.cell_if_whole(b"int main(void)").unwrap();
     assert!(a.diags.is_empty(), "{a:?}");
     assert_eq!(r.len(), 6);
@@ -182,12 +182,12 @@ fn show() {
     let mut r = repl(false);
     let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
     let has = |so: &[u8], s: &str| so.windows(s.len()).any(|w| w == s.as_bytes());
-    assert_eq!(cell("int x = 3; struct p { int a; } q;").status, Status::Ok);
+    assert_eq!(cell("int x = 3; struct p { int a; } q;").status, CellStatus::Ok);
     // an expression without its `;` calls the host with its type and value
     for (src, call, ty) in [("x", "__sc_show_int", "int\0"), ("x / 2.0", "__sc_show_float", "double\0"),
                             ("sizeof x", "__sc_show_int", "size_t\0"), ("-x", "__sc_show_int", "int\0")] {
         let a = cell(src);
-        assert_eq!(a.status, Status::Ok, "{src:?}: {a:?}");
+        assert_eq!(a.status, CellStatus::Ok, "{src:?}: {a:?}");
         assert!(has(&a.so, call) && has(&a.so, ty), "{src:?}");
         assert!(a.diags.is_empty(), "{src:?}: {}", a.diags);
     }
@@ -197,22 +197,22 @@ fn show() {
     assert!(cell("x + 1;").diags.contains("-Wunused-value"));
     // a value that is not a scalar is not shown
     let a = cell("q");
-    assert_eq!(a.status, Status::Ok);
+    assert_eq!(a.status, CellStatus::Ok);
     assert!(!has(&a.so, "__sc_show"));
     // a placeholder is an error, as with the `;`
     let a = cell("__builtin_abs");
-    assert_eq!(a.status, Status::Error);
+    assert_eq!(a.status, CellStatus::Error);
     assert!(a.diags.contains("must be directly called"), "{}", a.diags);
 
     // C++: the temporaries die after the call
     let mut r = repl(true);
     let mut cell = |src: &str| r.cell(src.as_bytes()).unwrap();
-    assert_eq!(cell("struct T { ~T() {} int n() { return 1; } }; T t;").status, Status::Ok);
+    assert_eq!(cell("struct T { ~T() {} int n() { return 1; } }; T t;").status, CellStatus::Ok);
     let a = cell("T().n()");
-    assert_eq!(a.status, Status::Ok, "{a:?}");
+    assert_eq!(a.status, CellStatus::Ok, "{a:?}");
     assert!(has(&a.so, "__sc_show_int") && has(&a.so, "_ZN1TD"));
     let a = cell("t.n");
-    assert_eq!(a.status, Status::Error);
+    assert_eq!(a.status, CellStatus::Error);
     assert!(a.diags.contains("must be called"), "{}", a.diags);
 }
 
@@ -221,7 +221,7 @@ fn show() {
 #[test]
 fn type_of() {
     let mut r = repl(false);
-    assert_eq!(r.cell(b"int x = 3; struct p { int a; } q;").unwrap().status, Status::Ok);
+    assert_eq!(r.cell(b"int x = 3; struct p { int a; } q;").unwrap().status, CellStatus::Ok);
     let mut ty = |src: &str| {
         let t = r.type_of(src.as_bytes()).unwrap();
         (t.ty, t.diags)
@@ -238,18 +238,18 @@ fn type_of() {
         assert!(d.contains("error:"), "{src:?}: {d}");
     }
     // the struct of the expression is gone, and the log has the one cell
-    assert_eq!(r.cell(b"struct r { char c; };").unwrap().status, Status::Ok);
+    assert_eq!(r.cell(b"struct r { char c; };").unwrap().status, CellStatus::Ok);
     assert_eq!(r.len(), 2);
 
     // C++: the names of a class or a template's inside are left out; the
     // copy constructor Sema defines goes with the expression
     let mut r = repl(true);
     let src = "#include <string>\n#include <vector>\nstd::string s; std::vector<int> v; struct T { std::string a; } t;";
-    assert_eq!(r.cell(src.as_bytes()).unwrap().status, Status::Ok);
+    assert_eq!(r.cell(src.as_bytes()).unwrap().status, CellStatus::Ok);
     for (src, want) in [("s", "std::string"), ("s + \"c\"", "std::string"), ("s.size()", "size_t"),
                         ("v[0]", "int"), ("v.begin()", "std::__wrap_iter<int *>"), ("T(t)", "T")] {
         let t = r.type_of(src.as_bytes()).unwrap();
         assert_eq!(t.ty.as_deref(), Some(want), "{src:?}: {}", t.diags);
     }
-    assert_eq!(r.cell(b"T u = t;").unwrap().status, Status::Ok);
+    assert_eq!(r.cell(b"T u = t;").unwrap().status, CellStatus::Ok);
 }

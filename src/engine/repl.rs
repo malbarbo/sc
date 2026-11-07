@@ -1,14 +1,14 @@
 //! The log that recreates a lost session (docs/plan-repl.md §3.6), over any
 //! [`Compiler`]: sc.wasm's session on wasmtime (`Guest`), or the session in
 //! the same module (inside sc.wasm).
-use super::{Mode, Status};
+use super::{CellStatus, Mode};
 use std::fmt;
 use std::io;
 
 /// The answer to a request, owned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Answer {
-    pub status: Status,
+    pub status: CellStatus,
     /// The diagnostics, as clang and wasm-ld print them.
     pub diags: String,
     /// The cell as a wasm shared object.
@@ -20,7 +20,7 @@ pub struct Answer {
 
 impl Answer {
     /// An answer with diagnostics alone.
-    pub fn bare(status: Status, diags: String) -> Answer {
+    pub fn bare(status: CellStatus, diags: String) -> Answer {
         Answer { status, diags, so: vec![], names: vec![] }
     }
 }
@@ -139,7 +139,7 @@ impl<C: Compiler> Repl<C> {
         let mut compiler = open(self.compiler.another()?, &self.args)?;
         for (i, e) in self.log.iter().enumerate() {
             let a = compiler.cell(&e.src, Mode::Replay)?;
-            if a.status != Status::Ok || a.names != e.names {
+            if a.status != CellStatus::Ok || a.names != e.names {
                 return Err(ReplError::Diverged(i));
             }
         }
@@ -162,14 +162,14 @@ impl<C: Compiler> Repl<C> {
         self.log.iter().flat_map(|e| &e.names).map(String::as_str)
     }
 
-    /// Compiles a cell. [`Status::Lost`]: the cell ended the session (its
+    /// Compiles a cell. [`CellStatus::Lost`]: the cell ended the session (its
     /// diagnostics, or how the compiler ended), which is back as before it,
     /// or will be at the next request if the replay failed.
     pub fn cell(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
         self.compile(src, Mode::So)
     }
 
-    /// [`Repl::cell`], or [`Status::Incomplete`] if the cell stops short
+    /// [`Repl::cell`], or [`CellStatus::Incomplete`] if the cell stops short
     /// ([`Mode::Whole`]): nothing of it is kept.
     pub fn cell_if_whole(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
         self.compile(src, Mode::Whole)
@@ -179,7 +179,7 @@ impl<C: Compiler> Repl<C> {
     /// kept.
     pub fn type_of(&mut self, src: &[u8]) -> Result<TypeOf, ReplError> {
         let a = self.compile(src, Mode::Type)?;
-        let ty = if a.status == Status::Ok { a.names.into_iter().next() } else { None };
+        let ty = if a.status == CellStatus::Ok { a.names.into_iter().next() } else { None };
         Ok(TypeOf { ty, diags: a.diags })
     }
 
@@ -197,15 +197,15 @@ impl<C: Compiler> Repl<C> {
     fn compile(&mut self, src: &[u8], mode: Mode) -> Result<Answer, ReplError> {
         let mut a = match self.compiler.cell(src, mode) {
             Ok(a) => a,
-            Err(e @ CompilerError::Lost(_)) => Answer::bare(Status::Lost, format!("sc: {e}\n")),
+            Err(e @ CompilerError::Lost(_)) => Answer::bare(CellStatus::Lost, format!("sc: {e}\n")),
             Err(e) => return Err(e.into()),
         };
         match a.status {
-            Status::Ok if mode != Mode::Type => self.log.push(Entry { src: src.to_vec(), names: a.names.clone() }),
-            Status::Ok | Status::Error | Status::Incomplete => {}
+            CellStatus::Ok if mode != Mode::Type => self.log.push(Entry { src: src.to_vec(), names: a.names.clone() }),
+            CellStatus::Ok | CellStatus::Error | CellStatus::Incomplete => {}
             // a replay that fails (interrupted too, or above the limits)
             // leaves the compiler that ended: the next request replays again
-            Status::Lost => {
+            CellStatus::Lost => {
                 if let Err(e) = self.restart() {
                     a.diags += &format!("sc: the session was not restored ({e}): the next cell tries again\n");
                 }

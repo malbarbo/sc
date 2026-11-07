@@ -26,7 +26,7 @@ mod shell;
 use bpaf::{Bpaf, Parser};
 use platform::{Machine, Native};
 use sc::machine::{check, lang_of, run, source, Lang, Outcome, Safety};
-use sc::engine::{Guest, Repl, Status};
+use sc::engine::{CellStatus, Guest, Repl};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -187,14 +187,14 @@ fn replay(args: &[String]) -> Result<()> {
             continue;
         };
         let st = match a.status {
-            Status::Ok => "ok",
-            Status::Error => "error",
-            Status::Lost => "lost",
-            Status::Incomplete => "incomplete",
+            CellStatus::Ok => "ok",
+            CellStatus::Error => "error",
+            CellStatus::Lost => "lost",
+            CellStatus::Incomplete => "incomplete",
         };
         writeln!(out, "== {cell} {st}")?;
         out.write_all(a.diags.as_bytes())?;
-        if a.status == Status::Ok {
+        if a.status == CellStatus::Ok {
             let so = PathBuf::from(dir).join(format!("{:03}.so", k + 1));
             fs::write(&so, &a.so)?;
             sos.push(so);

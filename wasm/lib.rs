@@ -6,7 +6,7 @@
 //! simplecode, says what each one asks of its pointers.
 #![allow(clippy::missing_safety_doc)]
 
-use sc::engine::{sys, Answer, Compiler, CompilerError, Mode, Session, Status};
+use sc::engine::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, Session};
 use sc::loader::host::{self, Host};
 use sc::loader::{libdirs, Error, Loader, STACK};
 use sc::machine::shell::{self, Shell};
@@ -104,7 +104,7 @@ impl Compiler for Local {
 
     fn cell(&mut self, src: &[u8], mode: Mode) -> Result<Answer, CompilerError> {
         let Some(s) = self.session.as_mut() else {
-            return Ok(Answer::bare(Status::Error, "sc: no session\n".into()));
+            return Ok(Answer::bare(CellStatus::Error, "sc: no session\n".into()));
         };
         let len = u32::try_from(src.len()).map_err(|_| io::Error::other("the cell is too long"))?;
         let raw = s.as_raw();
@@ -118,7 +118,7 @@ impl Compiler for Local {
             // the memory back first: what the host's error allocates would
             // be lost with what the cell allocated
             st => match unsafe { sc_session_restore(raw) } as u32 {
-                sys::sc_status::SC_ERROR => Ok(Answer::bare(Status::Error, CRASHED.into())),
+                sys::sc_status::SC_ERROR => Ok(Answer::bare(CellStatus::Error, CRASHED.into())),
                 _ => {
                     // what the cell left of it cannot be freed
                     std::mem::forget(self.session.take());

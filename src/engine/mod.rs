@@ -23,9 +23,9 @@ pub mod sys {
     include!(concat!(env!("OUT_DIR"), "/sc.rs"));
 }
 
-/// What a call left (`enum sc_status`).
+/// What a cell left (`enum sc_status`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Status {
+pub enum CellStatus {
     /// Done.
     Ok,
     /// An error in the student's code. From a `Session` without the copy,
@@ -35,28 +35,28 @@ pub enum Status {
     /// The session must be recreated and its log replayed.
     Lost,
     /// [`Mode::Whole`]: the cell stops short, where the parser wanted more.
-    /// It is an [`Status::Error`] without the diagnostics, and so is what
+    /// It is a [`CellStatus::Error`] without the diagnostics, and so is what
     /// the session keeps of it.
     Incomplete,
 }
 
-impl Status {
-    /// The status of a raw result; anything unknown is [`Status::Lost`].
-    pub fn from_raw(s: u32) -> Status {
+impl CellStatus {
+    /// The status of a raw result; anything unknown is [`CellStatus::Lost`].
+    pub fn from_raw(s: u32) -> CellStatus {
         match s {
-            sys::sc_status::SC_OK => Status::Ok,
-            sys::sc_status::SC_ERROR => Status::Error,
-            sys::sc_status::SC_INCOMPLETE => Status::Incomplete,
-            _ => Status::Lost,
+            sys::sc_status::SC_OK => CellStatus::Ok,
+            sys::sc_status::SC_ERROR => CellStatus::Error,
+            sys::sc_status::SC_INCOMPLETE => CellStatus::Incomplete,
+            _ => CellStatus::Lost,
         }
     }
 
     pub fn to_raw(self) -> u32 {
         match self {
-            Status::Ok => sys::sc_status::SC_OK,
-            Status::Error => sys::sc_status::SC_ERROR,
-            Status::Lost => sys::sc_status::SC_LOST,
-            Status::Incomplete => sys::sc_status::SC_INCOMPLETE,
+            CellStatus::Ok => sys::sc_status::SC_OK,
+            CellStatus::Error => sys::sc_status::SC_ERROR,
+            CellStatus::Lost => sys::sc_status::SC_LOST,
+            CellStatus::Incomplete => sys::sc_status::SC_INCOMPLETE,
         }
     }
 }
@@ -68,7 +68,7 @@ pub enum Mode {
     So,
     /// Parse and generate IR only, as in a replay: the exported names.
     Replay,
-    /// [`Mode::So`], or [`Status::Incomplete`] if the cell stops short: its
+    /// [`Mode::So`], or [`CellStatus::Incomplete`] if the cell stops short: its
     /// first error is at its end (a declaration without its `;`, a header
     /// without its body). The REPL asks so on Enter.
     Whole,

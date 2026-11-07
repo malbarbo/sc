@@ -1,6 +1,6 @@
 //! The safe API over the engine linked in: sc.wasm's own session (wasm/).
 use super::sys as raw;
-use super::{sys, Mode, Status};
+use super::{sys, CellStatus, Mode};
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, CString};
 use std::fmt;
@@ -101,7 +101,7 @@ impl Session {
         if st as u32 == sys::sc_status::SC_OK {
             Ok(session)
         } else {
-            let reply = Reply { session: &session, status: Status::Error };
+            let reply = Reply { session: &session, status: CellStatus::Error };
             Err(Error::Start(reply.diags().into_owned()))
         }
     }
@@ -140,7 +140,7 @@ impl Session {
 
     /// The result of the last call, which said `st`.
     pub fn reply(&self, st: c_int) -> Reply<'_> {
-        Reply { session: self, status: Status::from_raw(st as u32) }
+        Reply { session: self, status: CellStatus::from_raw(st as u32) }
     }
 
     fn part(&self, part: u32) -> &[u8] {
@@ -167,11 +167,11 @@ impl Drop for Session {
 /// The result of a call on a [`Session`], valid until the next one.
 pub struct Reply<'s> {
     session: &'s Session,
-    status: Status,
+    status: CellStatus,
 }
 
 impl<'s> Reply<'s> {
-    pub fn status(&self) -> Status {
+    pub fn status(&self) -> CellStatus {
         self.status
     }
 
@@ -181,7 +181,7 @@ impl<'s> Reply<'s> {
     }
 
     /// The cell as a wasm shared object (empty unless [`Mode::So`] and
-    /// [`Status::Ok`]).
+    /// [`CellStatus::Ok`]).
     pub fn so(&self) -> &'s [u8] {
         self.session.part(sys::sc_part::SC_SO)
     }

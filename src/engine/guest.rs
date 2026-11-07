@@ -16,7 +16,7 @@
 //! `SC_CWASM` names another module, compiled by [`precompile`]: the
 //! batteries run the uncut engine (sc-full.wasm) and the cuts being learned
 //! so. The trap of a function the cuts removed says its name on stderr.
-use super::{sys, Answer, Compiler, CompilerError, Mode, Status};
+use super::{sys, Answer, CellStatus, Compiler, CompilerError, Mode};
 use crate::machine::ROOT;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -298,7 +298,7 @@ impl Guest {
     fn answer(&mut self, s: u32, st: i32) -> wasmtime::Result<Answer> {
         let [diags, so, names] = [sys::sc_part::SC_DIAGS, sys::sc_part::SC_SO, sys::sc_part::SC_SYMS].map(|p| self.part(s, p));
         Ok(Answer {
-            status: Status::from_raw(st as u32),
+            status: CellStatus::from_raw(st as u32),
             diags: String::from_utf8_lossy(&diags?).into_owned(),
             so: so?,
             names: String::from_utf8_lossy(&names?).lines().map(String::from).collect(),
@@ -384,7 +384,7 @@ impl Compiler for Guest {
             self.state = State::Dead;
             lost(e)
         })?;
-        if a.status != Status::Ok {
+        if a.status != CellStatus::Ok {
             return Err(CompilerError::Start(a.diags));
         }
         Ok(())
@@ -412,7 +412,7 @@ impl Compiler for Guest {
                 // is gone with it, the source too
                 let st = self.f.recover.call(&mut self.store, s);
                 if st.is_ok_and(|st| st as u32 == sys::sc_status::SC_ERROR) {
-                    return Ok(Answer::bare(Status::Error, why));
+                    return Ok(Answer::bare(CellStatus::Error, why));
                 }
                 self.state = State::Dead;
                 return Err(lost(why.trim_end().trim_start_matches("sc: ")));
