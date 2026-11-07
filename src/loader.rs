@@ -131,7 +131,9 @@ impl Val {
 
 #[derive(Clone, Copy)]
 enum Sym {
-    Func(Option<H>, u32), // the function, None until its module is instantiated, and its type
+    /// The function, None until its module is instantiated, its type, and
+    /// its table slot, once a GOT.func or a missing function asks for one.
+    Func { handle: Option<H>, ty: u32, slot: Option<u32> },
     Data(u32), // an absolute address
     Tag(H),    // an exception tag: __cpp_exception (libc++abi), __c_longjmp (libsetjmp)
 }
@@ -202,13 +204,10 @@ struct World {
     funcs: HashMap<&'static str, (H, FuncType)>,
 }
 
-/// A symbol of the loader's and its table slot.
-type Entry = (Sym, Option<u32>);
-
 pub struct Loader<R: Runtime = Native> {
     rt: R,
     world: World,
-    syms: HashMap<String, Entry>,              // the symbol and its table slot
+    syms: HashMap<String, Sym>,
     types: Vec<FuncType>,                      // of the function symbols
     libs: Libs,
     loaded: HashSet<String>,
@@ -221,9 +220,16 @@ pub struct Loader<R: Runtime = Native> {
     asan: bool,                   // the memory has ASan's shadow
     debug: Vec<Debug>,            // of the modules with DWARF
     data: Vec<Data>,
-    journal: Option<Vec<(String, Option<Entry>)>>, // what a group being defined replaced
+    journal: Option<Vec<(String, Option<Sym>)>>, // what a group being defined replaced
     catchers: HashMap<(String, H), H>, // gen::catcher's try, by signature and tag
     scratch: Option<u32>,         // the table slot of the function a catcher calls
+}
+
+/// Gives `sym`, a function, the table slot `s`.
+fn set_slot(sym: Option<&mut Sym>, s: u32) {
+    if let Some(Sym::Func { slot, .. }) = sym {
+        *slot = Some(s);
+    }
 }
 
 /// Where the loader finds the libraries a module needs: by name.
@@ -509,7 +515,7 @@ impl<R: Runtime> Loader<R> {
         if !shadow && self.syms.contains_key(name) {
             return false;
         }
-        let old = self.syms.insert(name.to_string(), (sym, None));
+        let old = self.syms.insert(name.to_string(), sym);
         if let Some(j) = &mut self.journal {
             j.push((name.to_string(), old));
         }
@@ -534,7 +540,7 @@ impl<R: Runtime> Loader<R> {
     /// The function `name` the modules define, and its type.
     fn func(&self, name: &str) -> Result<(H, FuncType)> {
         match self.syms.get(name) {
-            Some((Sym::Func(Some(f), t), _)) => Ok((*f, self.types[*t as usize].clone())),
+            Some(Sym::Func { handle: Some(f), ty, .. }) => Ok((*f, self.types[*ty as usize].clone())),
             _ => fail!("undefined symbol: {}", source_name(name)),
         }
     }
@@ -551,7 +557,7 @@ impl<R: Runtime> Loader<R> {
     /// search phase, so it never calls `std::terminate`. It is caught and
     /// terminates, which prints its type and `what()` and aborts.
     fn guarded(&mut self, f: H, ty: &FuncType, args: &[u64]) -> Result<Vec<u64>> {
-        let Some((Sym::Tag(tag), _)) = self.syms.get("__cpp_exception").copied() else { return self.invoke(f, ty, args) };
+        let Some(Sym::Tag(tag)) = self.syms.get("__cpp_exception").copied() else { return self.invoke(f, ty, args) };
         let key = (ty.sig(), tag);
         let catcher = match self.catchers.get(&key) {
             Some(&c) => c,
@@ -728,7 +734,7 @@ impl<R: Runtime> Loader<R> {
             if m != "env" || self.defines(&t) {
                 continue;
             }
-            let slot = if matches!(self.syms.get(&t), Some((Sym::Func(None, _), _))) {
+            let slot = if matches!(self.syms.get(&t), Some(Sym::Func { handle: None, .. })) {
                 self.slot(&t)?
             } else {
                 let (s, fill) = self.reserve_slot(&t, true)?;
@@ -766,16 +772,16 @@ impl<R: Runtime> Loader<R> {
 
     /// The table slot of a function symbol, the same for every module.
     fn slot(&mut self, name: &str) -> Result<u32> {
-        let (sym, slot) = self.syms[name];
-        if let Some(s) = slot {
-            return Ok(s);
-        }
-        let Sym::Func(f, _) = sym else { fail!("{name}: GOT.func of data") };
+        let f = match self.syms[name] {
+            Sym::Func { slot: Some(s), .. } => return Ok(s),
+            Sym::Func { handle, .. } => handle,
+            _ => fail!("{name}: GOT.func of data"),
+        };
         let s = self.table_grow(1)?;
         if let Some(f) = f {
             self.world("table_set", &[s as u64, f as u64])?;
         }
-        self.syms.get_mut(name).unwrap().1 = Some(s);
+        set_slot(self.syms.get_mut(name), s);
         Ok(s)
     }
 
@@ -784,14 +790,14 @@ impl<R: Runtime> Loader<R> {
     /// instantiated. Returns the slots taken.
     fn forward(&mut self) -> Result<Vec<(String, (u32, bool))>> {
         let slots: Vec<(String, (u32, bool), Option<H>)> = self.slots.iter()
-            .filter_map(|(n, &s)| match self.syms.get(n) { Some((Sym::Func(f, _), None)) => Some((n.clone(), s, *f)), _ => None })
+            .filter_map(|(n, &s)| match self.syms.get(n) { Some(Sym::Func { handle, slot: None, .. }) => Some((n.clone(), s, *handle)), _ => None })
             .collect();
         let mut taken = Vec::new();
         for (n, s, f) in slots {
             if let Some(f) = f {
                 self.world("table_set", &[s.0 as u64, f as u64])?;
             }
-            self.syms.get_mut(&n).unwrap().1 = Some(s.0);
+            set_slot(self.syms.get_mut(&n), s.0);
             self.slots.remove(&n);
             taken.push((n, s));
         }
@@ -803,7 +809,7 @@ impl<R: Runtime> Loader<R> {
         let mut set = Vec::new();
         for (n, g) in std::mem::take(&mut self.later) {
             match self.syms.get(&n).copied() {
-                Some((Sym::Data(a), _)) => set.push((g, a as i32)),
+                Some(Sym::Data(a)) => set.push((g, a as i32)),
                 _ => self.later.push((n, g)),
             }
         }
@@ -912,7 +918,7 @@ impl<R: Runtime> Loader<R> {
                 match kind {
                     Kind::Func(ft) => {
                         let t = self.ty(ft);
-                        if self.define(n, Sym::Func(None, t), shadow) {
+                        if self.define(n, Sym::Func { handle: None, ty: t, slot: None }, shadow) {
                             owner.insert(n.to_string(), k);
                         }
                     }
@@ -957,11 +963,11 @@ impl<R: Runtime> Loader<R> {
                     }
                     ("wasi_snapshot_preview1", _, _) => Import::Default,
                     ("env", _, Kind::Func(_)) => match self.syms.get(&self.target(n)) {
-                        Some((Sym::Func(Some(f), _), _)) => Import::Handle(*f),
+                        Some(Sym::Func { handle: Some(f), .. }) => Import::Handle(*f),
                         _ => Import::Handle(stubs[n]),
                     },
                     ("env", _, Kind::Tag(ft)) => match self.syms.get(n) {
-                        Some((Sym::Tag(t), _)) => Import::Handle(*t),
+                        Some(Sym::Tag(t)) => Import::Handle(*t),
                         _ => {
                             let inst = self.rt.instantiate(&gen::tag(ft), None, &mut [])?;
                             let t = self.rt.export(inst, "t");
@@ -982,12 +988,11 @@ impl<R: Runtime> Loader<R> {
                 match kind {
                     Kind::Func(_) if owner.get(n) == Some(&k) => {
                         let f = self.rt.export(inst, n);
-                        let s = self.syms.get_mut(n).unwrap();
-                        if let Sym::Func(_, t) = s.0 {
-                            s.0 = Sym::Func(Some(f), t);
-                        }
-                        if let Some(slot) = s.1 {
-                            self.world("table_set", &[slot as u64, f as u64])?;
+                        if let Some(Sym::Func { handle, slot, .. }) = self.syms.get_mut(n) {
+                            *handle = Some(f);
+                            if let Some(slot) = *slot {
+                                self.world("table_set", &[slot as u64, f as u64])?;
+                            }
                         }
                     }
                     Kind::Tag(_) if !INTERNAL.contains(&n.as_str()) => {
@@ -1010,8 +1015,8 @@ impl<R: Runtime> Loader<R> {
     /// it is to be set when the variable comes.
     fn got(&mut self, n: &str, func: bool, weak: bool) -> Result<(u32, bool)> {
         Ok(match self.syms.get(n).copied() {
-            Some((Sym::Data(a), _)) if !func => (a, false),
-            Some((Sym::Func(..), _)) if func => (self.slot(n)?, false),
+            Some(Sym::Data(a)) if !func => (a, false),
+            Some(Sym::Func { .. }) if func => (self.slot(n)?, false),
             Some(_) => fail!("{n}: GOT.{} of a {}", if func { "func" } else { "mem" }, if func { "data" } else { "function" }),
             None if weak => (0, false),
             None if func => (self.reserve_slot(n, false)?.0, false),
@@ -1049,7 +1054,7 @@ impl<R: Runtime> Loader<R> {
     fn define_world(&mut self, n: &'static str) {
         let (f, ty) = self.world.funcs[n].clone();
         let t = self.ty(&ty);
-        self.define(n, Sym::Func(Some(f), t), true);
+        self.define(n, Sym::Func { handle: Some(f), ty: t, slot: None }, true);
     }
 
     /// What the last call to `__sc_show_*` was given since the last time.
@@ -1199,7 +1204,7 @@ impl<R: Runtime> Loader<R> {
 
     /// Whether the modules define the function `name`.
     pub fn defines(&self, name: &str) -> bool {
-        matches!(self.syms.get(name), Some((Sym::Func(Some(_), _), _)))
+        matches!(self.syms.get(name), Some(Sym::Func { handle: Some(_), .. }))
     }
 
     /// The stack pointer, which a trap leaves where the code that trapped
