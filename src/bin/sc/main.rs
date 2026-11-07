@@ -214,8 +214,8 @@ fn sc() -> ExitCode {
         // not a command lists the commands and does not run as a file.
         Command::Help { command: Some(name) } => return show_help(command().to_options(), &[&name, "--help"]),
         Command::Repl { lang, safety, quiet, file } => repl(lang, safety, quiet, file.as_deref()),
-        Command::Run { lang, safety, file, args } => run(Native, lang, safety, &file, args),
-        Command::Check { lang, safety, file } => check(Native, lang, safety, &file),
+        Command::Run { lang, safety, file, args } => run(Native, lang, safety, &file, args).map_err(Into::into),
+        Command::Check { lang, safety, file } => check(Native, lang, safety, &file).map_err(Into::into),
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),

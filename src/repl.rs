@@ -5,15 +5,63 @@
 //! accepts. Where the compiler and the code run is the [`Platform`]'s: the
 //! native `sc` has the compiler in a child and wasmtime; sc.wasm, the
 //! session in the same module and the host's primitives.
-use crate::engine::{Answer, CellStatus, Compiler, Log};
+use crate::engine::{Answer, CellStatus, Compiler, Log, LogError};
 use crate::loader::runtime::Runtime;
 use crate::loader::{self, source_name, Error, Frame, Lib, Loader, Shown, TrapKind, Val, STACK};
+use std::fmt;
 use std::io;
 use std::path::Path;
 
 mod show;
 
-pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+/// Why a [`Repl`] cannot go on.
+#[derive(Debug)]
+pub enum ReplError {
+    Io(io::Error),
+    Loader(Error),
+    Log(LogError),
+    /// A file that cannot be read, or one not in the pack: what to say.
+    Fail(String),
+}
+
+impl fmt::Display for ReplError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ReplError::Io(e) => write!(f, "{e}"),
+            ReplError::Loader(e) => write!(f, "{e}"),
+            ReplError::Log(e) => write!(f, "{e}"),
+            ReplError::Fail(s) => write!(f, "{s}"),
+        }
+    }
+}
+
+impl std::error::Error for ReplError {}
+
+impl From<io::Error> for ReplError {
+    fn from(e: io::Error) -> ReplError {
+        ReplError::Io(e)
+    }
+}
+
+impl From<Error> for ReplError {
+    fn from(e: Error) -> ReplError {
+        ReplError::Loader(e)
+    }
+}
+
+impl From<LogError> for ReplError {
+    fn from(e: LogError) -> ReplError {
+        ReplError::Log(e)
+    }
+}
+
+impl From<String> for ReplError {
+    fn from(s: String) -> ReplError {
+        ReplError::Fail(s)
+    }
+}
+
+pub type Result<T> = std::result::Result<T, ReplError>;
 
 /// Where the engine sees the pack, as the session's arguments name it
 /// (scripts/flags.py, PACK).
