@@ -186,7 +186,14 @@ pub extern "C" fn sc_cli() -> i32 {
         };
         match name.as_str() {
             "-q" => {}
-            "-x" => lang = value.or_else(|| args.next()).map(|l| Lang::parse(&l).unwrap_or(Lang::C)),
+            "-x" => {
+                let l = value.or_else(|| args.next()).unwrap_or_default();
+                let Some(l) = Lang::parse(&l) else {
+                    eprintln!("Error: couldn't parse `{l}`: expected c or c++");
+                    return 1;
+                };
+                lang = Some(l);
+            }
             "--safety" => safety = value.or_else(|| args.next()).and_then(|l| Safety::parse(&l)).unwrap_or(Safety::On),
             _ => {
                 file = Some(PathBuf::from(a));
