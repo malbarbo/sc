@@ -1,11 +1,11 @@
-//! A cell from source to run: the compiler ([`crate::engine::Repl`]) makes
+//! A cell from source to run: the compiler ([`crate::engine::Log`]) makes
 //! the cell a shared object, and the loader, which lives as long as the
 //! REPL, loads it on top of the cells before. Loading runs the cell's
 //! statements at the top level, which the session's incremental mode
 //! accepts. Where the compiler and the code run is the [`Platform`]'s: the
 //! native `sc` has the compiler in a child and wasmtime; sc.wasm, the
 //! session in the same module and the host's primitives.
-use crate::engine::{Answer, CellStatus, Compiler, Repl};
+use crate::engine::{Answer, CellStatus, Compiler, Log};
 use crate::loader::runtime::Runtime;
 use crate::loader::{self, source_name, Error, Frame, Lib, Loader, Shown, TrapKind, Val, STACK};
 use std::io;
@@ -154,7 +154,7 @@ pub struct Machine<P: Platform> {
     lang: Lang,
     safety: Safety,
     argv: Vec<String>,
-    repl: Repl<P::Compiler>,
+    log: Log<P::Compiler>,
     loader: Loader<P::Runtime>,
     /// Cells loaded, which names each module for the loader.
     loaded: usize,
@@ -183,7 +183,7 @@ impl<P: Platform> Machine<P> {
             // unused as a one-shot compile does
             args.insert(link, "-sc-one-cell".into());
         }
-        let repl = Repl::start(platform.compiler()?, args)?;
+        let log = Log::start(platform.compiler()?, args)?;
 
         let p = platform.clone();
         let libs = Box::new(move |lib: &str| {
@@ -193,7 +193,7 @@ impl<P: Platform> Machine<P> {
         let mut loader = Loader::new(platform.runtime(&argv, interactive)?, libs, STACK)?;
         loader.keep_stacks();
         loader.show();
-        Ok(Machine { platform, lang, safety, argv, repl, loader, loaded: 0, pending: None })
+        Ok(Machine { platform, lang, safety, argv, log, loader, loaded: 0, pending: None })
     }
 
     pub fn safety(&self) -> Safety {
@@ -209,14 +209,14 @@ impl<P: Platform> Machine<P> {
 
     /// Compiles `src` without running it: whether the compiler accepted it.
     pub fn compile(&mut self, src: &str) -> Result<bool> {
-        let a = self.repl.cell(src.as_bytes())?;
+        let a = self.log.cell(src.as_bytes())?;
         eprint!("{}", a.diags);
         Ok(a.status == CellStatus::Ok)
     }
 
     /// Writes the type of `expr` without running it: whether it is one.
     pub fn type_of(&mut self, expr: &str) -> Result<bool> {
-        let t = self.repl.type_of(expr.as_bytes())?;
+        let t = self.log.type_of(expr.as_bytes())?;
         eprint!("{}", t.diags);
         match t.ty {
             Some(ty) => println!("{ty}"),
@@ -240,7 +240,7 @@ impl<P: Platform> Machine<P> {
         if self.pending.as_ref().is_some_and(|(p, _)| p == input) {
             return Enter::Run;
         }
-        let mut depth = |s: &str| self.repl.depth(s.as_bytes()).unwrap_or(0) as usize;
+        let mut depth = |s: &str| self.log.depth(s.as_bytes()).unwrap_or(0) as usize;
         let at_end = input[cursor..].trim().is_empty();
         if !at_end && input.contains('\n') {
             return Enter::Open(depth(&input[..cursor]));
@@ -252,7 +252,7 @@ impl<P: Platform> Machine<P> {
         if input.rsplit('\n').next().is_some_and(|l| l.trim().is_empty()) {
             return Enter::Run;
         }
-        match self.repl.cell_if_whole(input.as_bytes()) {
+        match self.log.cell_if_whole(input.as_bytes()) {
             Ok(a) if a.status == CellStatus::Incomplete => Enter::Open(0),
             Ok(a) => {
                 self.pending = Some((input.to_string(), a));
@@ -267,7 +267,7 @@ impl<P: Platform> Machine<P> {
     pub fn cell(&mut self, src: &str) -> Result<Outcome> {
         let a = match self.pending.take() {
             Some((p, a)) if p == src => a,
-            _ => self.repl.cell(src.as_bytes())?,
+            _ => self.log.cell(src.as_bytes())?,
         };
         eprint!("{}", a.diags);
         if a.status != CellStatus::Ok {
@@ -279,7 +279,7 @@ impl<P: Platform> Machine<P> {
         if !self.loader.is_loaded(&name) {
             // nothing of it is in the loader (an import of another type):
             // nor is it in the compiler, so that it can be written again
-            if let Err(why) = self.repl.undo() {
+            if let Err(why) = self.log.undo() {
                 eprint!("{why}");
             }
         }
@@ -289,7 +289,7 @@ impl<P: Platform> Machine<P> {
     /// Undoes the last accepted cell in the compiler: its names can be
     /// defined again. What its code did stays done. Whether it did.
     pub fn undo(&mut self) -> bool {
-        let r = self.repl.undo();
+        let r = self.log.undo();
         if let Err(why) = &r {
             eprint!("{why}");
         }
@@ -341,7 +341,7 @@ impl<P: Platform> Machine<P> {
 
     /// The names the cells export.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.repl.names()
+        self.log.names()
     }
 
     /// The value the last cell shows, if it ends in an expression without

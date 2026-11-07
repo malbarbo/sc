@@ -24,7 +24,7 @@ make test-warn   # the full corpus with -Weverything
 make learn       # after changing cuts/ or the LLVM pin, then make test and test-warn
                  # (and learn-session)
 make learn-session # after make learn: what only the REPL's session calls
-make test-proto  # src/engine, the Repl over sc.wasm's session (tests/session.rs), and sc's modules
+make test-proto  # src/engine, the Log over sc.wasm's session (tests/session.rs), and sc's modules
 make test-split  # the corpus as REPL cells, after changing the session or the loader
 make test-session # the session's slices on build/sc against the uncut sc.wasm (SC_CWASM)
 make test-session-warn # ses-, seq- and crash- with -Weverything

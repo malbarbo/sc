@@ -91,13 +91,13 @@ scload -L build/sysroot/lib/wasm32-wasip1 in1.so in2.so ...   # then main, if an
   From a clean checkout that is the LLVM pin built twice (native tools,
   then wasm) and the sysroot, without `make learn`: the cuts are in
   `cuts/`.
-  - `src/engine/` is bindgen over `engine/sc.h`, `Repl` (the log, which
-    replays a lost session) over a `Compiler`, and, with the `engine`
-    feature (the default), `Guest`: `sc.wasm`'s session on wasmtime, the
-    compiler of `sc` (`NOTES.md` §68). Inside `sc.wasm` (`wasm/`),
-    `Session` is a safe Rust API over the engine linked in (§23, §24).
-    `make test-proto` runs the tests of `Repl` over `Guest`
-    (`tests/session.rs`).
+  - `src/engine/` is bindgen over `engine/sc.h`, `Log` (the accepted
+    cells, which it replays when the session is lost) over a `Compiler`,
+    and, with the `engine` feature (the default), `Guest`: `sc.wasm`'s
+    session on wasmtime, the compiler of `sc` (`NOTES.md` §68). Inside
+    `sc.wasm` (`wasm/`), `Session` is a safe Rust API over the engine
+    linked in (§23, §24). `make test-proto` runs the tests of `Log` over
+    `Guest` (`tests/session.rs`).
   - `src/loader.rs` loads wasm shared objects the way the REPL does:
     `libc.so` and `libc++.so` from wasi-sdk, then each input, sharing one
     memory and one function table. A definition in an input hides an
@@ -220,7 +220,7 @@ make size        # raw, gzip and zstd sizes
 make loader      # build/cargo/release/scload
 make learn       # rebuild what the cuts keep, from the corpus
 make repl        # build/cargo/release/sc, the REPL
-make test-proto  # Repl over sc.wasm's session (tests/session.rs)
+make test-proto  # Log over sc.wasm's session (tests/session.rs)
 make learn-session # after make learn: what only the REPL's session calls
 make test-split  # the corpus's programs as REPL cells (build/sc)
 make test-session # the session's other slices (test/session.py) against the uncut sc.wasm

@@ -10,7 +10,7 @@
 //! `sc --replay <dir> <cell>... -- <session args>` is the test of the REPL's
 //! side (test/split.py, test/session.py): each cell (a file, %undo, or
 //! %restart, a new instance that replays the log) goes to a session
-//! through a Repl, which replays the log when the session is lost. It prints
+//! through a Log, which replays its cells when the session is lost. It prints
 //! "== <cell> <status>" and the diagnostics of each, and writes the shared
 //! object of each accepted cell as <dir>/<k>.so (k: the cell's position,
 //! from 1, in three digits); an undo removes the last one. It exits with 1
@@ -26,7 +26,7 @@ mod shell;
 use bpaf::{Bpaf, Parser};
 use platform::{Machine, Native};
 use sc::machine::{check, lang_of, run, source, Lang, Outcome, Safety};
-use sc::engine::{CellStatus, Guest, Repl};
+use sc::engine::{CellStatus, Guest, Log};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -154,12 +154,12 @@ fn main() -> ExitCode {
     }
 }
 
-/// `sc --replay`: the cells through a [`Repl`], as the REPL sends them.
+/// `sc --replay`: the cells through a [`Log`], as the REPL sends them.
 fn replay(args: &[String]) -> Result<()> {
     let usage = "--replay <dir> <cell>... -- <session args>";
     let sep = args.iter().position(|a| a == "--").ok_or(usage)?;
     let (dir, cells) = args[..sep].split_first().ok_or(usage)?;
-    let mut r = Repl::start(Guest::new(None, None)?, args[sep + 1..].to_vec())?;
+    let mut r = Log::start(Guest::new(None, None)?, args[sep + 1..].to_vec())?;
     let mut sos: Vec<PathBuf> = vec![];
     let mut out = io::stdout().lock();
     for (k, cell) in cells.iter().enumerate() {

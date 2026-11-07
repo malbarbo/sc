@@ -2,7 +2,7 @@
 //! that sc embeds): a cell with an error, a crash, the replay, undo, the
 //! limits, Enter, the shown values and `:type`. The shared objects run in
 //! the loader (build/cargo/release/scload).
-use sc::engine::{CellStatus, Guest, Repl};
+use sc::engine::{CellStatus, Guest, Log};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::{fs, io::Write};
@@ -51,15 +51,15 @@ const C: &[&str] = &[
 ];
 
 /// A session in C or C++, without limits.
-fn repl(cxx: bool) -> Repl<Guest> {
-    Repl::start(Guest::new(None, None).unwrap(), args(cxx)).unwrap()
+fn repl(cxx: bool) -> Log<Guest> {
+    Log::start(Guest::new(None, None).unwrap(), args(cxx)).unwrap()
 }
 
 #[test]
 fn cells() {
     let mut r = repl(false);
     let mut sos = vec![];
-    fn cell(r: &mut Repl<Guest>, sos: &mut Vec<Vec<u8>>, src: &str) -> sc::engine::Answer {
+    fn cell(r: &mut Log<Guest>, sos: &mut Vec<Vec<u8>>, src: &str) -> sc::engine::Answer {
         let a = r.cell(src.as_bytes()).unwrap();
         if a.status == CellStatus::Ok {
             sos.push(a.so.clone());

@@ -1,7 +1,7 @@
 //! The engine's API (`engine/sc.h`, docs/plan-repl.md §2) for Rust.
 //!
 //! [`sys`] is what bindgen generates from the header: the types and the raw
-//! functions. [`Repl`] is the log that replays a lost session over a
+//! functions. [`Log`] is the log that replays a lost session over a
 //! [`Compiler`]: natively (the `engine` feature), [`Guest`], sc.wasm's
 //! session on wasmtime (NOTES.md §68).
 //!
@@ -100,8 +100,8 @@ impl Mode {
     }
 }
 
-mod repl;
-pub use repl::*;
+mod log;
+pub use log::*;
 #[cfg(feature = "engine")]
 mod guest;
 #[cfg(feature = "engine")]

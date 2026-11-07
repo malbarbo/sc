@@ -5,7 +5,7 @@
 //! a fatal error, Ctrl-C, the timeout, the memory) stops the call, and
 //! `sc_session_recover` puts the copy back too: the cell is an error, and
 //! the session goes on. Without the copy (a replay) the session is lost,
-//! and the [`super::Repl`] replays the log in another [`Guest`].
+//! and the [`super::Log`] replays the log in another [`Guest`].
 //!
 //! The module is sc.wasm compiled for this target and the loader's
 //! [`Config`](crate::loader::config), with zstd, which build.rs embeds. It
@@ -212,7 +212,7 @@ fn lost(what: impl std::fmt::Display) -> CompilerError {
 impl Guest {
     /// A new instance, without a session. Each call is limited to
     /// `timeout`, and the module's memory, with the copy, to twice
-    /// `memory`; above `memory`, after an accepted cell, a [`super::Repl`]
+    /// `memory`; above `memory`, after an accepted cell, a [`super::Log`]
     /// replays the log in another ([`Compiler::over`], docs/plan-repl.md §4).
     pub fn new(timeout: Option<Duration>, memory: Option<u64>) -> io::Result<Guest> {
         let s = shared()?;
@@ -341,7 +341,7 @@ fn funcs(store: &mut Store<Ctx>, inst: &Instance) -> wasmtime::Result<Funcs> {
     })
 }
 
-impl super::Repl<Guest> {
+impl super::Log<Guest> {
     /// Each call within `timeout`, the module's memory within `memory`
     /// ([`Guest::new`]), from the next call on.
     pub fn limit(&mut self, timeout: Option<Duration>, memory: Option<u64>) {

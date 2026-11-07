@@ -14,7 +14,7 @@ pub struct Answer {
     /// The cell as a wasm shared object.
     pub so: Vec<u8>,
     /// The names the cell exports; [`Mode::Type`]: the type, which
-    /// [`Repl::type_of`] takes out.
+    /// [`Log::type_of`] takes out.
     pub names: Vec<String>,
 }
 
@@ -25,7 +25,7 @@ impl Answer {
     }
 }
 
-/// The type of an expression ([`Repl::type_of`]).
+/// The type of an expression ([`Log::type_of`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeOf {
     /// None if the source is not an expression.
@@ -34,7 +34,7 @@ pub struct TypeOf {
     pub diags: String,
 }
 
-/// A compiler with one session at a time, which a [`Repl`] drives. A
+/// A compiler with one session at a time, which a [`Log`] drives. A
 /// failed cell leaves nothing in it: the session is as before the cell.
 pub trait Compiler: Sized {
     /// Another compiler as this one, without a session.
@@ -46,7 +46,7 @@ pub trait Compiler: Sized {
     fn cell(&mut self, src: &[u8], mode: Mode) -> Result<Answer, CompilerError>;
     /// See [`super::sys::sc_session_depth`].
     fn depth(&mut self, src: &[u8]) -> Result<u32, CompilerError>;
-    /// Whether it takes more memory than it may: the [`Repl`] replays the
+    /// Whether it takes more memory than it may: the [`Log`] replays the
     /// log in another.
     fn over(&self) -> bool {
         false
@@ -82,29 +82,29 @@ impl From<io::Error> for CompilerError {
     }
 }
 
-/// Why a [`Repl`] cannot go on.
+/// Why a [`Log`] cannot go on.
 #[derive(Debug)]
-pub enum ReplError {
+pub enum LogError {
     Compiler(CompilerError),
     /// The replay of the cell at this index of the log did not give what it
     /// gave the first time: the student must restart the session.
     Diverged(usize),
 }
 
-impl fmt::Display for ReplError {
+impl fmt::Display for LogError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ReplError::Compiler(e) => write!(f, "{e}"),
-            ReplError::Diverged(i) => write!(f, "the replay of cell {} diverged", i + 1),
+            LogError::Compiler(e) => write!(f, "{e}"),
+            LogError::Diverged(i) => write!(f, "the replay of cell {} diverged", i + 1),
         }
     }
 }
 
-impl std::error::Error for ReplError {}
+impl std::error::Error for LogError {}
 
-impl From<CompilerError> for ReplError {
-    fn from(e: CompilerError) -> ReplError {
-        ReplError::Compiler(e)
+impl From<CompilerError> for LogError {
+    fn from(e: CompilerError) -> LogError {
+        LogError::Compiler(e)
     }
 }
 
@@ -118,29 +118,29 @@ struct Entry {
 /// nothing in the compiler, so the log does not keep it. When the session
 /// is lost (the compiler ended, an undo), another compiler replays the log
 /// without the backend, and each cell must export the same names (§3.6).
-pub struct Repl<C: Compiler> {
+pub struct Log<C: Compiler> {
     args: Vec<String>,
     pub(super) compiler: C,
-    log: Vec<Entry>,
+    cells: Vec<Entry>,
 }
 
-impl<C: Compiler> Repl<C> {
+impl<C: Compiler> Log<C> {
     /// A session of `args` in `compiler`.
-    pub fn start(compiler: C, args: Vec<String>) -> Result<Repl<C>, ReplError> {
+    pub fn start(compiler: C, args: Vec<String>) -> Result<Log<C>, LogError> {
         let compiler = open(compiler, &args)?;
-        Ok(Repl { args, compiler, log: vec![] })
+        Ok(Log { args, compiler, cells: vec![] })
     }
 
     /// Another compiler replays the log. It replaces the one before only
     /// once the whole log is replayed: on an error, the compiler and the
     /// log are as they were. The REPL calls it when the compiler takes too
     /// much memory (docs/plan-repl.md §4).
-    pub fn restart(&mut self) -> Result<(), ReplError> {
+    pub fn restart(&mut self) -> Result<(), LogError> {
         let mut compiler = open(self.compiler.another()?, &self.args)?;
-        for (i, e) in self.log.iter().enumerate() {
+        for (i, e) in self.cells.iter().enumerate() {
             let a = compiler.cell(&e.src, Mode::Replay)?;
             if a.status != CellStatus::Ok || a.names != e.names {
-                return Err(ReplError::Diverged(i));
+                return Err(LogError::Diverged(i));
             }
         }
         self.compiler = compiler;
@@ -149,42 +149,42 @@ impl<C: Compiler> Repl<C> {
 
     /// The accepted cells.
     pub fn len(&self) -> usize {
-        self.log.len()
+        self.cells.len()
     }
 
     /// No cell accepted yet.
     pub fn is_empty(&self) -> bool {
-        self.log.is_empty()
+        self.cells.is_empty()
     }
 
     /// The names the accepted cells export.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.log.iter().flat_map(|e| &e.names).map(String::as_str)
+        self.cells.iter().flat_map(|e| &e.names).map(String::as_str)
     }
 
     /// Compiles a cell. [`CellStatus::Lost`]: the cell ended the session (its
     /// diagnostics, or how the compiler ended), which is back as before it,
     /// or will be at the next request if the replay failed.
-    pub fn cell(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
+    pub fn cell(&mut self, src: &[u8]) -> Result<Answer, LogError> {
         self.compile(src, Mode::So)
     }
 
-    /// [`Repl::cell`], or [`CellStatus::Incomplete`] if the cell stops short
+    /// [`Log::cell`], or [`CellStatus::Incomplete`] if the cell stops short
     /// ([`Mode::Whole`]): nothing of it is kept.
-    pub fn cell_if_whole(&mut self, src: &[u8]) -> Result<Answer, ReplError> {
+    pub fn cell_if_whole(&mut self, src: &[u8]) -> Result<Answer, LogError> {
         self.compile(src, Mode::Whole)
     }
 
     /// The type of `src`, an expression without its `;`. Nothing of it is
     /// kept.
-    pub fn type_of(&mut self, src: &[u8]) -> Result<TypeOf, ReplError> {
+    pub fn type_of(&mut self, src: &[u8]) -> Result<TypeOf, LogError> {
         let a = self.compile(src, Mode::Type)?;
         let ty = if a.status == CellStatus::Ok { a.names.into_iter().next() } else { None };
         Ok(TypeOf { ty, diags: a.diags })
     }
 
     /// See [`super::sys::sc_session_depth`].
-    pub fn depth(&mut self, src: &[u8]) -> Result<u32, ReplError> {
+    pub fn depth(&mut self, src: &[u8]) -> Result<u32, LogError> {
         match self.compiler.depth(src) {
             Err(CompilerError::Lost(_)) => {
                 self.restart()?;
@@ -194,14 +194,14 @@ impl<C: Compiler> Repl<C> {
         }
     }
 
-    fn compile(&mut self, src: &[u8], mode: Mode) -> Result<Answer, ReplError> {
+    fn compile(&mut self, src: &[u8], mode: Mode) -> Result<Answer, LogError> {
         let mut a = match self.compiler.cell(src, mode) {
             Ok(a) => a,
             Err(e @ CompilerError::Lost(_)) => Answer::bare(CellStatus::Lost, format!("sc: {e}\n")),
             Err(e) => return Err(e.into()),
         };
         match a.status {
-            CellStatus::Ok if mode != Mode::Type => self.log.push(Entry { src: src.to_vec(), names: a.names.clone() }),
+            CellStatus::Ok if mode != Mode::Type => self.cells.push(Entry { src: src.to_vec(), names: a.names.clone() }),
             CellStatus::Ok | CellStatus::Error | CellStatus::Incomplete => {}
             // a replay that fails (interrupted too, or above the limits)
             // leaves the compiler that ended: the next request replays again
@@ -223,12 +223,12 @@ impl<C: Compiler> Repl<C> {
     /// student: there is none, or the replay failed, and the session stays
     /// as it was.
     pub fn undo(&mut self) -> Result<(), String> {
-        let Some(last) = self.log.pop() else {
+        let Some(last) = self.cells.pop() else {
             return Err("sc: no cell to undo\n".into());
         };
         // the generated code cannot be undone in the session (§3.3)
         if let Err(e) = self.restart() {
-            self.log.push(last);
+            self.cells.push(last);
             return Err(format!("sc: the cell was not undone: {e}\n"));
         }
         Ok(())
@@ -236,7 +236,7 @@ impl<C: Compiler> Repl<C> {
 }
 
 /// `compiler` with a session of `args`.
-fn open<C: Compiler>(mut compiler: C, args: &[String]) -> Result<C, ReplError> {
+fn open<C: Compiler>(mut compiler: C, args: &[String]) -> Result<C, LogError> {
     compiler.new_session(args)?;
     Ok(compiler)
 }
