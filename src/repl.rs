@@ -159,7 +159,7 @@ pub struct Repl<P: Platform> {
     loaded: usize,
     /// The input Enter compiled to know it whole, and the answer, which the
     /// cell takes.
-    pending: Option<(String, Answer)>,
+    compiled: Option<(String, Answer)>,
 }
 
 impl<P: Platform> Repl<P> {
@@ -192,7 +192,7 @@ impl<P: Platform> Repl<P> {
         let mut loader = Loader::new(platform.runtime(&argv, interactive)?, libs, STACK)?;
         loader.keep_stacks();
         loader.show();
-        Ok(Repl { platform, lang, safety, argv, log, loader, loaded: 0, pending: None })
+        Ok(Repl { platform, lang, safety, argv, log, loader, loaded: 0, compiled: None })
     }
 
     pub fn safety(&self) -> Safety {
@@ -236,7 +236,7 @@ impl<P: Platform> Repl<P> {
         if split(input).is_some() || input.trim().is_empty() {
             return Enter::Run;
         }
-        if self.pending.as_ref().is_some_and(|(p, _)| p == input) {
+        if self.compiled.as_ref().is_some_and(|(p, _)| p == input) {
             return Enter::Run;
         }
         let mut depth = |s: &str| self.log.depth(s.as_bytes()).unwrap_or(0) as usize;
@@ -254,7 +254,7 @@ impl<P: Platform> Repl<P> {
         match self.log.cell_if_whole(input.as_bytes()) {
             Ok(a) if a.status == CellStatus::Incomplete => Enter::Open(0),
             Ok(a) => {
-                self.pending = Some((input.to_string(), a));
+                self.compiled = Some((input.to_string(), a));
                 Enter::Run
             }
             // the cell says what went wrong
@@ -264,7 +264,7 @@ impl<P: Platform> Repl<P> {
 
     /// Compiles `src` (unless Enter did) and runs it.
     pub fn cell(&mut self, src: &str) -> Result<Outcome> {
-        let a = match self.pending.take() {
+        let a = match self.compiled.take() {
             Some((p, a)) if p == src => a,
             _ => self.log.cell(src.as_bytes())?,
         };
