@@ -1,5 +1,5 @@
 //! What of the Rust crate sc.wasm links: the loader (`sc::loader`) and the
-//! machine (`sc::machine`) on the host's primitives, with the session in
+//! REPL (`sc::repl`, `sc::shell`) on the host's primitives, with the session in
 //! this module, and their exports.
 //!
 //! The exports are unsafe for the host that calls them: ENGINE.md, in
@@ -9,8 +9,8 @@
 use sc::engine::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, Session};
 use sc::loader::host::{self, Host};
 use sc::loader::{libdirs, Error, Loader, STACK};
-use sc::machine::shell::{self, Shell};
-use sc::machine::{Enter, Lang, Outcome, Platform, Repl, Safety, INDENT, ROOT};
+use sc::shell::{self, Shell};
+use sc::repl::{Enter, Lang, Outcome, Platform, Repl, Safety, INDENT, ROOT};
 use std::ffi::{c_char, c_int, c_ulonglong, CString};
 use std::io::{self, BufRead};
 use std::path::PathBuf;
@@ -196,7 +196,7 @@ pub extern "C" fn sc_cli() -> i32 {
     }
     let platform = Inside { color: false };
     let r = match file {
-        Some(f) => sc::machine::run(platform, lang, safety, &f, args.collect()),
+        Some(f) => sc::repl::run(platform, lang, safety, &f, args.collect()),
         None => repl(platform, lang.unwrap_or(Lang::C), safety),
     };
     r.unwrap_or_else(|e| {
@@ -209,7 +209,7 @@ pub extern "C" fn sc_cli() -> i32 {
 /// reads it: an input goes on, a line at a time, while the compiler says
 /// it stops short ([`Repl::enter`]); one that the end cuts off still
 /// runs, for the student to read what is wrong with it.
-fn repl(platform: Inside, lang: Lang, safety: Safety) -> sc::machine::Result<i32> {
+fn repl(platform: Inside, lang: Lang, safety: Safety) -> sc::repl::Result<i32> {
     let mut shell = Shell::new(Repl::new(platform, lang, safety, vec!["sc".into()], true)?);
     let mut status = 0;
     let (mut input, mut pending) = (String::new(), String::new());

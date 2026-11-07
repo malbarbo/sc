@@ -1,4 +1,4 @@
-// The bindings of engine/sc.h (the machine feature), and with the engine
+// The bindings of engine/sc.h (the repl feature), and with the engine
 // feature what sc embeds: the pack (docs/plan-repl.md §5.4), $OUT_DIR/sc.sqfs,
 // and sc.wasm compiled for wasmtime, $OUT_DIR/sc.cwasm.zst (NOTES.md §68).
 // Outside make, make sc-deps builds what they come from, so that cargo build
@@ -16,7 +16,7 @@ fn main() {
     // cargo watches build.rs anyway: this only keeps it from running again
     // on a change to any file of the package, as it does when nothing is said
     println!("cargo:rerun-if-changed=build.rs");
-    if env::var_os("CARGO_FEATURE_MACHINE").is_none() {
+    if env::var_os("CARGO_FEATURE_REPL").is_none() {
         return;
     }
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -26,7 +26,7 @@ fn main() {
     // hides what it declares, and bindgen leaves out hidden functions. In
     // MSVC's ABI an enum is an int: the GNU one's has the same layouts, and
     // the enums' constants are u32, as elsewhere
-    #[cfg(feature = "machine")]
+    #[cfg(feature = "repl")]
     bindgen::Builder::default()
         .header(header.to_str().unwrap())
         .clang_args([format!("--target={}", env::var("TARGET").unwrap().replace("-msvc", "-gnu")), "-fvisibility=default".into()])
@@ -56,7 +56,7 @@ fn main() {
 #[cfg(feature = "engine")]
 const LIBS: [&str; 5] = ["libc.so", "libc++.so", "libc++abi.so", "libsc_rt.so", "libsetjmp.so"];
 
-/// The pack: a squashfs (zstd -19, blocks of 128 KiB) with what the machine
+/// The pack: a squashfs (zstd -19, blocks of 128 KiB) with what the REPL
 /// reads (src/bin/sc/pack.rs), at the paths of the pack's view
 /// (scripts/flags.py, PACK): the libraries the loader loads in sysroot/lib,
 /// the arguments in repl/. Each library has its <name>.cwasm next to it,

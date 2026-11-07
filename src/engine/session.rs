@@ -133,7 +133,7 @@ impl Session {
     }
 
     /// The engine's session, for a caller of the raw functions (the
-    /// machine inside sc.wasm calls `sc_session_cell` through its host).
+    /// REPL inside sc.wasm calls `sc_session_cell` through its host).
     pub fn as_raw(&self) -> *mut sys::sc_session {
         self.raw.as_ptr()
     }

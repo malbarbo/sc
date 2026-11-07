@@ -2,7 +2,7 @@
 //! and spython. The native `sc` reads the inputs with its line editor and
 //! adds `:theme` (src/bin/sc/shell.rs); sc.wasm reads them from its stdin,
 //! or gets them from its host.
-use super::{split, Enter, Outcome, Platform, Repl, Result, Safety};
+use crate::repl::{split, Enter, Outcome, Platform, Repl, Result, Safety};
 
 /// What became of an input. `repl_run` answers with these numbers.
 #[repr(u32)]

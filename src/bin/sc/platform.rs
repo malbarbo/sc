@@ -16,11 +16,11 @@ const MEMORY: u64 = 1 << 30;
 pub struct Native;
 
 /// The REPL of `sc`.
-pub type Repl = sc::machine::Repl<Native>;
+pub type Repl = sc::repl::Repl<Native>;
 /// The shell of `sc`'s REPL.
-pub type Shell = sc::machine::shell::Shell<Native>;
+pub type Shell = sc::shell::Shell<Native>;
 
-impl sc::machine::Platform for Native {
+impl sc::repl::Platform for Native {
     type Compiler = Guest;
     type Runtime = Wasmtime;
 

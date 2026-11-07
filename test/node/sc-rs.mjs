@@ -1,4 +1,4 @@
-// sc inside sc.wasm on Node: the machine (src/machine.rs, its export
+// sc inside sc.wasm on Node: the REPL (src/repl.rs, its export
 // sc_cli in wasm/lib.rs), with the session in the same module and the
 // host's primitives of wasm.mjs, which is all the JS here gives it. For
 // test/student.py and test/checks.py (SC=test/node/sc-rs).

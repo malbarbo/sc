@@ -111,7 +111,7 @@ pub fn error(status: i32, detail: u64) -> Error {
 }
 
 /// `wasm_call` itself: the status, with the detail in `vals[0]`, which
-/// [`error`] reads. Nothing is allocated: the machine inside sc.wasm puts
+/// [`error`] reads. Nothing is allocated: the REPL inside sc.wasm puts
 /// the memory back after a cell that trapped before it allocates.
 pub fn call(func: H, sig: &str, vals: &mut [u64]) -> i32 {
     let (params, results) = sig.split_once(':').unwrap_or((sig, ""));

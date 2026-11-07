@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::platform::Shell;
-use sc::machine::{Enter, INDENT};
+use sc::repl::{Enter, INDENT};
 
 
 pub struct Reader {
@@ -146,7 +146,7 @@ impl Completer for InputHelper {
     type Candidate = String;
 
     fn complete(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> rustyline::Result<(usize, Vec<String>)> {
-        Ok(sc::machine::shell::complete(&self.completions, line, pos))
+        Ok(sc::shell::complete(&self.completions, line, pos))
     }
 }
 
@@ -162,7 +162,7 @@ impl Validator for InputHelper {
 }
 
 /// Enter: the input runs, or a line opens as deep as the brackets above the
-/// caret ([`sc::machine::Repl::enter`]).
+/// caret ([`sc::repl::Repl::enter`]).
 struct EnterHandler(Arc<Mutex<Shell>>);
 
 impl ConditionalEventHandler for EnterHandler {
@@ -366,7 +366,7 @@ fn highlight(input: &str, t: &Palette) -> String {
                 i += 1;
             }
             let word: String = chars[begin..i].iter().collect();
-            if sc::machine::shell::KEYWORDS.contains(&word.as_str()) {
+            if sc::shell::KEYWORDS.contains(&word.as_str()) {
                 paint(&mut out, t.keyword, &chars[begin..i]);
             } else if chars.get(i) == Some(&'(') {
                 paint(&mut out, t.function, &chars[begin..i]);

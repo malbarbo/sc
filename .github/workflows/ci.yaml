@@ -40,7 +40,7 @@ jobs:
           toolchain: stable
           target: wasm32-wasip1
 
-      # The Rust that sc.wasm links (wasm/): the loader and the machine on
+      # The Rust that sc.wasm links (wasm/): the loader and the REPL on
       # the host's primitives.
       - name: Build
         run: make rs-wasm

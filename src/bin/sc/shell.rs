@@ -1,10 +1,10 @@
 //! The REPL's loop with its line editor, over the library's shell
-//! (`sc::machine::shell`), to which it adds `:theme`.
+//! (`sc::shell`), to which it adds `:theme`.
 use crate::platform::{Repl, Shell};
 use crate::reader::{Reader, Theme};
 use crate::{config, Result};
-use sc::machine::shell::Status;
-use sc::machine::{Lang, Safety};
+use sc::shell::Status;
+use sc::repl::{Lang, Safety};
 use std::sync::{Arc, Mutex};
 
 pub fn welcome_message(lang: Lang, safety: Safety) -> String {

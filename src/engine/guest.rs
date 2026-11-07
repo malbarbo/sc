@@ -17,7 +17,7 @@
 //! batteries run the uncut engine (sc-full.wasm) and the cuts being learned
 //! so. The trap of a function the cuts removed says its name on stderr.
 use super::{sys, Answer, CellStatus, Compiler, CompilerError, Mode};
-use crate::machine::ROOT;
+use crate::repl::ROOT;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

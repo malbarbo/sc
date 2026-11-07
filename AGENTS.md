@@ -30,7 +30,7 @@ make test-session # the session's slices on build/sc against the uncut sc.wasm (
 make test-session-warn # ses-, seq- and crash- with -Weverything
 make test-split-node # test-split with the JS loader (test/node/loader.mjs) in place of scload
 make test-split-node-rs # test-split with sc.wasm's loader on Node's primitives (test/node/wasm.mjs)
-make test-student-node-rs # test-student with sc inside sc.wasm (the machine) on Node's primitives
+make test-student-node-rs # test-student with sc inside sc.wasm (the REPL) on Node's primitives
 make repl        # build/cargo/release/sc, the REPL (sc, sc FILE, sc help), unstripped:
                  # sc.wasm's session on wasmtime is its compiler (NOTES.md §68)
 cargo build --release # the same sc (build.rs runs make sc-deps)
@@ -160,7 +160,7 @@ The subject says what the change does to the code, in one line:
 
 - A prefix for the part of the tree, then a lowercase sentence: `engine:`
   (`engine/`, `rt/`), `cuts:`, `llvm:`, `loader:` (`src/loader*`), `repl:`
-  (`src/bin`, `src/engine`, `src/machine`), `wasm:`, `scripts:`, `test:`,
+  (`src/bin`, `src/engine`, `src/repl*`, `src/shell.rs`), `wasm:`, `scripts:`, `test:`,
   `docs:`, `ci:`, and `all:` when it crosses them.
 - Imperative or present, active voice. `repl: say that a directory is not a
   source file`.

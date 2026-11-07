@@ -25,7 +25,7 @@ mod shell;
 
 use bpaf::{Bpaf, Parser};
 use platform::{Native, Repl};
-use sc::machine::{check, lang_of, run, source, Lang, Outcome, Safety};
+use sc::repl::{check, lang_of, run, source, Lang, Outcome, Safety};
 use sc::engine::{CellStatus, Guest, Log};
 use std::fs;
 use std::io::{self, Write};

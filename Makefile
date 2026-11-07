@@ -277,7 +277,7 @@ test-split-node: $(B)/sc $(SCLOAD) $(B)/res/base/summary.json
 test-split-node-rs: $(B)/sc $(B)/sc.wasm $(SCLOAD) $(B)/res/base/summary.json
 	SCLOAD=test/node/scload-rs test/split.py $(B)/sc $(B)/res/split-node-rs
 
-# test-student with sc inside sc.wasm (the machine, wasm/lib.rs's sc_cli), on
+# test-student with sc inside sc.wasm (the REPL, wasm/lib.rs's sc_cli), on
 # Node with only the host's primitives (test/node/sc-rs). test/checks.py
 # test/node/sc-rs differs only in the frames, which the host's do not tie to
 # an instance (NOTES.md §66)
@@ -310,7 +310,7 @@ dist-windows: $(PACK) $(B)/sc.wasm
 # make for the engine nor embeds it), and on the Rust of sc.wasm. The code
 # is not in rustfmt's style
 check:
-	cargo clippy --release $(CARGO) --no-default-features --features native,machine --all-targets -- -D warnings
+	cargo clippy --release $(CARGO) --no-default-features --features native,repl --all-targets -- -D warnings
 	cargo clippy --release $(CARGO) --features engine --all-targets -- -D warnings
 	cargo clippy --release $(CARGO) --manifest-path wasm/Cargo.toml --target wasm32-wasip1 --target-dir $(B)/cargo-wasm32 -- -D warnings
 

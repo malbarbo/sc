@@ -11,7 +11,6 @@ use crate::loader::{self, source_name, Error, Frame, Lib, Loader, Shown, TrapKin
 use std::io;
 use std::path::Path;
 
-pub mod shell;
 mod show;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
