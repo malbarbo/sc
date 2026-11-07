@@ -24,7 +24,8 @@ for l in L[a:b]:
     m = re.match(r'\s*\{"(\w*)", (\d+), (\d+)\},', l)
     if m and m.group(1) in keep:
         ranges.append((int(m.group(2)), int(m.group(2)) + int(m.group(3))))
-kept_id = lambda i: i == 0 or any(lo <= i < hi for lo, hi in ranges)
+# a target's names start at IntrinsicNameOffsetTable[1] + Offset (findTargetSubtable)
+kept_id = lambda i: i == 0 or any(lo < i <= hi for lo, hi in ranges)
 
 def storage(lines):
     """[(offset, text)] of a "..\\0" string table body."""
