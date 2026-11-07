@@ -194,7 +194,14 @@ pub extern "C" fn sc_cli() -> i32 {
                 };
                 lang = Some(l);
             }
-            "--safety" => safety = value.or_else(|| args.next()).and_then(|l| Safety::parse(&l)).unwrap_or(Safety::On),
+            "--safety" => {
+                let l = value.or_else(|| args.next()).unwrap_or_default();
+                let Some(l) = Safety::parse(&l) else {
+                    eprintln!("Error: couldn't parse `{l}`: expected off, on or strict");
+                    return 1;
+                };
+                safety = l;
+            }
             _ => {
                 file = Some(PathBuf::from(a));
                 break;
