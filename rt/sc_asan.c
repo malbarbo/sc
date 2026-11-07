@@ -532,12 +532,20 @@ static void *alloc(size_t n, size_t align) {
   return (void *)user;
 }
 
+// the block whose memory from libc, redzones included, holds a, with the
+// start of the part the program gets in user. libc's free must not see a
+static Block *inside(uintptr_t a, uintptr_t *user, int limit) {
+  uint8_t k = *shadow(a & ~(uintptr_t)7);
+  Block *b = block_near(a, k == HEAP_LEFT || k == HEAP_RIGHT ? k : FREED, user, limit);
+  return b && a >= *user - b->left && a < *user - b->left + b->total ? b : 0;
+}
+
 static _Noreturn void bad_free(const char *fn, uintptr_t p) {
   char msg[256], w[64], b[32];
   uintptr_t user;
   const Global *g;
-  Block *blk = block_near(p, FREED, &user, 1 << 20);
-  if (blk && p - user < blk->size) {
+  Block *blk = inside(p, &user, 1 << 20);
+  if (blk) {
     format(msg, sizeof msg, "invalid-free: %s of an address %s a block of %s", fn, where(w, sizeof w, p, user, blk->size),
              bytes(b, sizeof b, blk->size));
     blame(blk);
@@ -564,7 +572,7 @@ static Block *owned(void *p, const char *fn) {
   if (b) return b;
   if (in_stack(a) || global_at(a)) bad_free(fn, a);
   // an address inside one of the allocator's blocks, up to 64 KiB in
-  if ((b = block_near(a, FREED, &user, 8192)) && a - user < b->size) bad_free(fn, a);
+  if (inside(a, &user, 8192)) bad_free(fn, a);
   return 0;
 }
 

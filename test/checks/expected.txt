@@ -194,6 +194,20 @@ average: inf
 == float-div-zero.c strict exit=134
 error: division by zero
     at main (float-div-zero.c:7:33)
+== free-advanced.c off exit=0
+== free-advanced.c on exit=134
+error: invalid-free: free of an address 0 bytes past the end of a block of 16 bytes
+    at main (free-advanced.c:8:5)
+the block was allocated
+    at main (free-advanced.c:5:14)
+== free-advanced.c strict exit=134
+free-advanced.c:5:10: warning: implicit conversion when initializing 'int *' with an expression of type 'void *' is not permitted in C++ [-Wimplicit-void-ptr-cast]
+    5 |     int *v = malloc(4 * sizeof(int));
+      |          ^   ~~~~~~~~~~~~~~~~~~~~~~~
+error: invalid-free: free of an address 0 bytes past the end of a block of 16 bytes
+    at main (free-advanced.c:8:5)
+the block was allocated
+    at main (free-advanced.c:5:14)
 == free-local.c off exit=0
 == free-local.c on exit=134
 error: invalid-free: free of the address of a local variable
