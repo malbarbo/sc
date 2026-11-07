@@ -70,9 +70,9 @@ pub use runtime::{Error, Frame, Result, Trap, TrapKind, ValType};
 /// The runtime of a [`Loader`] when it does not say: wasmtime with the
 /// native feature, else the host's primitives, as inside sc.wasm.
 #[cfg(feature = "native")]
-pub type Native = native::Wasmtime;
+pub type DefaultRuntime = native::Wasmtime;
 #[cfg(not(feature = "native"))]
-pub type Native = host::Host;
+pub type DefaultRuntime = host::Host;
 
 pub const STACK: u32 = 1 << 20; // the default; the stack is first, so an overflow traps below 0
 const PAGE: u32 = 1 << 16;
@@ -204,7 +204,7 @@ struct World {
     funcs: HashMap<&'static str, (H, FuncType)>,
 }
 
-pub struct Loader<R: Runtime = Native> {
+pub struct Loader<R: Runtime = DefaultRuntime> {
     rt: R,
     world: World,
     syms: HashMap<String, Sym>,
