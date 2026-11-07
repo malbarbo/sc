@@ -1,104 +1,222 @@
-//! The REPL's lines, as in sgleam and spython: a cell, or a `:` command.
-//! The native `sc` reads them with its line editor (src/bin/sc/shell.rs),
-//! which adds `:theme`; sc.wasm from its stdin, or from its host.
-use super::{split, Machine, Outcome, Platform, Result, Safety};
+//! The `:` commands, over a machine that knows none of them, as in sgleam
+//! and spython. The native `sc` reads the inputs with its line editor and
+//! adds `:theme` (src/bin/sc/shell.rs); sc.wasm reads them from its stdin,
+//! or gets them from its host.
+use super::{split, Enter, Machine, Outcome, Platform, Result, Safety};
 
-/// The commands: the name, what it takes, and its help.
-pub const COMMANDS: &[(&str, &str, &str)] = &[
-    (":help", "", "Show this help"),
-    (":quit", "", "Exit the REPL"),
-    (":type", "EXPR", "Show the type of an expression, without running it"),
-    (":undo", "", "Forget the last cell's declarations (what it ran stays done)"),
-    (":leaks", "", "Show the memory the cells allocated and nothing points to any more"),
-    (":safety", "[off|on|strict]", "Show or switch how much the compiler checks (starts over, empty)"),
-];
-
-/// What a line did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step {
-    /// The status of the REPL is now this: 0, or 1 after an error.
-    Status(i32),
-    /// The status stays.
-    Same,
-    /// The status stays, and the names of the cells changed.
-    Names,
-    /// `:quit`.
-    Quit,
-    /// The code called `exit`.
-    Exit(i32),
+/// What became of an input. `repl_run` answers with these numbers.
+#[repr(u32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Status {
+    Ok = 0,
+    Error = 1,
+    Quit = 2,
 }
 
-/// Runs a line, as a cell or as one of `commands` (a list that starts with
-/// [`COMMANDS`]): those that are not in [`COMMANDS`] are `other`'s.
-pub fn line<P: Platform>(
-    m: &mut Machine<P>,
-    input: &str,
-    commands: &[(&str, &str, &str)],
-    other: impl FnOnce(&str, &str) -> Step,
-) -> Result<Step> {
-    if input.trim().is_empty() {
-        return Ok(Step::Same);
+pub struct Shell<P: Platform> {
+    machine: Machine<P>,
+    commands: Vec<Command>,
+    /// The code of the `exit` that ended the session, if one ran.
+    exit_status: Option<i32>,
+}
+
+struct Command {
+    name: &'static str,
+    arg: Arg,
+    help: &'static str,
+    action: Action,
+}
+
+/// What a command takes after its name.
+#[derive(Clone, Copy)]
+enum Arg {
+    None,
+    /// C or C++, required.
+    Expr,
+    /// An optional word, which the help shows exactly as it stands here.
+    Word(&'static str),
+}
+
+enum Action {
+    Builtin(Builtin),
+    Host(HostAction),
+}
+
+/// A command of the host's. `Send`, as the native `sc` shares the shell
+/// with its line editor.
+type HostAction = Box<dyn FnMut(&str) -> std::result::Result<(), String> + Send>;
+
+#[derive(Clone, Copy)]
+enum Builtin {
+    Help,
+    Quit,
+    Type,
+    Undo,
+    Leaks,
+    Safety,
+}
+
+const BUILTINS: &[(&str, Arg, &str, Builtin)] = &[
+    (":help", Arg::None, "Show this help", Builtin::Help),
+    (":quit", Arg::None, "Exit the REPL", Builtin::Quit),
+    (":type", Arg::Expr, "Show the type of an expression, without running it", Builtin::Type),
+    (":undo", Arg::None, "Forget the last cell's declarations (what it ran stays done)", Builtin::Undo),
+    (":leaks", Arg::None, "Show the memory the cells allocated and nothing points to any more", Builtin::Leaks),
+    (
+        ":safety",
+        Arg::Word("[off|on|strict]"),
+        "Show or switch how much the compiler checks (starts over, empty)",
+        Builtin::Safety,
+    ),
+];
+
+impl<P: Platform> Shell<P> {
+    pub fn new(machine: Machine<P>) -> Shell<P> {
+        let commands = BUILTINS
+            .iter()
+            .map(|&(name, arg, help, builtin)| Command { name, arg, help, action: Action::Builtin(builtin) })
+            .collect();
+        Shell { machine, commands, exit_status: None }
     }
-    let Some((name, arg)) = split(input) else {
-        return Ok(match m.cell(input)? {
-            Outcome::Ok => Step::Status(0),
-            Outcome::Error => Step::Status(1),
-            Outcome::Exit(code) => Step::Exit(code),
-        });
-    };
-    let Some(&(_, takes, _)) = commands.iter().find(|c| c.0 == name) else {
-        println!("Unknown command {name}. Type :help to see the commands.");
-        return Ok(Step::Same);
-    };
-    if takes.is_empty() && !arg.is_empty() {
-        println!("The {name} command takes nothing after it.");
-        return Ok(Step::Same);
+
+    /// A command of the host's. `word` is what the help shows after the name,
+    /// for one that takes a word; `run` gets what followed the name, and
+    /// answers with what to tell the user when it refuses.
+    pub fn add(
+        &mut self,
+        name: &'static str,
+        word: Option<&'static str>,
+        help: &'static str,
+        run: impl FnMut(&str) -> std::result::Result<(), String> + Send + 'static,
+    ) {
+        debug_assert!(self.commands.iter().all(|c| c.name != name));
+        self.commands.push(Command { name, arg: word.map_or(Arg::None, Arg::Word), help, action: Action::Host(Box::new(run)) });
     }
-    Ok(match name {
-        ":help" => {
-            let usage = |(n, t, _): &(&str, &str, &str)| if t.is_empty() { n.to_string() } else { format!("{n} {t}") };
-            let width = commands.iter().map(|c| usage(c).len()).max().unwrap_or(0);
-            println!("Commands:");
-            for c in commands {
-                println!("  {:<width$}  {}", usage(c), c.2);
+
+    /// The code of the `exit` that ended the session, if one ran.
+    pub fn exit_status(&self) -> Option<i32> {
+        self.exit_status
+    }
+
+    /// What Enter does with `input`: see [`Machine::enter`].
+    pub fn enter(&mut self, input: &str, cursor: usize) -> Enter {
+        self.machine.enter(input, cursor)
+    }
+
+    /// Runs an input, a cell or a command. An `Err` is a session that cannot
+    /// go on.
+    pub fn run(&mut self, input: &str) -> Result<Status> {
+        if input.trim().is_empty() {
+            return Ok(Status::Ok);
+        }
+        let Some((name, arg)) = split(input) else {
+            return Ok(match self.machine.cell(input)? {
+                Outcome::Ok => Status::Ok,
+                Outcome::Error => Status::Error,
+                Outcome::Exit(code) => {
+                    self.exit_status = Some(code);
+                    Status::Quit
+                }
+            });
+        };
+        let Some(command) = self.commands.iter_mut().find(|c| c.name == name) else {
+            println!("Unknown command {name}. Type :help to see the commands.");
+            return Ok(Status::Error);
+        };
+        match (command.arg, arg.is_empty()) {
+            (Arg::None, false) => {
+                println!("The {name} command takes nothing after it.");
+                return Ok(Status::Error);
             }
-            Step::Same
-        }
-        ":quit" => Step::Quit,
-        ":type" if arg.is_empty() => {
-            println!("The :type command takes an expression.");
-            Step::Same
-        }
-        ":type" => Step::Status(if m.type_of(arg)? { 0 } else { 1 }),
-        ":undo" if m.undo()? => Step::Names,
-        ":undo" => Step::Same,
-        ":leaks" if m.safety() == Safety::Off => {
-            println!("The :leaks command needs safety on or strict.");
-            Step::Same
-        }
-        ":leaks" => {
-            if m.leaks() == 0 {
-                println!("No leaks.");
+            (Arg::Expr, true) => {
+                println!("The {name} command takes an expression.");
+                return Ok(Status::Error);
             }
-            Step::Same
+            _ => {}
         }
-        ":safety" if arg.is_empty() => {
-            println!("{}", m.safety().name());
-            Step::Same
+        let builtin = match &mut command.action {
+            Action::Host(run) => {
+                return Ok(match run(arg) {
+                    Ok(()) => Status::Ok,
+                    Err(message) => {
+                        println!("{message}");
+                        Status::Error
+                    }
+                });
+            }
+            Action::Builtin(builtin) => *builtin,
+        };
+        self.builtin(builtin, arg)
+    }
+
+    fn builtin(&mut self, builtin: Builtin, arg: &str) -> Result<Status> {
+        let ok = |done: bool| if done { Status::Ok } else { Status::Error };
+        let m = &mut self.machine;
+        Ok(match builtin {
+            Builtin::Help => {
+                let usages: Vec<String> = self.commands.iter().map(Command::usage).collect();
+                let width = usages.iter().map(String::len).max().unwrap_or(0);
+                println!("Commands:");
+                for (usage, c) in usages.iter().zip(&self.commands) {
+                    println!("  {usage:<width$}  {}", c.help);
+                }
+                Status::Ok
+            }
+            Builtin::Quit => Status::Quit,
+            Builtin::Type => ok(m.type_of(arg)?),
+            Builtin::Undo => ok(m.undo()?),
+            Builtin::Leaks if m.safety() == Safety::Off => {
+                println!("The :leaks command needs safety on or strict.");
+                Status::Error
+            }
+            Builtin::Leaks => {
+                if m.leaks() == 0 {
+                    println!("No leaks.");
+                }
+                Status::Ok
+            }
+            Builtin::Safety if arg.is_empty() => {
+                println!("{}", m.safety().name());
+                Status::Ok
+            }
+            Builtin::Safety => match Safety::parse(arg) {
+                Some(s) => {
+                    m.restart(s)?;
+                    println!("Safety {}: the session starts over, empty.", s.name());
+                    Status::Ok
+                }
+                None => {
+                    println!("Unknown safety level: {arg}. Use 'off', 'on' or 'strict'.");
+                    Status::Error
+                }
+            },
+        })
+    }
+
+    /// The names Tab offers: the cells' but the implementation's (`_`), the
+    /// keywords and the commands, sorted. A command that takes something
+    /// comes with the space that goes after it.
+    pub fn completions(&self) -> Vec<String> {
+        let mut c: Vec<String> = self.machine.names().filter(|n| !n.starts_with('_')).map(String::from).collect();
+        c.extend(KEYWORDS.iter().map(|k| k.to_string()));
+        c.extend(self.commands.iter().map(|c| match c.arg {
+            Arg::None => c.name.to_string(),
+            Arg::Expr | Arg::Word(_) => format!("{} ", c.name),
+        }));
+        c.sort();
+        c.dedup();
+        c
+    }
+}
+
+impl Command {
+    fn usage(&self) -> String {
+        match self.arg {
+            Arg::None => self.name.to_string(),
+            Arg::Expr => format!("{} EXPR", self.name),
+            Arg::Word(word) => format!("{} {word}", self.name),
         }
-        ":safety" => match Safety::parse(arg) {
-            Some(s) => {
-                m.restart(s)?;
-                println!("Safety {}: the session starts over, empty.", s.name());
-                Step::Names
-            }
-            None => {
-                println!("Unknown safety level: {arg}. Use 'off', 'on' or 'strict'.");
-                Step::Same
-            }
-        },
-        _ => other(name, arg),
-    })
+    }
 }
 
 /// The keywords Tab offers, of C and C++.
@@ -110,17 +228,6 @@ pub const KEYWORDS: &[&str] = &[
     "struct", "switch", "template", "this", "throw", "true", "try", "typedef", "typename", "typeof", "union",
     "unsigned", "using", "virtual", "void", "volatile", "while",
 ];
-
-/// The names Tab offers: the cells' but the implementation's (`_`), the
-/// keywords and the commands, sorted.
-pub fn candidates<'a>(names: impl Iterator<Item = &'a str>, commands: &[(&str, &str, &str)]) -> Vec<String> {
-    let mut c: Vec<String> = names.filter(|n| !n.starts_with('_')).map(String::from).collect();
-    c.extend(KEYWORDS.iter().map(|k| k.to_string()));
-    c.extend(commands.iter().map(|c| if c.1.is_empty() { c.0.to_string() } else { format!("{} ", c.0) }));
-    c.sort();
-    c.dedup();
-    c
-}
 
 /// Tab at byte `pos` of `line`: where the word under completion starts, and
 /// the `candidates` it can become; none without a word.

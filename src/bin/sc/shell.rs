@@ -1,11 +1,11 @@
-//! The REPL's loop with its line editor: the lines are the library's
-//! (`sc::machine::shell`), with `:theme`.
-use crate::platform::Machine;
-use sc::machine::shell::{self, Step};
-use sc::machine::{Lang, Safety};
-use std::sync::{Arc, Mutex};
+//! The REPL's loop with its line editor, over the library's shell
+//! (`sc::machine::shell`), to which it adds `:theme`.
+use crate::platform::{Machine, Shell};
 use crate::reader::{Reader, Theme};
 use crate::{config, Result};
+use sc::machine::shell::Status;
+use sc::machine::{Lang, Safety};
+use std::sync::{Arc, Mutex};
 
 pub fn welcome_message(lang: Lang, safety: Safety) -> String {
     let std = match lang {
@@ -16,55 +16,41 @@ pub fn welcome_message(lang: Lang, safety: Safety) -> String {
     format!("Welcome to sc {} for {std}{safety}.\nType ctrl-d or \":quit\" to exit.\n", env!("CARGO_PKG_VERSION"))
 }
 
-/// The commands: the library's, then the theme.
-pub fn commands() -> Vec<(&'static str, &'static str, &'static str)> {
-    let mut c = shell::COMMANDS.to_vec();
-    c.push((":theme", "[light|dark]", "Show or switch the theme"));
-    c
-}
-
-/// The REPL until the end of the input, `:quit` or an `exit`: the status.
+/// The REPL until the end of the input, `:quit` or an `exit`. Returns the
+/// code of the `exit`, else 1 if the last input failed, else 0.
 pub fn run(machine: Machine) -> Result<i32> {
-    let mut theme = config::load().theme;
-    let commands = commands();
-    let completions_now = completions(&machine, &commands);
-    let machine = Arc::new(Mutex::new(machine));
-    let mut reader = Reader::new(Arc::clone(&machine), completions_now, theme)?;
+    let theme = Arc::new(Mutex::new(config::load().theme));
+    let mut shell = Shell::new(machine);
+    shell.add(":theme", Some("[light|dark]"), "Show or switch the theme", theme_action(Arc::clone(&theme)));
+    let completions = shell.completions();
+    let shell = Arc::new(Mutex::new(shell));
+    let mut reader = Reader::new(Arc::clone(&shell), completions, *theme.lock().unwrap())?;
     let mut status = 0;
     while let Some(input) = reader.next() {
-        let mut machine = machine.lock().unwrap();
-        let mut theme_arg = None;
-        let step = shell::line(&mut machine, &input, &commands, |_, arg| {
-            theme_arg = Some(arg.to_string());
-            Step::Same
-        })?;
-        match step {
-            Step::Status(s) => {
-                status = s;
-                reader.set_completions(completions(&machine, &commands));
-            }
-            Step::Names => reader.set_completions(completions(&machine, &commands)),
-            Step::Same => {}
-            Step::Quit => break,
-            Step::Exit(code) => return Ok(code),
+        let mut s = shell.lock().unwrap();
+        match s.run(&input)? {
+            Status::Quit => break,
+            // a blank line runs nothing
+            _ if input.trim().is_empty() => {}
+            st => status = st as i32,
         }
-        match theme_arg.as_deref() {
-            None => {}
-            Some("") => println!("{}", theme.name()),
-            Some(arg) => match Theme::parse(arg) {
-                Some(t) => {
-                    theme = t;
-                    reader.set_theme(t);
-                    config::save(t);
-                }
-                None => println!("Unknown theme: {arg}. Use 'light' or 'dark'."),
-            },
-        }
+        reader.set_completions(s.completions());
+        reader.set_theme(*theme.lock().unwrap());
     }
-    Ok(status)
+    let exit_status = shell.lock().unwrap().exit_status();
+    Ok(exit_status.unwrap_or(status))
 }
 
-/// The names Tab offers.
-fn completions(machine: &Machine, commands: &[(&str, &str, &str)]) -> Vec<String> {
-    shell::candidates(machine.names(), commands)
+/// `:theme` alone says which theme is on; with a name it switches to it.
+fn theme_action(theme: Arc<Mutex<Theme>>) -> impl FnMut(&str) -> std::result::Result<(), String> + Send {
+    move |arg| {
+        if arg.is_empty() {
+            println!("{}", theme.lock().unwrap().name());
+            return Ok(());
+        }
+        let t = Theme::parse(arg).ok_or_else(|| format!("Unknown theme: {arg}. Use 'light' or 'dark'."))?;
+        *theme.lock().unwrap() = t;
+        config::save(t);
+        Ok(())
+    }
 }

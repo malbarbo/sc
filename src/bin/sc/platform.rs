@@ -17,6 +17,8 @@ pub struct Native;
 
 /// The machine of `sc`.
 pub type Machine = sc::machine::Machine<Native>;
+/// The shell of `sc`'s REPL.
+pub type Shell = sc::machine::shell::Shell<Native>;
 
 impl sc::machine::Platform for Native {
     type Compiler = Guest;

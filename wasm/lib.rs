@@ -9,7 +9,7 @@
 use sc::engine::{sys, Answer, Compiler, Mode, Session, Status};
 use sc::loader::host::{self, Host};
 use sc::loader::{libdirs, Error, Loader, STACK};
-use sc::machine::shell::{self, Step, COMMANDS};
+use sc::machine::shell::{self, Shell};
 use sc::machine::{Enter, Lang, Machine, Outcome, Platform, Safety, INDENT, ROOT};
 use std::ffi::{c_char, c_int, c_ulonglong, CString};
 use std::io::{self, BufRead};
@@ -73,7 +73,7 @@ const CRASHED: &str = "sc: the engine crashed on this cell; the session is as it
 /// as an error to the machine, whose frames are above the cell's, and the
 /// copy puts the memory back.
 #[derive(Default)]
-struct Local {
+pub struct Local {
     session: Option<Session>,
 }
 
@@ -137,7 +137,7 @@ impl Compiler for Local {
 /// The machine in sc.wasm: the session in this module, the code on the
 /// host's primitives, the pack in the module (engine/sc_pack.cpp).
 #[derive(Clone)]
-struct Inside {
+pub struct Inside {
     color: bool,
 }
 
@@ -210,7 +210,7 @@ pub extern "C" fn sc_cli() -> i32 {
 /// it stops short ([`Machine::enter`]); one that the end cuts off still
 /// runs, for the student to read what is wrong with it.
 fn repl(platform: Inside, lang: Lang, safety: Safety) -> sc::machine::Result<i32> {
-    let mut m = Machine::new(platform, lang, safety, vec!["sc".into()], true)?;
+    let mut shell = Shell::new(Machine::new(platform, lang, safety, vec!["sc".into()], true)?);
     let mut status = 0;
     let (mut input, mut pending) = (String::new(), String::new());
     let mut stdin = io::stdin().lock();
@@ -224,29 +224,25 @@ fn repl(platform: Inside, lang: Lang, safety: Safety) -> sc::machine::Result<i32
         } else {
             let line = line.strip_suffix('\n').map_or(line.as_str(), |l| l.strip_suffix('\n').unwrap_or(l));
             input += line;
-            if m.enter(&input, input.len()) != Enter::Run {
+            if shell.enter(&input, input.len()) != Enter::Run {
                 pending = input.clone();
                 input.push('\n');
                 continue;
             }
             pending.clear();
         }
-        match shell::line(&mut m, &std::mem::take(&mut input), COMMANDS, |_, _| Step::Same)? {
-            Step::Status(s) => status = s,
-            Step::Same | Step::Names => {}
-            Step::Quit => break,
-            Step::Exit(code) => return Ok(code),
+        let input = std::mem::take(&mut input);
+        match shell.run(&input)? {
+            shell::Status::Quit => break,
+            // a blank line runs nothing
+            _ if input.trim().is_empty() => {}
+            st => status = st as i32,
         }
     }
-    Ok(status)
+    Ok(shell.exit_status().unwrap_or(status))
 }
 
 // --- simplecode's API (its ENGINE.md): the REPL of a page
-
-/// A REPL of the page.
-pub struct Repl {
-    m: Machine<Inside>,
-}
 
 /// The text the host wrote at `p`.
 unsafe fn text<'a>(p: *const u8, len: usize) -> std::borrow::Cow<'a, str> {
@@ -261,7 +257,7 @@ unsafe fn text<'a>(p: *const u8, len: usize) -> std::borrow::Cow<'a, str> {
 /// `safety=off|on|strict`, `color=0|1` (1: the page renders the ANSI
 /// codes). Null if the code has an error, which is written.
 #[no_mangle]
-pub unsafe extern "C" fn repl_new(code: *const u8, code_len: usize, config: *const u8, config_len: usize) -> *mut Repl {
+pub unsafe extern "C" fn repl_new(code: *const u8, code_len: usize, config: *const u8, config_len: usize) -> *mut Shell<Inside> {
     let (code, config) = (text(code, code_len), text(config, config_len));
     let (mut lang, mut safety, mut color) = (Lang::C, Safety::On, true);
     for kv in config.split_whitespace() {
@@ -297,18 +293,15 @@ pub unsafe extern "C" fn repl_new(code: *const u8, code_len: usize, config: *con
             },
         }
     }
-    Box::into_raw(Box::new(Repl { m }))
+    Box::into_raw(Box::new(Shell::new(m)))
 }
 
 /// A cell or a command: 0 done, 1 an error (written), 2 the session is
 /// over (`exit`, `:quit`).
 #[no_mangle]
-pub unsafe extern "C" fn repl_run(r: *mut Repl, p: *const u8, len: usize) -> u32 {
-    let r = &mut *r;
-    match shell::line(&mut r.m, &text(p, len), COMMANDS, |_, _| Step::Same) {
-        Ok(Step::Status(0) | Step::Same | Step::Names) => 0,
-        Ok(Step::Status(_)) => 1,
-        Ok(Step::Quit | Step::Exit(_)) => 2,
+pub unsafe extern "C" fn repl_run(r: *mut Shell<Inside>, p: *const u8, len: usize) -> u32 {
+    match (*r).run(&text(p, len)) {
+        Ok(st) => st as u32,
         Err(e) => {
             eprintln!("sc: {e}");
             1
@@ -319,13 +312,13 @@ pub unsafe extern "C" fn repl_run(r: *mut Repl, p: *const u8, len: usize) -> u32
 /// What Enter does with the input, the caret at `cursor`: -1 runs it, else
 /// a line opens with this many spaces ([`Machine::enter`]).
 #[no_mangle]
-pub unsafe extern "C" fn repl_ready(r: *mut Repl, p: *const u8, len: usize, cursor: usize) -> i32 {
+pub unsafe extern "C" fn repl_ready(r: *mut Shell<Inside>, p: *const u8, len: usize, cursor: usize) -> i32 {
     let input = text(p, len);
     let mut at = cursor.min(input.len());
     while !input.is_char_boundary(at) {
         at -= 1;
     }
-    match (*r).m.enter(&input, at) {
+    match (*r).enter(&input, at) {
         Enter::Run => -1,
         Enter::Open(depth) => (depth * INDENT) as i32,
     }
@@ -334,13 +327,13 @@ pub unsafe extern "C" fn repl_ready(r: *mut Repl, p: *const u8, len: usize, curs
 /// Tab at byte `cursor`: `c <start>` and a candidate a line, as in
 /// [`shell::complete`].
 #[no_mangle]
-pub unsafe extern "C" fn repl_complete(r: *mut Repl, p: *const u8, len: usize, cursor: usize) -> *mut c_char {
+pub unsafe extern "C" fn repl_complete(r: *mut Shell<Inside>, p: *const u8, len: usize, cursor: usize) -> *mut c_char {
     let input = text(p, len);
     let mut at = cursor.min(input.len());
     while !input.is_char_boundary(at) {
         at -= 1;
     }
-    let (start, words) = shell::complete(&shell::candidates((*r).m.names(), COMMANDS), &input, at);
+    let (start, words) = shell::complete(&(*r).completions(), &input, at);
     let mut out = format!("c {start}");
     for w in words {
         out.push('\n');
@@ -372,7 +365,7 @@ pub unsafe extern "C" fn cstr_deallocate(p: *mut c_char) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn repl_destroy(r: *mut Repl) {
+pub unsafe extern "C" fn repl_destroy(r: *mut Shell<Inside>) {
     drop(Box::from_raw(r));
 }
 

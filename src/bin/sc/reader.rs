@@ -15,7 +15,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::platform::Machine;
+use crate::platform::Shell;
 use sc::machine::{Enter, INDENT};
 
 
@@ -33,11 +33,11 @@ pub fn color(terminal: bool) -> bool {
 }
 
 impl Reader {
-    pub fn new(machine: Arc<Mutex<Machine>>, completions: Vec<String>, theme: Theme) -> rustyline::Result<Reader> {
+    pub fn new(shell: Arc<Mutex<Shell>>, completions: Vec<String>, theme: Theme) -> rustyline::Result<Reader> {
         let config = Config::builder().completion_type(CompletionType::List).build();
         let mut editor = Editor::with_config(config)?;
         editor.set_helper(Some(InputHelper {
-            machine: Arc::clone(&machine),
+            shell: Arc::clone(&shell),
             pending: RefCell::new(String::new()),
             completions,
             color: color(std::io::stdout().is_terminal()),
@@ -46,7 +46,7 @@ impl Reader {
         let bind = |e: &mut Editor<_, _>, key, h: Box<dyn ConditionalEventHandler>| {
             e.bind_sequence(KeyEvent(key, Modifiers::NONE), EventHandler::Conditional(h));
         };
-        bind(&mut editor, KeyCode::Enter, Box::new(EnterHandler(machine)));
+        bind(&mut editor, KeyCode::Enter, Box::new(EnterHandler(shell)));
         bind(&mut editor, KeyCode::Tab, Box::new(TabHandler));
         bind(&mut editor, KeyCode::Backspace, Box::new(SmartBackspace));
         if let Some(history) = history_path() {
@@ -132,8 +132,8 @@ fn history_path() -> Option<PathBuf> {
 
 #[derive(Helper, Hinter)]
 struct InputHelper {
-    /// The compiler, which says whether the input is whole.
-    machine: Arc<Mutex<Machine>>,
+    /// The shell, whose compiler says whether the input is whole.
+    shell: Arc<Mutex<Shell>>,
     /// The unfinished input. The editor throws it away when the file ends
     /// before the rest of it, and says nothing about it.
     pending: RefCell<String>,
@@ -155,15 +155,15 @@ impl Validator for InputHelper {
     /// compiler says it stops short.
     fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
         let input = ctx.input();
-        let enter = self.machine.lock().unwrap().enter(input, input.len());
+        let enter = self.shell.lock().unwrap().enter(input, input.len());
         *self.pending.borrow_mut() = if enter == Enter::Run { String::new() } else { input.into() };
         Ok(if enter == Enter::Run { ValidationResult::Valid(None) } else { ValidationResult::Incomplete })
     }
 }
 
 /// Enter: the input runs, or a line opens as deep as the brackets above the
-/// caret ([`Machine::enter`]).
-struct EnterHandler(Arc<Mutex<Machine>>);
+/// caret ([`sc::machine::Machine::enter`]).
+struct EnterHandler(Arc<Mutex<Shell>>);
 
 impl ConditionalEventHandler for EnterHandler {
     fn handle(&self, _: &Event, _: RepeatCount, _: bool, ctx: &EventContext) -> Option<Cmd> {
