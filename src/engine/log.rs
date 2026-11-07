@@ -48,7 +48,7 @@ pub trait Compiler: Sized {
     fn depth(&mut self, src: &[u8]) -> Result<u32, CompilerError>;
     /// Whether it takes more memory than it may: the [`Log`] replays the
     /// log in another.
-    fn over(&self) -> bool {
+    fn over_memory(&self) -> bool {
         false
     }
 }
@@ -213,7 +213,7 @@ impl<C: Compiler> Log<C> {
         }
         // the cell is in the log: on an error, the compiler stays, and its
         // next reply above the limit loses it
-        if self.compiler.over() {
+        if self.compiler.over_memory() {
             let _ = self.restart();
         }
         Ok(a)

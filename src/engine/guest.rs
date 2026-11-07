@@ -446,7 +446,7 @@ impl Compiler for Guest {
         })
     }
 
-    fn over(&self) -> bool {
+    fn over_memory(&self) -> bool {
         self.memory.is_some_and(|m| self.mem.data_size(&self.store) as u64 > m)
     }
 }
