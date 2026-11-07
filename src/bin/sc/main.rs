@@ -24,7 +24,7 @@ mod reader;
 mod shell;
 
 use bpaf::{Bpaf, Parser};
-use platform::{Machine, Native};
+use platform::{Native, Repl};
 use sc::machine::{check, lang_of, run, source, Lang, Outcome, Safety};
 use sc::engine::{CellStatus, Guest, Log};
 use std::fs;
@@ -235,18 +235,18 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn repl(lang: Option<Lang>, safety: Safety, quiet: bool, file: Option<&Path>) -> Result<i32> {
     let lang = lang_of(lang, file);
     let src = file.map(source).transpose()?;
-    let mut machine = Machine::new(Native, lang, safety, vec![NAME.into()], true)?;
+    let mut repl = Repl::new(Native, lang, safety, vec![NAME.into()], true)?;
     if !quiet {
         print!("{}", shell::welcome_message(lang, safety));
     }
     if let Some(src) = src {
         // the file's declarations are there for the cells; its `main` does
         // not run, as a cell's does not
-        match machine.cell(&src)? {
+        match repl.cell(&src)? {
             Outcome::Ok => {}
             Outcome::Error => return Ok(1),
             Outcome::Exit(code) => return Ok(code),
         }
     }
-    shell::run(machine)
+    shell::run(repl)
 }

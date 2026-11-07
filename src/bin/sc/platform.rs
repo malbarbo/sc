@@ -1,4 +1,4 @@
-//! The machine of the native `sc`: the compiler is sc.wasm's session in
+//! The platform of the native `sc`: the compiler is sc.wasm's session in
 //! this process, the code on wasmtime, the pack embedded.
 use crate::{pack, reader};
 use sc::engine::Guest;
@@ -15,8 +15,8 @@ const MEMORY: u64 = 1 << 30;
 #[derive(Clone)]
 pub struct Native;
 
-/// The machine of `sc`.
-pub type Machine = sc::machine::Machine<Native>;
+/// The REPL of `sc`.
+pub type Repl = sc::machine::Repl<Native>;
 /// The shell of `sc`'s REPL.
 pub type Shell = sc::machine::shell::Shell<Native>;
 

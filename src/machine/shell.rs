@@ -1,8 +1,8 @@
-//! The `:` commands, over a machine that knows none of them, as in sgleam
+//! The `:` commands, over a REPL that knows none of them, as in sgleam
 //! and spython. The native `sc` reads the inputs with its line editor and
 //! adds `:theme` (src/bin/sc/shell.rs); sc.wasm reads them from its stdin,
 //! or gets them from its host.
-use super::{split, Enter, Machine, Outcome, Platform, Result, Safety};
+use super::{split, Enter, Outcome, Platform, Repl, Result, Safety};
 
 /// What became of an input. `repl_run` answers with these numbers.
 #[repr(u32)]
@@ -14,7 +14,7 @@ pub enum Status {
 }
 
 pub struct Shell<P: Platform> {
-    machine: Machine<P>,
+    repl: Repl<P>,
     commands: Vec<Command>,
     /// The code of the `exit` that ended the session, if one ran.
     exit_status: Option<i32>,
@@ -71,12 +71,12 @@ const BUILTINS: &[(&str, Arg, &str, Builtin)] = &[
 ];
 
 impl<P: Platform> Shell<P> {
-    pub fn new(machine: Machine<P>) -> Shell<P> {
+    pub fn new(repl: Repl<P>) -> Shell<P> {
         let commands = BUILTINS
             .iter()
             .map(|&(name, arg, help, builtin)| Command { name, arg, help, action: Action::Builtin(builtin) })
             .collect();
-        Shell { machine, commands, exit_status: None }
+        Shell { repl, commands, exit_status: None }
     }
 
     /// A command of the host's. `word` is what the help shows after the name,
@@ -98,9 +98,9 @@ impl<P: Platform> Shell<P> {
         self.exit_status
     }
 
-    /// What Enter does with `input`: see [`Machine::enter`].
+    /// What Enter does with `input`: see [`Repl::enter`].
     pub fn enter(&mut self, input: &str, cursor: usize) -> Enter {
-        self.machine.enter(input, cursor)
+        self.repl.enter(input, cursor)
     }
 
     /// Runs an input, a cell or a command. An `Err` is a session that cannot
@@ -110,7 +110,7 @@ impl<P: Platform> Shell<P> {
             return Ok(Status::Ok);
         }
         let Some((name, arg)) = split(input) else {
-            return Ok(match self.machine.cell(input)? {
+            return Ok(match self.repl.cell(input)? {
                 Outcome::Ok => Status::Ok,
                 Outcome::Error => Status::Error,
                 Outcome::Exit(code) => {
@@ -151,7 +151,7 @@ impl<P: Platform> Shell<P> {
 
     fn builtin(&mut self, builtin: Builtin, arg: &str) -> Result<Status> {
         let ok = |done: bool| if done { Status::Ok } else { Status::Error };
-        let m = &mut self.machine;
+        let m = &mut self.repl;
         Ok(match builtin {
             Builtin::Help => {
                 let usages: Vec<String> = self.commands.iter().map(Command::usage).collect();
@@ -197,7 +197,7 @@ impl<P: Platform> Shell<P> {
     /// keywords and the commands, sorted. A command that takes something
     /// comes with the space that goes after it.
     pub fn completions(&self) -> Vec<String> {
-        let mut c: Vec<String> = self.machine.names().filter(|n| !n.starts_with('_')).map(String::from).collect();
+        let mut c: Vec<String> = self.repl.names().filter(|n| !n.starts_with('_')).map(String::from).collect();
         c.extend(KEYWORDS.iter().map(|k| k.to_string()));
         c.extend(self.commands.iter().map(|c| match c.arg {
             Arg::None => c.name.to_string(),

@@ -20,7 +20,7 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 /// (scripts/flags.py, PACK).
 pub const ROOT: &str = "/sc";
 
-/// What a machine needs of where it runs.
+/// What a [`Repl`] needs of where it runs.
 pub trait Platform: Clone + Send + Sync + 'static {
     type Compiler: Compiler;
     type Runtime: Runtime;
@@ -58,24 +58,24 @@ pub fn source(file: &Path) -> Result<String> {
 pub fn run<P: Platform>(platform: P, lang: Option<Lang>, safety: Safety, file: &Path, args: Vec<String>) -> Result<i32> {
     let src = source(file)?;
     let argv = std::iter::once(file.display().to_string()).chain(args).collect();
-    let mut machine = Machine::new(platform, lang_of(lang, Some(file)), safety, argv, false)?;
-    match machine.cell(&src)? {
+    let mut repl = Repl::new(platform, lang_of(lang, Some(file)), safety, argv, false)?;
+    match repl.cell(&src)? {
         Outcome::Ok => {}
         Outcome::Error => return Ok(1),
-        Outcome::Exit(code) => return Ok(machine.exit(code)),
+        Outcome::Exit(code) => return Ok(repl.exit(code)),
     }
-    Ok(match machine.main() {
-        Outcome::Ok => machine.exit(0),
+    Ok(match repl.main() {
+        Outcome::Ok => repl.exit(0),
         Outcome::Error => 134,
-        Outcome::Exit(code) => machine.exit(code),
+        Outcome::Exit(code) => repl.exit(code),
     })
 }
 
 /// `sc check FILE`: 0 if the program compiles.
 pub fn check<P: Platform>(platform: P, lang: Option<Lang>, safety: Safety, file: &Path) -> Result<i32> {
     let src = source(file)?;
-    let mut machine = Machine::new(platform, lang_of(lang, Some(file)), safety, vec!["sc".into()], false)?;
-    Ok(if machine.compile(&src)? { 0 } else { 1 })
+    let mut repl = Repl::new(platform, lang_of(lang, Some(file)), safety, vec!["sc".into()], false)?;
+    Ok(if repl.compile(&src)? { 0 } else { 1 })
 }
 
 /// The name of the command at the head of the input and what follows it, or
@@ -149,7 +149,7 @@ pub enum Outcome {
     Exit(i32),
 }
 
-pub struct Machine<P: Platform> {
+pub struct Repl<P: Platform> {
     platform: P,
     lang: Lang,
     safety: Safety,
@@ -163,11 +163,11 @@ pub struct Machine<P: Platform> {
     pending: Option<(String, Answer)>,
 }
 
-impl<P: Platform> Machine<P> {
+impl<P: Platform> Repl<P> {
     /// A session in `lang` at `safety`, whose programs see `argv`. One that
     /// is not `interactive` takes one cell, the whole program. Only an
     /// `interactive` one is stopped by Ctrl-C.
-    pub fn new(platform: P, lang: Lang, safety: Safety, argv: Vec<String>, interactive: bool) -> Result<Machine<P>> {
+    pub fn new(platform: P, lang: Lang, safety: Safety, argv: Vec<String>, interactive: bool) -> Result<Repl<P>> {
         let file = if interactive { "" } else { "-file" };
         let args_file = format!("repl/{}-{}{file}.args", lang.name(), safety.name());
         let mut args: Vec<String> = String::from_utf8_lossy(platform.read(&args_file).ok_or(format!("{args_file}: not in the pack"))?)
@@ -193,7 +193,7 @@ impl<P: Platform> Machine<P> {
         let mut loader = Loader::new(platform.runtime(&argv, interactive)?, libs, STACK)?;
         loader.keep_stacks();
         loader.show();
-        Ok(Machine { platform, lang, safety, argv, log, loader, loaded: 0, pending: None })
+        Ok(Repl { platform, lang, safety, argv, log, loader, loaded: 0, pending: None })
     }
 
     pub fn safety(&self) -> Safety {
@@ -203,7 +203,7 @@ impl<P: Platform> Machine<P> {
     /// Starts over, empty, at `safety`: the cells before would have to run
     /// again to be compiled at another level.
     pub fn restart(&mut self, safety: Safety) -> Result<()> {
-        *self = Machine::new(self.platform.clone(), self.lang, safety, self.argv.clone(), true)?;
+        *self = Repl::new(self.platform.clone(), self.lang, safety, self.argv.clone(), true)?;
         Ok(())
     }
 

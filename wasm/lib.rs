@@ -10,7 +10,7 @@ use sc::engine::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, Session
 use sc::loader::host::{self, Host};
 use sc::loader::{libdirs, Error, Loader, STACK};
 use sc::machine::shell::{self, Shell};
-use sc::machine::{Enter, Lang, Machine, Outcome, Platform, Safety, INDENT, ROOT};
+use sc::machine::{Enter, Lang, Outcome, Platform, Repl, Safety, INDENT, ROOT};
 use std::ffi::{c_char, c_int, c_ulonglong, CString};
 use std::io::{self, BufRead};
 use std::path::PathBuf;
@@ -53,7 +53,7 @@ pub extern "C" fn sc_scload() -> i32 {
     }
 }
 
-// --- the machine
+// --- the REPL
 
 extern "C" {
     // engine/sc_pack.cpp
@@ -70,7 +70,7 @@ const CRASHED: &str = "sc: the engine crashed on this cell; the session is as it
 /// memory before each cell (NOTES.md §65). A cell is called through the
 /// host, `wasm_call` of this module's own `sc_session_cell` (the handle of
 /// `wasm_export(0, ...)`): a trap or an exit of the compiler comes back
-/// as an error to the machine, whose frames are above the cell's, and the
+/// as an error to the REPL, whose frames are above the cell's, and the
 /// copy puts the memory back.
 #[derive(Default)]
 pub struct Local {
@@ -134,7 +134,7 @@ impl Compiler for Local {
     }
 }
 
-/// The machine in sc.wasm: the session in this module, the code on the
+/// The platform in sc.wasm: the session in this module, the code on the
 /// host's primitives, the pack in the module (engine/sc_pack.cpp).
 #[derive(Clone)]
 pub struct Inside {
@@ -207,10 +207,10 @@ pub extern "C" fn sc_cli() -> i32 {
 
 /// The REPL on stdin, without a terminal, as the native `sc`'s line editor
 /// reads it: an input goes on, a line at a time, while the compiler says
-/// it stops short ([`Machine::enter`]); one that the end cuts off still
+/// it stops short ([`Repl::enter`]); one that the end cuts off still
 /// runs, for the student to read what is wrong with it.
 fn repl(platform: Inside, lang: Lang, safety: Safety) -> sc::machine::Result<i32> {
-    let mut shell = Shell::new(Machine::new(platform, lang, safety, vec!["sc".into()], true)?);
+    let mut shell = Shell::new(Repl::new(platform, lang, safety, vec!["sc".into()], true)?);
     let mut status = 0;
     let (mut input, mut pending) = (String::new(), String::new());
     let mut stdin = io::stdin().lock();
@@ -269,7 +269,7 @@ pub unsafe extern "C" fn repl_new(code: *const u8, code_len: usize, config: *con
             _ => {}
         }
     }
-    let new = || Machine::new(Inside { color }, lang, safety, vec!["sc".into()], true);
+    let new = || Repl::new(Inside { color }, lang, safety, vec!["sc".into()], true);
     let mut m = match new() {
         Ok(m) => m,
         Err(e) => {
@@ -310,7 +310,7 @@ pub unsafe extern "C" fn repl_run(r: *mut Shell<Inside>, p: *const u8, len: usiz
 }
 
 /// What Enter does with the input, the caret at `cursor`: -1 runs it, else
-/// a line opens with this many spaces ([`Machine::enter`]).
+/// a line opens with this many spaces ([`Repl::enter`]).
 #[no_mangle]
 pub unsafe extern "C" fn repl_ready(r: *mut Shell<Inside>, p: *const u8, len: usize, cursor: usize) -> i32 {
     let input = text(p, len);

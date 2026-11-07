@@ -162,12 +162,12 @@ impl Validator for InputHelper {
 }
 
 /// Enter: the input runs, or a line opens as deep as the brackets above the
-/// caret ([`sc::machine::Machine::enter`]).
+/// caret ([`sc::machine::Repl::enter`]).
 struct EnterHandler(Arc<Mutex<Shell>>);
 
 impl ConditionalEventHandler for EnterHandler {
     fn handle(&self, _: &Event, _: RepeatCount, _: bool, ctx: &EventContext) -> Option<Cmd> {
-        // the compile (Machine::enter) stops at Ctrl-C, which rustyline's
+        // the compile (Repl::enter) stops at Ctrl-C, which rustyline's
         // raw mode would read after it
         let enter = {
             let _ctrl_c = sc::loader::native::InRawMode::new();

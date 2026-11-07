@@ -1,6 +1,6 @@
 //! The REPL's loop with its line editor, over the library's shell
 //! (`sc::machine::shell`), to which it adds `:theme`.
-use crate::platform::{Machine, Shell};
+use crate::platform::{Repl, Shell};
 use crate::reader::{Reader, Theme};
 use crate::{config, Result};
 use sc::machine::shell::Status;
@@ -18,9 +18,9 @@ pub fn welcome_message(lang: Lang, safety: Safety) -> String {
 
 /// The REPL until the end of the input, `:quit` or an `exit`. Returns the
 /// code of the `exit`, else 1 if the last input failed, else 0.
-pub fn run(machine: Machine) -> Result<i32> {
+pub fn run(repl: Repl) -> Result<i32> {
     let theme = Arc::new(Mutex::new(config::load().theme));
-    let mut shell = Shell::new(machine);
+    let mut shell = Shell::new(repl);
     shell.add(":theme", Some("[light|dark]"), "Show or switch the theme", theme_action(Arc::clone(&theme)));
     let completions = shell.completions();
     let shell = Arc::new(Mutex::new(shell));

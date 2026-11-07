@@ -451,7 +451,7 @@ impl Compiler for Guest {
     }
 }
 
-/// Never moves between threads while a call runs: the REPL's machine is
+/// Never moves between threads while a call runs: the REPL is
 /// behind a mutex.
 const _: fn() = || {
     fn send<T: Send>() {}
