@@ -1,6 +1,6 @@
 //! The safe API over the engine linked in: sc.wasm's own session (wasm/).
 use super::sys as raw;
-use super::{sys, CellStatus, CompilerError, Mode};
+use super::{sys, CellStatus, CompilerError};
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, CString};
 use std::fmt;
@@ -106,15 +106,6 @@ impl Session {
         }
     }
 
-    /// Compiles a cell on top of the ones before.
-    pub fn cell(&mut self, src: impl AsRef<[u8]>, mode: Mode) -> Result<Reply<'_>, Error> {
-        let src = src.as_ref();
-        let len = u32::try_from(src.len()).map_err(|_| Error::TooLong)?;
-        // the engine copies src[0, len)
-        let st = unsafe { raw::sc_session_cell(self.raw.as_ptr(), src.as_ptr().cast(), len, mode.to_raw() as c_int) };
-        Ok(self.reply(st))
-    }
-
     /// The brackets `src` leaves open, one more if it ends inside a comment
     /// or with a `\` that joins the next line. It does not touch the session.
     pub fn depth(&mut self, src: impl AsRef<[u8]>) -> Result<u32, Error> {
@@ -172,13 +163,13 @@ impl<'s> Reply<'s> {
         String::from_utf8_lossy(self.session.part(sys::sc_part::SC_DIAGS))
     }
 
-    /// The cell as a wasm shared object (empty unless [`Mode::So`] and
+    /// The cell as a wasm shared object (empty unless [`Mode::So`](super::Mode::So) and
     /// [`CellStatus::Ok`]).
     pub fn so(&self) -> &'s [u8] {
         self.session.part(sys::sc_part::SC_SO)
     }
 
-    /// The names the cell exports, to check a replay; [`Mode::Type`]: the
+    /// The names the cell exports, to check a replay; [`Mode::Type`](super::Mode::Type): the
     /// type.
     pub fn names(&self) -> impl Iterator<Item = Cow<'s, str>> {
         self.session.part(sys::sc_part::SC_SYMS).split(|&b| b == b'\n').filter(|l| !l.is_empty()).map(String::from_utf8_lossy)
