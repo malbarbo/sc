@@ -26,7 +26,7 @@ mod shell;
 use bpaf::{Bpaf, Parser};
 use platform::{Native, Repl};
 use sc::repl::{check, lang_of, run, source, Lang, Outcome, Safety};
-use sc::engine::{CellStatus, Guest, Log};
+use sc::engine::{CellStatus, Guest, Limits, Log};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -159,7 +159,7 @@ fn replay(args: &[String]) -> Result<()> {
     let usage = "--replay <dir> <cell>... -- <session args>";
     let sep = args.iter().position(|a| a == "--").ok_or(usage)?;
     let (dir, cells) = args[..sep].split_first().ok_or(usage)?;
-    let mut r = Log::start(Guest::new(None, None)?, args[sep + 1..].to_vec())?;
+    let mut r = Log::start(Guest::new(Limits::default())?, args[sep + 1..].to_vec())?;
     let mut sos: Vec<PathBuf> = vec![];
     let mut out = io::stdout().lock();
     for (k, cell) in cells.iter().enumerate() {

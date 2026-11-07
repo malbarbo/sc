@@ -2,7 +2,7 @@
 //! that sc embeds): a cell with an error, a crash, the replay, undo, the
 //! limits, Enter, the shown values and `:type`. The shared objects run in
 //! the loader (build/cargo/release/scload).
-use sc::engine::{CellStatus, Guest, Log};
+use sc::engine::{CellStatus, Guest, Limits, Log};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::{fs, io::Write};
@@ -52,7 +52,7 @@ const C: &[&str] = &[
 
 /// A session in C or C++, without limits.
 fn repl(cxx: bool) -> Log<Guest> {
-    Log::start(Guest::new(None, None).unwrap(), args(cxx)).unwrap()
+    Log::start(Guest::new(Limits::default()).unwrap(), args(cxx)).unwrap()
 }
 
 #[test]
@@ -103,25 +103,25 @@ fn cells() {
 fn limits() {
     let mut r = repl(true);
     assert_eq!(r.cell(b"int x1 = 1;").unwrap().status, CellStatus::Ok);
-    r.limit(Some(std::time::Duration::ZERO), None);
+    r.limit(Limits { timeout: Some(std::time::Duration::ZERO), memory: None });
     let a = r.cell(b"#include <regex>").unwrap();
     assert_eq!(a.status, CellStatus::Error);
     assert!(a.diags.contains("the compiler took more than 0 s"), "{a:?}");
     assert_eq!(r.len(), 1);
-    r.limit(None, None);
+    r.limit(Limits::default());
     assert_eq!(r.cell(b"#include <regex>").unwrap().status, CellStatus::Ok);
     assert_eq!(r.cell(b"int x2 = x1;").unwrap().status, CellStatus::Ok);
     // the replay of <regex> takes more than the watchdog's tick
-    r.limit(Some(std::time::Duration::ZERO), None);
+    r.limit(Limits { timeout: Some(std::time::Duration::ZERO), memory: None });
     let why = r.undo().unwrap_err();
     assert!(why.contains("the cell was not undone"), "{why}");
     assert_eq!(r.len(), 3);
-    r.limit(None, None);
+    r.limit(Limits::default());
     assert_eq!(r.cell(b"int x3 = x2;").unwrap().status, CellStatus::Ok);
     assert_eq!(r.len(), 4);
 
     let mut r = repl(true);
-    r.limit(None, Some(1));
+    r.limit(Limits { timeout: None, memory: Some(1) });
     let a = r.cell(b"#include <regex>").unwrap();
     assert_eq!(a.status, CellStatus::Error);
     assert!(a.diags.contains("the compiler took more than 0 MB"), "{a:?}");

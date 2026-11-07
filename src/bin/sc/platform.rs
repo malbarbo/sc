@@ -1,7 +1,7 @@
 //! The platform of the native `sc`: the compiler is sc.wasm's session in
 //! this process, the code on wasmtime, the pack embedded.
 use crate::{pack, repl_reader};
-use sc::engine::Guest;
+use sc::engine::{Guest, Limits};
 use sc::loader::native::Wasmtime;
 use std::io::{self, IsTerminal};
 use std::time::Duration;
@@ -25,7 +25,7 @@ impl sc::repl::Platform for Native {
     type Runtime = Wasmtime;
 
     fn compiler(&self) -> io::Result<Guest> {
-        Guest::new(Some(TIMEOUT), Some(MEMORY))
+        Guest::new(Limits { timeout: Some(TIMEOUT), memory: Some(MEMORY) })
     }
 
     fn runtime(&self, argv: &[String], interactive: bool) -> sc::loader::Result<Wasmtime> {

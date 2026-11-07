@@ -145,10 +145,25 @@ impl ResourceLimiter for Ctx {
     }
 }
 
+/// What a [`Guest`]'s calls may take: each one, `timeout`, and the
+/// module's memory, `memory`. None is no limit.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Limits {
+    pub timeout: Option<Duration>,
+    pub memory: Option<u64>,
+}
+
+impl Limits {
+    /// The most the module's memory may grow to: twice `memory`, as the
+    /// copy takes as much again, within the 4 GiB of wasm32.
+    fn max(&self) -> Option<usize> {
+        self.memory.map(|m| (2 * m).min(u32::MAX as u64 + 1) as usize)
+    }
+}
+
 /// A session of sc.wasm in an instance of its own.
 pub struct Guest {
-    timeout: Option<Duration>,
-    memory: Option<u64>,
+    limits: Limits,
     store: Store<Ctx>,
     mem: Memory,
     f: Funcs,
@@ -210,11 +225,10 @@ fn lost(what: impl std::fmt::Display) -> CompilerError {
 }
 
 impl Guest {
-    /// A new instance, without a session. Each call is limited to
-    /// `timeout`, and the module's memory, with the copy, to twice
-    /// `memory`; above `memory`, after an accepted cell, a [`super::Log`]
-    /// replays the log in another ([`Compiler::over_memory`], docs/plan-repl.md §4).
-    pub fn new(timeout: Option<Duration>, memory: Option<u64>) -> io::Result<Guest> {
+    /// A new instance, without a session, within `limits`. Above
+    /// `limits.memory`, after an accepted cell, a [`super::Log`] replays
+    /// the log in another ([`Compiler::over_memory`], docs/plan-repl.md §4).
+    pub fn new(limits: Limits) -> io::Result<Guest> {
         let s = shared()?;
         let fail = |e: wasmtime::Error| io::Error::other(format!("sc.wasm: {e:?}"));
         let mut b = WasiCtxBuilder::new();
@@ -228,8 +242,7 @@ impl Guest {
         let root = cwd.ancestors().last().unwrap_or(&cwd);
         let at = if cfg!(windows) { guest_path(root).trim_end_matches('/').to_string() } else { "/".into() };
         b.preopened_dir(root, at, FsPerms::ReadWrite).map_err(fail)?;
-        let max = memory.map(|m| (2 * m).min(u32::MAX as u64 + 1) as usize);
-        let ctx = Ctx { wasi: b.build_p1(), max, over: false, deadline: None, interrupts: None, stop: None };
+        let ctx = Ctx { wasi: b.build_p1(), max: limits.max(), over: false, deadline: None, interrupts: None, stop: None };
         let mut store = Store::new(&s.engine, ctx);
         store.limiter(|c| c);
         store.epoch_deadline_callback(|mut c| Ok(tick(c.data_mut())));
@@ -237,7 +250,7 @@ impl Guest {
         let inst = s.linker.instantiate(&mut store, &s.module).map_err(fail)?;
         let mem = inst.get_memory(&mut store, "memory").ok_or_else(|| io::Error::other("sc.wasm: no memory"))?;
         let f = funcs(&mut store, &inst).map_err(fail)?;
-        let mut g = Guest { timeout, memory, store, mem, f, state: State::Fresh, _tmp: tmp };
+        let mut g = Guest { limits, store, mem, f, state: State::Fresh, _tmp: tmp };
         g.init(&inst, &cwd).map_err(fail)?;
         Ok(g)
     }
@@ -270,14 +283,14 @@ impl Guest {
     fn call<R>(&mut self, ctrl_c: bool, f: impl FnOnce(&mut Guest) -> wasmtime::Result<R>) -> Result<R, (wasmtime::Error, Option<Stop>)> {
         let c = self.store.data_mut();
         let interrupts = ctrl_c.then(|| INTERRUPTS.load(Ordering::Relaxed));
-        (c.deadline, c.interrupts, c.stop) = (self.timeout.map(|t| Instant::now() + t), interrupts, None);
+        (c.deadline, c.interrupts, c.stop) = (self.limits.timeout.map(|t| Instant::now() + t), interrupts, None);
         self.store.set_epoch_deadline(1);
-        if self.timeout.is_some() {
+        if self.limits.timeout.is_some() {
             TIMED.fetch_add(1, Ordering::Relaxed);
             SHARED.get().expect("an instance").watchdog.unpark();
         }
         let r = f(self);
-        if self.timeout.is_some() {
+        if self.limits.timeout.is_some() {
             TIMED.fetch_sub(1, Ordering::Relaxed);
         }
         let c = self.store.data_mut();
@@ -307,8 +320,8 @@ impl Guest {
 
     /// Why a call stopped, for the student.
     fn why(&self, e: &wasmtime::Error, stop: Option<Stop>) -> String {
-        let t = self.timeout.unwrap_or_default().as_secs();
-        let m = self.memory.unwrap_or_default() >> 20;
+        let t = self.limits.timeout.unwrap_or_default().as_secs();
+        let m = self.limits.memory.unwrap_or_default() >> 20;
         match stop {
             Some(Stop::Interrupted) => "sc: interrupted\n".into(),
             Some(Stop::TimedOut) => format!("sc: the compiler took more than {t} s\n"),
@@ -342,18 +355,17 @@ fn funcs(store: &mut Store<Ctx>, inst: &Instance) -> wasmtime::Result<Funcs> {
 }
 
 impl super::Log<Guest> {
-    /// Each call within `timeout`, the module's memory within `memory`
-    /// ([`Guest::new`]), from the next call on.
-    pub fn limit(&mut self, timeout: Option<Duration>, memory: Option<u64>) {
+    /// The calls within `limits` ([`Guest::new`]), from the next one on.
+    pub fn limit(&mut self, limits: Limits) {
         let g = &mut self.compiler;
-        (g.timeout, g.memory) = (timeout, memory);
-        g.store.data_mut().max = memory.map(|m| (2 * m).min(u32::MAX as u64 + 1) as usize);
+        g.limits = limits;
+        g.store.data_mut().max = limits.max();
     }
 }
 
 impl Compiler for Guest {
     fn another(&self) -> Result<Guest, CompilerError> {
-        Ok(Guest::new(self.timeout, self.memory)?)
+        Ok(Guest::new(self.limits)?)
     }
 
     fn new_session(&mut self, args: &[String]) -> Result<(), CompilerError> {
@@ -420,7 +432,7 @@ impl Compiler for Guest {
         };
         // the compiler may say so itself ("Out of memory"), as an error
         if std::mem::take(&mut self.store.data_mut().over) {
-            a.diags += &format!("sc: the compiler took more than {} MB\n", self.memory.unwrap_or_default() >> 20);
+            a.diags += &format!("sc: the compiler took more than {} MB\n", self.limits.memory.unwrap_or_default() >> 20);
         }
         // for mem- (test/session.py), in place of the process's RSS
         if std::env::var_os("SC_MEMORY_SIZE").is_some() {
@@ -447,7 +459,7 @@ impl Compiler for Guest {
     }
 
     fn over_memory(&self) -> bool {
-        self.memory.is_some_and(|m| self.mem.data_size(&self.store) as u64 > m)
+        self.limits.memory.is_some_and(|m| self.mem.data_size(&self.store) as u64 > m)
     }
 }
 
