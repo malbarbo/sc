@@ -192,7 +192,7 @@ struct Pending<'a> {
     bytes: Cow<'a, [u8]>,
     compiled: Option<&'static [u8]>,
     info: Info,
-    debug: Option<Debug>,
+    debug: Option<DebugInfo>,
 }
 
 /// The world's handles ([`gen::world`]).
@@ -217,7 +217,7 @@ pub struct Loader<R: Runtime = DefaultRuntime> {
     /// Some once the memory has ASan's shadow: the data of the modules
     /// from then on.
     asan: Option<Vec<Data>>,
-    debug: Vec<Debug>,            // of the modules with DWARF
+    debug: Vec<DebugInfo>,        // of the modules with DWARF
     journal: Option<Vec<(String, Option<Sym>)>>, // what a group being defined replaced
     catchers: HashMap<(String, H), H>, // gen::catcher's try, by signature and tag
     scratch: Option<u32>,         // the table slot of the function a catcher calls
@@ -314,7 +314,7 @@ type Dwarf = gimli::EndianArcSlice<gimli::LittleEndian>;
 /// ([`Loader::symbols`]). wasmtime's (`wasm_backtrace_details`) parses it
 /// again at each frame of each backtrace, which made keeping the stacks of
 /// ASan's blocks hundreds of times slower.
-struct Debug {
+struct DebugInfo {
     instance: H,
     code: u64, // where the code section's contents start, which DWARF's addresses count from
     sections: HashMap<String, Arc<[u8]>>,
@@ -329,7 +329,7 @@ pub struct Symbol {
     pub column: Option<u32>,
 }
 
-fn debug(bytes: &[u8]) -> Result<Option<Debug>> {
+fn debug(bytes: &[u8]) -> Result<Option<DebugInfo>> {
     let (mut code, mut sections) = (0, HashMap::new());
     for p in Parser::new(0).parse_all(bytes) {
         match p? {
@@ -340,7 +340,7 @@ fn debug(bytes: &[u8]) -> Result<Option<Debug>> {
             _ => {}
         }
     }
-    Ok((!sections.is_empty()).then(|| Debug { instance: 0, code, sections, cx: OnceCell::new() }))
+    Ok((!sections.is_empty()).then(|| DebugInfo { instance: 0, code, sections, cx: OnceCell::new() }))
 }
 
 impl From<wasmparser::BinaryReaderError> for Error {
