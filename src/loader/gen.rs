@@ -1,8 +1,8 @@
 //! The modules the loader makes for itself (NOTES.md §63): the world (the
 //! memory, the table and the stack pointer of all modules, with functions
 //! that change them), the stubs of functions not defined yet, a tag, a
-//! module that sets globals, and the one that calls a function and catches
-//! a C++ exception.
+//! module that sets globals, the one that calls a function and catches a
+//! C++ exception, and WASI's `fd_read` that flushes before stdin.
 
 use super::runtime::{FuncType, ValType};
 use wasm_encoder as we;
@@ -53,6 +53,10 @@ impl Module {
         self.imports.import(m, n, we::EntityType::Function(t));
         self.nfuncs += 1;
         self.nfuncs - 1
+    }
+
+    fn import_memory(&mut self, m: &str, n: &str) {
+        self.imports.import(m, n, we::MemoryType { minimum: 0, maximum: None, memory64: false, shared: false, page_size_log2: None });
     }
 
     fn import_table(&mut self, m: &str, n: &str) {
@@ -240,6 +244,31 @@ pub fn setter(values: &[i32]) -> Vec<u8> {
         for (k, &v) in values.iter().enumerate() {
             s.i32_const(v).global_set(k as u32);
         }
+    });
+    m.finish()
+}
+
+/// Imports `env.memory`, WASI's `fd_read` and `env.table`, and exports
+/// `fd_read`, which calls `fflush(NULL)` through `slot` before a read of
+/// stdin, as glibc does and musl does not: a prompt without its `\n`
+/// shows before the program waits for the answer. A null slot (libc not
+/// loaded after all) skips it.
+pub fn reader(slot: u32) -> Vec<u8> {
+    let mut m = Module::default();
+    m.import_memory("env", "memory");
+    let read_ty = ft(&[I32, I32, I32, I32], &[I32]);
+    let read = m.import_func("wasi_snapshot_preview1", "fd_read", &read_ty);
+    m.import_table("env", "table");
+    let fflush = m.ty(&ft(&[I32], &[I32]));
+    m.export_func("fd_read", &read_ty, &[], |s| {
+        s.local_get(0).i32_eqz().if_(BlockType::Empty)
+            .i32_const(slot as i32).table_get(0).ref_is_null().i32_eqz().if_(BlockType::Empty)
+            .i32_const(0).i32_const(slot as i32).call_indirect(0, fflush).drop()
+            .end().end();
+        for i in 0..4 {
+            s.local_get(i);
+        }
+        s.call(read);
     });
     m.finish()
 }

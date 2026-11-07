@@ -221,6 +221,7 @@ pub struct Loader<R: Runtime = DefaultRuntime> {
     journal: Option<Vec<(String, Option<Sym>)>>, // what a group being defined replaced
     catchers: HashMap<(String, Handle), Handle>, // gen::catcher's try, by signature and tag
     scratch: Option<u32>,         // the table slot of the function a catcher calls
+    reader: Option<Handle>,       // gen::reader's fd_read
 }
 
 /// What the modules use and no module defines yet.
@@ -547,7 +548,7 @@ impl<R: Runtime> Loader<R> {
         let mut l = Loader { rt, world, syms: HashMap::new(), types: Vec::new(), libs, loaded: HashSet::new(),
                              bump: Some(stack), table_size: 1, unresolved: Unresolved::default(),
                              asan: None, debug: Vec::new(),
-                             journal: None, catchers: HashMap::new(), scratch: None };
+                             journal: None, catchers: HashMap::new(), scratch: None, reader: None };
         l.define("__stack_low", Sym::Data(16), false);
         l.define("__stack_high", Sym::Data(stack), false);
         Ok(l)
@@ -804,6 +805,20 @@ impl<R: Runtime> Loader<R> {
         Ok(out)
     }
 
+    /// WASI's `fd_read` that flushes stdout before it reads stdin
+    /// ([`gen::reader`]), for the module that defines `fflush`, libc.
+    fn reader(&mut self) -> Result<Handle> {
+        if let Some(r) = self.reader {
+            return Ok(r);
+        }
+        let slot = self.slot("fflush")?;
+        let mut imports = [Import::Handle(self.world.memory), Import::Default, Import::Handle(self.world.table)];
+        let inst = self.rt.instantiate(&gen::reader(slot), None, &mut imports)?;
+        let r = self.rt.export(inst, "fd_read");
+        self.reader = Some(r);
+        Ok(r)
+    }
+
     /// The table slot of a function symbol, the same for every module.
     fn slot(&mut self, name: &str) -> Result<u32> {
         let f = match self.syms[name] {
@@ -1000,6 +1015,9 @@ impl<R: Runtime> Loader<R> {
                             }
                         };
                         Import::I32 { value: v as i32, mutable: true }
+                    }
+                    ("wasi_snapshot_preview1", "fd_read", _) if matches!(self.syms.get("fflush"), Some(Sym::Func { .. })) => {
+                        Import::Handle(self.reader()?)
                     }
                     ("wasi_snapshot_preview1", _, _) => Import::Default,
                     ("env", _, Kind::Func(_)) => match self.syms.get(&self.target(n)) {

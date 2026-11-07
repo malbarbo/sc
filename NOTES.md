@@ -5524,3 +5524,14 @@ cell (a recursion too deep?)", and the session goes on. On Node, V8's
 stack fits a template 200 deep and not 400, and the browser's is out of
 sc's hands. Five sources that overflow 512 KiB in the corpus compile in
 the session now, and `test/session.py` lists them as known.
+
+## 73. stdout before a read of stdin
+
+Testing sc in simplecode found that `printf("numero: "); scanf(...)` shows
+the prompt only after the input. glibc flushes its line buffered streams
+before it reads stdin, and musl, which wasi-libc is, does not. libc.so
+reads stdin only through WASI's `fd_read`, so the loader gives it, in
+place of the runtime's, `gen::reader`. Before a read of fd 0 it calls
+`fflush(NULL)` through the table slot of `fflush`, then the runtime's
+`fd_read`. This holds natively and inside sc.wasm, on every safety level,
+and the output costs nothing more.
