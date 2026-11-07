@@ -412,7 +412,8 @@ void __asan_handle_no_return(void) {
 void *__asan_memcpy(void *d, const void *s, size_t n) {
   check((uintptr_t)s, n, 0, "memcpy");
   check((uintptr_t)d, n, 1, "memcpy");
-  if (n && (char *)d < (const char *)s + n && (const char *)s < (char *)d + n)
+  // at -O0 a struct assignment is a memcpy, and `a[i] = a[i]` is legal C
+  if (n && d != s && (char *)d < (const char *)s + n && (const char *)s < (char *)d + n)
     __sc_rt_report("memcpy-param-overlap: the source and the destination of memcpy overlap (use memmove)");
   return memcpy(d, s, n);
 }
