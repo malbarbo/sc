@@ -186,7 +186,7 @@ pub extern "C" fn sc_cli() -> i32 {
         };
         match name.as_str() {
             "-q" => {}
-            "-x" => lang = value.or_else(|| args.next()).map(|l| if l == "c++" { Lang::Cxx } else { Lang::C }),
+            "-x" => lang = value.or_else(|| args.next()).map(|l| Lang::parse(&l).unwrap_or(Lang::C)),
             "--safety" => safety = value.or_else(|| args.next()).and_then(|l| Safety::parse(&l)).unwrap_or(Safety::On),
             _ => {
                 file = Some(PathBuf::from(a));
@@ -262,8 +262,7 @@ pub unsafe extern "C" fn repl_new(code: *const u8, code_len: usize, config: *con
     let (mut lang, mut safety, mut color) = (Lang::C, Safety::On, true);
     for kv in config.split_whitespace() {
         match kv.split_once('=') {
-            Some(("lang", "c")) => lang = Lang::C,
-            Some(("lang", "c++")) => lang = Lang::Cxx,
+            Some(("lang", l)) => lang = Lang::parse(l).unwrap_or(lang),
             Some(("safety", l)) => safety = Safety::parse(l).unwrap_or(safety),
             Some(("color", c)) => color = c == "1",
             _ => {}

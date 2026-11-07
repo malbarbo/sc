@@ -96,11 +96,17 @@ pub enum Lang {
 }
 
 impl Lang {
+    pub const ALL: [Lang; 2] = [Lang::C, Lang::Cxx];
+
     pub fn name(self) -> &'static str {
         match self {
             Lang::C => "c",
             Lang::Cxx => "c++",
         }
+    }
+
+    pub fn parse(s: &str) -> Option<Lang> {
+        Lang::ALL.into_iter().find(|l| l.name() == s)
     }
 }
 

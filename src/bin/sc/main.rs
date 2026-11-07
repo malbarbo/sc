@@ -38,11 +38,7 @@ fn lang_arg() -> impl Parser<Option<Lang>> {
     bpaf::short('x')
         .help("The language, c or c++ (by default, the file's extension, else c)")
         .argument::<String>("LANG")
-        .parse(|l| match l.as_str() {
-            "c" => Ok(Lang::C),
-            "c++" => Ok(Lang::Cxx),
-            _ => Err("expected c or c++"),
-        })
+        .parse(|l| Lang::parse(&l).ok_or("expected c or c++"))
         .optional()
 }
 
