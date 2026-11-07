@@ -34,6 +34,10 @@ pub struct TypeOf {
     pub diags: String,
 }
 
+/// What a cell answers when the engine crashed on it and the copy put the
+/// session back.
+pub const CRASHED: &str = "sc: the engine crashed on this cell; the session is as it was before it\n";
+
 /// A compiler with one session at a time, which a [`Log`] drives. A
 /// failed cell leaves nothing in it: the session is as before the cell.
 pub trait Compiler: Sized {

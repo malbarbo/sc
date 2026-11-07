@@ -16,7 +16,7 @@
 //! `SC_CWASM` names another module, compiled by [`precompile`]: the
 //! batteries run the uncut engine (sc-full.wasm) and the cuts being learned
 //! so. The trap of a function the cuts removed says its name on stderr.
-use super::{sys, Answer, CellStatus, Compiler, CompilerError, Mode};
+use super::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, CRASHED};
 use crate::repl::ROOT;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -33,8 +33,6 @@ use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 static CWASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sc.cwasm.zst"));
 #[cfg(clippy)]
 static CWASM: &[u8] = &[];
-
-const CRASHED: &str = "sc: the engine crashed on this cell; the session is as it was before it\n";
 
 /// The Ctrl-Cs so far ([`interrupt`]): a call stops at one after it began.
 static INTERRUPTS: AtomicU64 = AtomicU64::new(0);

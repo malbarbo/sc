@@ -6,7 +6,7 @@
 //! simplecode, says what each one asks of its pointers.
 #![allow(clippy::missing_safety_doc)]
 
-use sc::engine::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, Session};
+use sc::engine::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, Session, CRASHED};
 use sc::loader::host::{self, Host};
 use sc::loader::{libdirs, Error, Loader, STACK};
 use sc::shell::{self, Shell};
@@ -63,8 +63,6 @@ extern "C" {
     fn sc_session_snapshot(on: c_int);
     fn sc_session_restore(s: *mut sys::sc_session) -> c_int;
 }
-
-const CRASHED: &str = "sc: the engine crashed on this cell; the session is as it was before it\n";
 
 /// The session in this module (engine/sc_api.cpp), with the copy of the
 /// memory before each cell (NOTES.md §65). A cell is called through the
