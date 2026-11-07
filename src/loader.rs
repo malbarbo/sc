@@ -213,10 +213,7 @@ pub struct Loader<R: Runtime = Native> {
     loaded: HashSet<String>,
     bump: Option<u32>,            // the next free address, until the heap is set up
     table_size: u32,
-    later: Vec<(String, H)>,      // GOT.mem imports of symbols not defined yet
-    undefined: Vec<String>,       // what the addresses from UNDEFINED stand for
-    missing: Vec<String>,         // the functions not defined yet that a call may reach, from 1
-    slots: HashMap<String, Reserved>, // table slots of functions not defined yet
+    unresolved: Unresolved,
     /// Some once the memory has ASan's shadow: the data of the modules
     /// from then on.
     asan: Option<Vec<Data>>,
@@ -224,6 +221,50 @@ pub struct Loader<R: Runtime = Native> {
     journal: Option<Vec<(String, Option<Sym>)>>, // what a group being defined replaced
     catchers: HashMap<(String, H), H>, // gen::catcher's try, by signature and tag
     scratch: Option<u32>,         // the table slot of the function a catcher calls
+}
+
+/// What the modules use and no module defines yet.
+#[derive(Default)]
+struct Unresolved {
+    later: Vec<(String, H)>,      // GOT.mem imports of symbols not defined yet
+    undefined: Vec<String>,       // what the addresses from UNDEFINED stand for
+    missing: Vec<String>,         // the functions not defined yet that a call may reach, from 1
+    slots: HashMap<String, Reserved>, // table slots of functions not defined yet
+}
+
+impl Unresolved {
+    /// The address of the variable `name` until it is defined: 0 once the
+    /// addresses run out.
+    fn address(&mut self, name: &str) -> u32 {
+        let k = match self.undefined.iter().position(|n| n == name) {
+            Some(k) => k,
+            None if self.undefined.len() < ((u32::MAX - UNDEFINED) / UNDEFINED_SIZE) as usize => {
+                self.undefined.push(name.to_string());
+                self.undefined.len() - 1
+            }
+            None => return 0,
+        };
+        UNDEFINED + k as u32 * UNDEFINED_SIZE
+    }
+
+    /// The variable not defined yet whose address `addr` is in.
+    fn at(&self, addr: u64) -> Option<&str> {
+        let k = addr.checked_sub(UNDEFINED as u64)? / UNDEFINED_SIZE as u64;
+        let n = self.undefined.get(k as usize)?;
+        self.later.iter().any(|(l, _)| l == n).then_some(n.as_str())
+    }
+
+    /// The number of the missing function `name`, from 1.
+    fn missing_id(&mut self, name: String) -> u32 {
+        let k = match self.missing.iter().position(|x| *x == name) {
+            Some(k) => k,
+            None => {
+                self.missing.push(name);
+                self.missing.len() - 1
+            }
+        };
+        k as u32 + 1
+    }
 }
 
 /// The table slot of a function not defined yet.
@@ -504,8 +545,8 @@ impl<R: Runtime> Loader<R> {
             funcs,
         };
         let mut l = Loader { rt, world, syms: HashMap::new(), types: Vec::new(), libs, loaded: HashSet::new(),
-                             bump: Some(stack), table_size: 1, later: Vec::new(), undefined: Vec::new(),
-                             missing: Vec::new(), slots: HashMap::new(), asan: None, debug: Vec::new(),
+                             bump: Some(stack), table_size: 1, unresolved: Unresolved::default(),
+                             asan: None, debug: Vec::new(),
                              journal: None, catchers: HashMap::new(), scratch: None };
         l.define("__stack_low", Sym::Data(16), false);
         l.define("__stack_high", Sym::Data(stack), false);
@@ -684,33 +725,17 @@ impl<R: Runtime> Loader<R> {
         Ok(r)
     }
 
-    /// The address of the variable `name` until it is defined: 0 once the
-    /// addresses run out.
-    fn undefined_address(&mut self, name: &str) -> u32 {
-        let k = match self.undefined.iter().position(|n| n == name) {
-            Some(k) => k,
-            None if self.undefined.len() < ((u32::MAX - UNDEFINED) / UNDEFINED_SIZE) as usize => {
-                self.undefined.push(name.to_string());
-                self.undefined.len() - 1
-            }
-            None => return 0,
-        };
-        UNDEFINED + k as u32 * UNDEFINED_SIZE
-    }
-
     /// The variable not defined yet whose address `addr` is in, as the
     /// source names it.
     pub fn undefined_at(&self, addr: u64) -> Option<String> {
-        let k = addr.checked_sub(UNDEFINED as u64)? / UNDEFINED_SIZE as u64;
-        let n = self.undefined.get(k as usize)?;
-        self.later.iter().any(|(l, _)| l == n).then(|| source_name(n))
+        self.unresolved.at(addr).map(source_name)
     }
 
     /// The function not defined yet whose call stopped the code, as the
     /// source names it, if one did since the last time.
     pub fn missing(&mut self) -> Option<String> {
         let id = self.world("take_missing", &[]).ok()?[0] as usize;
-        id.checked_sub(1).and_then(|k| self.missing.get(k)).cloned()
+        id.checked_sub(1).and_then(|k| self.unresolved.missing.get(k)).cloned()
     }
 
     /// `e`, or, for a trap of a call to a function not defined yet, the
@@ -726,14 +751,14 @@ impl<R: Runtime> Loader<R> {
     /// it is to be filled now: with its type, if known (a call, not only an
     /// address), a function that says which one is missing.
     fn reserve_slot(&mut self, name: &str, ft: bool) -> Result<(u32, bool)> {
-        if let Some(r) = self.slots.get_mut(name) {
+        if let Some(r) = self.unresolved.slots.get_mut(name) {
             // reserved by an address (GOT.func), which left it null
             let fill = ft && !r.filled;
             r.filled |= fill;
             return Ok((r.slot, fill));
         }
         let s = self.table_grow(1)?;
-        self.slots.insert(name.to_string(), Reserved { slot: s, filled: ft });
+        self.unresolved.slots.insert(name.to_string(), Reserved { slot: s, filled: ft });
         Ok((s, ft))
     }
 
@@ -754,14 +779,8 @@ impl<R: Runtime> Loader<R> {
             } else {
                 let (s, fill) = self.reserve_slot(&t, true)?;
                 if fill {
-                    let id = match self.missing.iter().position(|x| *x == source_name(&t)) {
-                        Some(k) => k,
-                        None => {
-                            self.missing.push(source_name(&t));
-                            self.missing.len() - 1
-                        }
-                    };
-                    undefined.push((ft.clone(), s, id as u32 + 1));
+                    let id = self.unresolved.missing_id(source_name(&t));
+                    undefined.push((ft.clone(), s, id));
                 }
                 s
             };
@@ -804,7 +823,7 @@ impl<R: Runtime> Loader<R> {
     /// function of a group being loaded fills its slot once its module is
     /// instantiated. Returns the slots taken.
     fn forward(&mut self) -> Result<Vec<(String, Reserved)>> {
-        let slots: Vec<(String, Reserved, Option<H>)> = self.slots.iter()
+        let slots: Vec<(String, Reserved, Option<H>)> = self.unresolved.slots.iter()
             .filter_map(|(n, &s)| match self.syms.get(n) { Some(Sym::Func { handle, slot: None, .. }) => Some((n.clone(), s, *handle)), _ => None })
             .collect();
         let mut taken = Vec::new();
@@ -813,7 +832,7 @@ impl<R: Runtime> Loader<R> {
                 self.world("table_set", &[s.slot as u64, f as u64])?;
             }
             set_slot(self.syms.get_mut(&n), s.slot);
-            self.slots.remove(&n);
+            self.unresolved.slots.remove(&n);
             taken.push((n, s));
         }
         Ok(taken)
@@ -822,10 +841,10 @@ impl<R: Runtime> Loader<R> {
     /// The GOT.mem imports of variables the group just loaded defines.
     fn resolve_later(&mut self) -> Result<()> {
         let mut set = Vec::new();
-        for (n, g) in std::mem::take(&mut self.later) {
+        for (n, g) in std::mem::take(&mut self.unresolved.later) {
             match self.syms.get(&n).copied() {
                 Some(Sym::Data(a)) => set.push((g, a as i32)),
-                _ => self.later.push((n, g)),
+                _ => self.unresolved.later.push((n, g)),
             }
         }
         if set.is_empty() {
@@ -882,7 +901,7 @@ impl<R: Runtime> Loader<R> {
                         None => self.syms.remove(&n),
                     };
                 }
-                self.slots.extend(taken);
+                self.unresolved.slots.extend(taken);
                 return Err(e);
             }
         };
@@ -999,7 +1018,7 @@ impl<R: Runtime> Loader<R> {
             let inst = self.rt.instantiate(&p.bytes, p.compiled, &mut imports)?;
             for (i, n) in later {
                 if let Import::Handle(g) = imports[i] {
-                    self.later.push((n, g));
+                    self.unresolved.later.push((n, g));
                 }
             }
             for (n, kind) in &p.info.exports {
@@ -1037,7 +1056,7 @@ impl<R: Runtime> Loader<R> {
             Some(_) => fail!("{n}: GOT.{} of a {}", if func { "func" } else { "mem" }, if func { "data" } else { "function" }),
             None if weak => Got::Now(0),
             None if func => Got::Now(self.reserve_slot(n, false)?.0),
-            None => Got::Later(self.undefined_address(n)),
+            None => Got::Later(self.unresolved.address(n)),
         })
     }
 
