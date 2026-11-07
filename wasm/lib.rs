@@ -6,7 +6,7 @@
 //! simplecode, says what each one asks of its pointers.
 #![allow(clippy::missing_safety_doc)]
 
-use sc::engine::{sys, Answer, Compiler, Mode, Session, Status};
+use sc::engine::{sys, Answer, Compiler, CompilerError, Mode, Session, Status};
 use sc::loader::host::{self, Host};
 use sc::loader::{libdirs, Error, Loader, STACK};
 use sc::machine::shell::{self, Shell};
@@ -84,11 +84,11 @@ fn cell_export() -> u32 {
 }
 
 impl Compiler for Local {
-    fn another(&self) -> io::Result<Local> {
+    fn another(&self) -> Result<Local, CompilerError> {
         Ok(Local::default())
     }
 
-    fn new_session(&mut self, args: &[String]) -> io::Result<Answer> {
+    fn new_session(&mut self, args: &[String]) -> Result<Answer, CompilerError> {
         self.session = None;
         // SAFETY: only sets a flag
         unsafe { sc_session_snapshot(1) };
@@ -102,7 +102,7 @@ impl Compiler for Local {
         })
     }
 
-    fn cell(&mut self, src: &[u8], mode: Mode) -> io::Result<Answer> {
+    fn cell(&mut self, src: &[u8], mode: Mode) -> Result<Answer, CompilerError> {
         let Some(s) = self.session.as_mut() else {
             return Ok(Answer::bare(Status::Error, "sc: no session\n".into()));
         };
@@ -123,13 +123,13 @@ impl Compiler for Local {
                     // what the cell left of it cannot be freed
                     std::mem::forget(self.session.take());
                     let e = host::error(st, vals[0]);
-                    Err(io::Error::new(io::ErrorKind::BrokenPipe, format!("the engine ended ({e})")))
+                    Err(CompilerError::Lost(e.to_string()))
                 }
             },
         }
     }
 
-    fn depth(&mut self, src: &[u8]) -> io::Result<u32> {
+    fn depth(&mut self, src: &[u8]) -> Result<u32, CompilerError> {
         Ok(self.session.as_mut().and_then(|s| s.depth(src).ok()).unwrap_or(0))
     }
 }

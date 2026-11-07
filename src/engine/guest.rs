@@ -16,7 +16,7 @@
 //! `SC_CWASM` names another module, compiled by [`precompile`]: the
 //! batteries run the uncut engine (sc-full.wasm) and the cuts being learned
 //! so. The trap of a function the cuts removed says its name on stderr.
-use super::{sys, Answer, Compiler, Mode, Status};
+use super::{sys, Answer, Compiler, CompilerError, Mode, Status};
 use crate::machine::ROOT;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -199,8 +199,8 @@ fn guest_path(p: &Path) -> String {
     if cfg!(windows) { format!("/{}", s.replace('\\', "/")) } else { s.into_owned() }
 }
 
-fn lost(what: impl std::fmt::Display) -> io::Error {
-    io::Error::new(io::ErrorKind::BrokenPipe, format!("the engine ended ({what})"))
+fn lost(what: impl std::fmt::Display) -> CompilerError {
+    CompilerError::Lost(what.to_string())
 }
 
 impl Guest {
@@ -347,11 +347,11 @@ impl super::Repl<Guest> {
 }
 
 impl Compiler for Guest {
-    fn another(&self) -> io::Result<Guest> {
-        Guest::new(self.timeout, self.memory)
+    fn another(&self) -> Result<Guest, CompilerError> {
+        Ok(Guest::new(self.timeout, self.memory)?)
     }
 
-    fn new_session(&mut self, args: &[String]) -> io::Result<Answer> {
+    fn new_session(&mut self, args: &[String]) -> Result<Answer, CompilerError> {
         if self.dead {
             return Err(lost("a session before"));
         }
@@ -381,7 +381,7 @@ impl Compiler for Guest {
         })
     }
 
-    fn cell(&mut self, src: &[u8], mode: Mode) -> io::Result<Answer> {
+    fn cell(&mut self, src: &[u8], mode: Mode) -> Result<Answer, CompilerError> {
         if self.dead || self.session == 0 {
             return Err(lost("no session"));
         }
@@ -420,7 +420,7 @@ impl Compiler for Guest {
         Ok(a)
     }
 
-    fn depth(&mut self, src: &[u8]) -> io::Result<u32> {
+    fn depth(&mut self, src: &[u8]) -> Result<u32, CompilerError> {
         if self.dead || self.session == 0 {
             return Ok(0);
         }

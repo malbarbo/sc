@@ -25,18 +25,16 @@ impl Answer {
 }
 
 /// A compiler with one session at a time, which a [`Repl`] drives. A
-/// failed cell leaves nothing in it: the session is as before the cell. An
-/// `Err` of kind [`io::ErrorKind::BrokenPipe`] is a compiler that ended:
-/// the session is lost.
+/// failed cell leaves nothing in it: the session is as before the cell.
 pub trait Compiler: Sized {
     /// Another compiler as this one, without a session.
-    fn another(&self) -> io::Result<Self>;
+    fn another(&self) -> Result<Self, CompilerError>;
     /// A session of `args`, in place of the one before: see
     /// [`super::sys::sc_session_new`].
-    fn new_session(&mut self, args: &[String]) -> io::Result<Answer>;
-    fn cell(&mut self, src: &[u8], mode: Mode) -> io::Result<Answer>;
+    fn new_session(&mut self, args: &[String]) -> Result<Answer, CompilerError>;
+    fn cell(&mut self, src: &[u8], mode: Mode) -> Result<Answer, CompilerError>;
     /// See [`super::sys::sc_session_depth`].
-    fn depth(&mut self, src: &[u8]) -> io::Result<u32>;
+    fn depth(&mut self, src: &[u8]) -> Result<u32, CompilerError>;
     /// Whether it takes more memory than it may: the [`Repl`] replays the
     /// log in another.
     fn over(&self) -> bool {
@@ -44,10 +42,36 @@ pub trait Compiler: Sized {
     }
 }
 
+/// Why a [`Compiler`] did not answer.
+#[derive(Debug)]
+pub enum CompilerError {
+    /// The compiler ended, and the session with it: why.
+    Lost(String),
+    /// The compiler did not start, or it refused the request.
+    Io(io::Error),
+}
+
+impl fmt::Display for CompilerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CompilerError::Lost(why) => write!(f, "the engine ended ({why})"),
+            CompilerError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for CompilerError {}
+
+impl From<io::Error> for CompilerError {
+    fn from(e: io::Error) -> CompilerError {
+        CompilerError::Io(e)
+    }
+}
+
 /// Why a [`Repl`] cannot go on.
 #[derive(Debug)]
 pub enum ReplError {
-    Io(io::Error),
+    Compiler(CompilerError),
     /// The session did not start: the diagnostics.
     Start(String),
     /// The replay of the cell at this index of the log did not give what it
@@ -58,7 +82,7 @@ pub enum ReplError {
 impl fmt::Display for ReplError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ReplError::Io(e) => write!(f, "{e}"),
+            ReplError::Compiler(e) => write!(f, "{e}"),
             ReplError::Start(d) => write!(f, "the session did not start: {d}"),
             ReplError::Diverged(i) => write!(f, "the replay of cell {} diverged", i + 1),
         }
@@ -67,9 +91,9 @@ impl fmt::Display for ReplError {
 
 impl std::error::Error for ReplError {}
 
-impl From<io::Error> for ReplError {
-    fn from(e: io::Error) -> ReplError {
-        ReplError::Io(e)
+impl From<CompilerError> for ReplError {
+    fn from(e: CompilerError) -> ReplError {
+        ReplError::Compiler(e)
     }
 }
 
@@ -149,7 +173,7 @@ impl<C: Compiler> Repl<C> {
     /// See [`super::sys::sc_session_depth`].
     pub fn depth(&mut self, src: &[u8]) -> Result<u32, ReplError> {
         match self.compiler.depth(src) {
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+            Err(CompilerError::Lost(_)) => {
                 self.restart()?;
                 Ok(self.compiler.depth(src)?)
             }
@@ -160,7 +184,7 @@ impl<C: Compiler> Repl<C> {
     fn compile(&mut self, src: &[u8], mode: Mode) -> Result<Answer, ReplError> {
         let mut a = match self.compiler.cell(src, mode) {
             Ok(a) => a,
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Answer::bare(Status::Lost, format!("sc: {e}\n")),
+            Err(e @ CompilerError::Lost(_)) => Answer::bare(Status::Lost, format!("sc: {e}\n")),
             Err(e) => return Err(e.into()),
         };
         match a.status {
