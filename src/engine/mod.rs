@@ -5,13 +5,13 @@
 //! [`Compiler`]: natively (the `engine` feature), [`Guest`], sc.wasm's
 //! session on wasmtime (NOTES.md §68).
 //!
-//! Inside sc.wasm (without the `native` feature), [`Session`] is a safe API
+//! Inside sc.wasm (without the `native` feature), `Session` is a safe API
 //! over the raw functions of the engine linked in:
 //!
-//! - a [`Reply`] borrows its session, so the engine's buffers it points to
+//! - a `Reply` borrows its session, so the engine's buffers it points to
 //!   cannot be used after the next call, which replaces them;
 //! - the engine is not thread safe: only the first thread that uses it may,
-//!   and a [`Session`] is neither `Send` nor `Sync`;
+//!   and a `Session` is neither `Send` nor `Sync`;
 //! - arguments are checked before they cross (no NUL bytes, a cell under
 //!   4 GiB).
 //!
@@ -65,7 +65,7 @@ pub enum Mode {
     Whole,
     /// The cell is an expression without its `;`: its type, in place of the
     /// exported names. Nothing is generated, but as a failed cell it leaves
-    /// part of itself in a [`Session`] without the copy; a [`Guest`] goes
+    /// part of itself in a `Session` without the copy; a [`Guest`] goes
     /// back to before it.
     Type,
 }
