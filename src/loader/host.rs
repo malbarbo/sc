@@ -23,7 +23,7 @@
 //! `vals[0]` (in `*out` for an instantiation): [`TRAP`] and its code
 //! ([`kind`]), [`EXIT`] and the exit code, [`STOP`], [`ERROR`].
 
-use super::runtime::{Error, Frame, Import, Result, Runtime, Trap, TrapKind, H};
+use super::runtime::{Error, Frame, Handle, Import, Result, Runtime, Trap, TrapKind};
 
 /// An import of `wasm_instantiate`: `kind` 0 the host's default, 1 the
 /// handle in `value`, 2 a constant i32 global of `value`, 3 a mutable one.
@@ -42,13 +42,13 @@ pub const ERROR: i32 = 5;
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn wasm_instantiate(bytes: *const u8, len: usize, imports: *mut Slot, n: usize, out: *mut u32) -> i32;
-    fn wasm_export(inst: H, name: *const u8, len: usize) -> H;
-    fn wasm_call(func: H, sig: *const u8, sig_len: usize, vals: *mut u64) -> i32;
+    fn wasm_export(inst: Handle, name: *const u8, len: usize) -> Handle;
+    fn wasm_call(func: Handle, sig: *const u8, sig_len: usize, vals: *mut u64) -> i32;
     fn wasm_error(buf: *mut u8, cap: usize) -> usize;
     fn wasm_frames(id: u32, buf: *mut u8, cap: usize) -> usize;
-    fn wasm_memory_read(mem: H, addr: u32, dst: *mut u8, len: usize) -> i32;
-    fn wasm_memory_write(mem: H, addr: u32, src: *const u8, len: usize) -> i32;
-    fn wasm_drop(handle: H);
+    fn wasm_memory_read(mem: Handle, addr: u32, dst: *mut u8, len: usize) -> i32;
+    fn wasm_memory_write(mem: Handle, addr: u32, src: *const u8, len: usize) -> i32;
+    fn wasm_drop(handle: Handle);
 }
 
 /// The kind of a trap's code, and wasmtime's words for it, which the
@@ -113,7 +113,7 @@ pub fn error(status: i32, detail: u64) -> Error {
 /// `wasm_call` itself: the status, with the detail in `vals[0]`, which
 /// [`error`] reads. Nothing is allocated: the REPL inside sc.wasm puts
 /// the memory back after a cell that trapped before it allocates.
-pub fn call(func: H, sig: &str, vals: &mut [u64]) -> i32 {
+pub fn call(func: Handle, sig: &str, vals: &mut [u64]) -> i32 {
     let (params, results) = sig.split_once(':').unwrap_or((sig, ""));
     assert!(vals.len() >= params.len().max(results.len()).max(1), "{sig}: {} values", vals.len());
     // SAFETY: vals has a slot for each parameter and result, and the detail
@@ -121,7 +121,7 @@ pub fn call(func: H, sig: &str, vals: &mut [u64]) -> i32 {
 }
 
 /// `wasm_export` itself: a handle that nothing drops.
-pub fn export(inst: H, name: &str) -> H {
+pub fn export(inst: Handle, name: &str) -> Handle {
     // SAFETY: the host reads len bytes
     unsafe { wasm_export(inst, name.as_ptr(), name.len()) }
 }
@@ -131,7 +131,7 @@ pub fn export(inst: H, name: &str) -> H {
 /// it, so a session the page runs again leaves nothing behind in the host.
 #[derive(Default)]
 pub struct Host {
-    made: Vec<H>,
+    made: Vec<Handle>,
 }
 
 impl Drop for Host {
@@ -144,7 +144,7 @@ impl Drop for Host {
 }
 
 impl Runtime for Host {
-    fn instantiate(&mut self, bytes: &[u8], _compiled: Option<&[u8]>, imports: &mut [Import]) -> Result<H> {
+    fn instantiate(&mut self, bytes: &[u8], _compiled: Option<&[u8]>, imports: &mut [Import]) -> Result<Handle> {
         let mut slots: Vec<Slot> = imports.iter().map(|i| match *i {
             Import::Default => Slot { kind: 0, value: 0 },
             Import::Handle(h) => Slot { kind: 1, value: h as i32 },
@@ -159,15 +159,15 @@ impl Runtime for Host {
         }
         for (i, s) in imports.iter_mut().zip(&slots) {
             if let Import::I32 { .. } = i {
-                *i = Import::Handle(s.value as H);
-                self.made.push(s.value as H);
+                *i = Import::Handle(s.value as Handle);
+                self.made.push(s.value as Handle);
             }
         }
         self.made.push(out);
         Ok(out)
     }
 
-    fn export(&mut self, inst: H, name: &str) -> H {
+    fn export(&mut self, inst: Handle, name: &str) -> Handle {
         let h = export(inst, name);
         if h != 0 {
             self.made.push(h);
@@ -175,7 +175,7 @@ impl Runtime for Host {
         h
     }
 
-    fn call(&mut self, func: H, sig: &str, vals: &mut [u64]) -> Result<()> {
+    fn call(&mut self, func: Handle, sig: &str, vals: &mut [u64]) -> Result<()> {
         let (params, results) = sig.split_once(':').unwrap_or((sig, ""));
         if vals.len() < params.len().max(results.len()) {
             return Err(Error::Fail(format!("{sig}: {} values", vals.len())));
@@ -189,12 +189,12 @@ impl Runtime for Host {
         }
     }
 
-    fn read(&mut self, mem: H, addr: u32, buf: &mut [u8]) -> bool {
+    fn read(&mut self, mem: Handle, addr: u32, buf: &mut [u8]) -> bool {
         // SAFETY: the host writes len bytes to buf
         unsafe { wasm_memory_read(mem, addr, buf.as_mut_ptr(), buf.len()) == 0 }
     }
 
-    fn write(&mut self, mem: H, addr: u32, data: &[u8]) -> bool {
+    fn write(&mut self, mem: Handle, addr: u32, data: &[u8]) -> bool {
         // SAFETY: the host reads len bytes of data
         unsafe { wasm_memory_write(mem, addr, data.as_ptr(), data.len()) == 0 }
     }

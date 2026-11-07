@@ -64,7 +64,7 @@ pub mod host;
 pub mod native;
 pub mod runtime;
 
-use runtime::{fail, FuncType, Import, Runtime, H};
+use runtime::{fail, FuncType, Handle, Import, Runtime};
 pub use runtime::{Error, Frame, Result, Trap, TrapKind, ValType};
 
 /// The runtime of a [`Loader`] when it does not say: wasmtime with the
@@ -133,9 +133,9 @@ impl Val {
 enum Sym {
     /// The function, None until its module is instantiated, its type, and
     /// its table slot, once a GOT.func or a missing function asks for one.
-    Func { handle: Option<H>, ty: u32, slot: Option<u32> },
+    Func { handle: Option<Handle>, ty: u32, slot: Option<u32> },
     Data(u32), // an absolute address
-    Tag(H),    // an exception tag: __cpp_exception (libc++abi), __c_longjmp (libsetjmp)
+    Tag(Handle),    // an exception tag: __cpp_exception (libc++abi), __c_longjmp (libsetjmp)
 }
 
 /// The data of a module, at an ASan level: where, and what was there
@@ -197,11 +197,11 @@ struct Pending<'a> {
 
 /// The world's handles ([`gen::world`]).
 struct World {
-    memory: H,
-    table: H,
-    sp: H,
-    missing: H,
-    funcs: HashMap<&'static str, (H, FuncType)>,
+    memory: Handle,
+    table: Handle,
+    sp: Handle,
+    missing: Handle,
+    funcs: HashMap<&'static str, (Handle, FuncType)>,
 }
 
 pub struct Loader<R: Runtime = DefaultRuntime> {
@@ -219,14 +219,14 @@ pub struct Loader<R: Runtime = DefaultRuntime> {
     asan: Option<Vec<Data>>,
     debug: Vec<DebugInfo>,        // of the modules with DWARF
     journal: Option<Vec<(String, Option<Sym>)>>, // what a group being defined replaced
-    catchers: HashMap<(String, H), H>, // gen::catcher's try, by signature and tag
+    catchers: HashMap<(String, Handle), Handle>, // gen::catcher's try, by signature and tag
     scratch: Option<u32>,         // the table slot of the function a catcher calls
 }
 
 /// What the modules use and no module defines yet.
 #[derive(Default)]
 struct Unresolved {
-    later: Vec<(String, H)>,      // GOT.mem imports of symbols not defined yet
+    later: Vec<(String, Handle)>,      // GOT.mem imports of symbols not defined yet
     undefined: Vec<String>,       // what the addresses from UNDEFINED stand for
     missing: Vec<String>,         // the functions not defined yet that a call may reach, from 1
     slots: HashMap<String, Reserved>, // table slots of functions not defined yet
@@ -315,7 +315,7 @@ type Dwarf = gimli::EndianArcSlice<gimli::LittleEndian>;
 /// again at each frame of each backtrace, which made keeping the stacks of
 /// ASan's blocks hundreds of times slower.
 struct DebugInfo {
-    instance: H,
+    instance: Handle,
     code: u64, // where the code section's contents start, which DWARF's addresses count from
     sections: HashMap<String, Arc<[u8]>>,
     cx: OnceCell<Option<addr2line::Context<Dwarf>>>, // made at the first frame
@@ -581,7 +581,7 @@ impl<R: Runtime> Loader<R> {
     }
 
     /// Calls `f`, of type `ty`, with `args`: its results.
-    fn invoke(&mut self, f: H, ty: &FuncType, args: &[u64]) -> Result<Vec<u64>> {
+    fn invoke(&mut self, f: Handle, ty: &FuncType, args: &[u64]) -> Result<Vec<u64>> {
         let mut vals = args.to_vec();
         vals.resize(ty.params.len().max(ty.results.len()), 0);
         self.rt.call(f, &ty.sig(), &mut vals)?;
@@ -596,7 +596,7 @@ impl<R: Runtime> Loader<R> {
     }
 
     /// The function `name` the modules define, and its type.
-    fn func(&self, name: &str) -> Result<(H, FuncType)> {
+    fn func(&self, name: &str) -> Result<(Handle, FuncType)> {
         match self.syms.get(name) {
             Some(Sym::Func { handle: Some(f), ty, .. }) => Ok((*f, self.types[*ty as usize].clone())),
             _ => fail!("undefined symbol: {}", source_name(name)),
@@ -614,7 +614,7 @@ impl<R: Runtime> Loader<R> {
     /// catches does what libc++abi does on a native target: wasm has no
     /// search phase, so it never calls `std::terminate`. It is caught and
     /// terminates, which prints its type and `what()` and aborts.
-    fn guarded(&mut self, f: H, ty: &FuncType, args: &[u64]) -> Result<Vec<u64>> {
+    fn guarded(&mut self, f: Handle, ty: &FuncType, args: &[u64]) -> Result<Vec<u64>> {
         let Some(Sym::Tag(tag)) = self.syms.get("__cpp_exception").copied() else { return self.invoke(f, ty, args) };
         let key = (ty.sig(), tag);
         let catcher = match self.catchers.get(&key) {
@@ -765,7 +765,7 @@ impl<R: Runtime> Loader<R> {
     /// Stubs for the function imports of a module with no function yet:
     /// each calls through the symbol's table slot, which a module of the
     /// group fills once instantiated, or a later one.
-    fn stubs(&mut self, imports: &[(String, String, Kind)]) -> Result<HashMap<String, H>> {
+    fn stubs(&mut self, imports: &[(String, String, Kind)]) -> Result<HashMap<String, Handle>> {
         let mut need: Vec<(String, FuncType, u32)> = Vec::new();
         let mut undefined: Vec<(FuncType, u32, u32)> = Vec::new(); // the function's slot and number
         for (m, n, k) in imports {
@@ -823,7 +823,7 @@ impl<R: Runtime> Loader<R> {
     /// function of a group being loaded fills its slot once its module is
     /// instantiated. Returns the slots taken.
     fn forward(&mut self) -> Result<Vec<(String, Reserved)>> {
-        let slots: Vec<(String, Reserved, Option<H>)> = self.unresolved.slots.iter()
+        let slots: Vec<(String, Reserved, Option<Handle>)> = self.unresolved.slots.iter()
             .filter_map(|(n, &s)| match self.syms.get(n) { Some(Sym::Func { handle, slot: None, .. }) => Some((n.clone(), s, *handle)), _ => None })
             .collect();
         let mut taken = Vec::new();
@@ -928,7 +928,7 @@ impl<R: Runtime> Loader<R> {
     /// the instances and their memory bases. `taken`: the reserved slots
     /// the group's functions took.
     fn instantiate(&mut self, name: &str, group: &mut [Pending], shadow: bool, taken: &mut Vec<(String, Reserved)>)
-                   -> Result<Vec<(H, u32)>> {
+                   -> Result<Vec<(Handle, u32)>> {
         let mut bases = Vec::new();
         let mut owner: HashMap<String, usize> = HashMap::new(); // the module of each function defined
         for (k, p) in group.iter().enumerate() {

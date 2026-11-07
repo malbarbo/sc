@@ -2,7 +2,7 @@
 //! stops at Ctrl-C ([`Wasmtime::on_ctrl_c`]).
 
 use super::config;
-use super::runtime::{Error, Frame, Import, Runtime, Trap, TrapKind, H};
+use super::runtime::{Error, Frame, Handle, Import, Runtime, Trap, TrapKind};
 use std::collections::HashMap;
 use std::sync::Arc;
 use wasm_encoder as we;
@@ -37,8 +37,8 @@ pub struct Wasmtime {
     store: Store<Ctx>,
     linker: Linker<Ctx>,
     handles: Vec<Item>, // handle k + 1
-    instances: Vec<(Module, H)>, // for the instance of a frame
-    wasi: HashMap<(H, String), Func>, // the WASI functions on each memory
+    instances: Vec<(Module, Handle)>, // for the instance of a frame
+    wasi: HashMap<(Handle, String), Func>, // the WASI functions on each memory
     stack: Option<Func>,
 }
 
@@ -51,25 +51,25 @@ impl Wasmtime {
         Ok(Wasmtime { engine, store, linker, handles: Vec::new(), instances: Vec::new(), wasi: HashMap::new(), stack: None })
     }
 
-    fn handle(&mut self, e: Extern) -> H {
+    fn handle(&mut self, e: Extern) -> Handle {
         self.handles.push(Item::Extern(e));
-        self.handles.len() as H
+        self.handles.len() as Handle
     }
 
-    fn get(&self, h: H) -> Option<&Extern> {
+    fn get(&self, h: Handle) -> Option<&Extern> {
         match h.checked_sub(1).and_then(|k| self.handles.get(k as usize)) {
             Some(Item::Extern(e)) => Some(e),
             _ => None,
         }
     }
 
-    fn memory(&self, h: H) -> Option<Memory> {
+    fn memory(&self, h: Handle) -> Option<Memory> {
         self.get(h).and_then(|e| e.clone().into_memory())
     }
 
     /// The WASI functions `need` on the memory `mem`, through a shim that
     /// exports it: wasmtime-wasi reads the memory from its caller.
-    fn wasi(&mut self, mem: H, need: &[(String, FuncType)]) -> wasmtime::Result<()> {
+    fn wasi(&mut self, mem: Handle, need: &[(String, FuncType)]) -> wasmtime::Result<()> {
         let need: Vec<_> = need.iter().filter(|(n, _)| !self.wasi.contains_key(&(mem, n.clone()))).collect();
         if need.is_empty() {
             return Ok(());
@@ -193,7 +193,7 @@ impl Wasmtime {
 }
 
 impl Runtime for Wasmtime {
-    fn instantiate(&mut self, bytes: &[u8], compiled: Option<&[u8]>, imports: &mut [Import]) -> super::runtime::Result<H> {
+    fn instantiate(&mut self, bytes: &[u8], compiled: Option<&[u8]>, imports: &mut [Import]) -> super::runtime::Result<Handle> {
         let fail = |e: wasmtime::Error| Error::Fail(e.root_cause().to_string());
         // SAFETY: a .cwasm comes from the binary, which build.rs made with
         // the same wasmtime; one that does not fit this Engine fails
@@ -237,12 +237,12 @@ impl Runtime for Wasmtime {
         }
         let inst = Instance::new(&mut self.store, &module, &externs).map_err(fail)?;
         self.handles.push(Item::Instance(inst));
-        let h = self.handles.len() as H;
+        let h = self.handles.len() as Handle;
         self.instances.push((module, h));
         Ok(h)
     }
 
-    fn export(&mut self, inst: H, name: &str) -> H {
+    fn export(&mut self, inst: Handle, name: &str) -> Handle {
         let Some(Item::Instance(i)) = inst.checked_sub(1).and_then(|k| self.handles.get(k as usize)).cloned() else { return 0 };
         match i.get_export(&mut self.store, name) {
             Some(e) => self.handle(e),
@@ -250,7 +250,7 @@ impl Runtime for Wasmtime {
         }
     }
 
-    fn call(&mut self, func: H, sig: &str, vals: &mut [u64]) -> super::runtime::Result<()> {
+    fn call(&mut self, func: Handle, sig: &str, vals: &mut [u64]) -> super::runtime::Result<()> {
         let Some(Extern::Func(f)) = self.get(func).cloned() else { return Err(Error::Fail(format!("no function {func}"))) };
         let (params, results) = sig.split_once(':').unwrap_or((sig, ""));
         let mut args = Vec::new();
@@ -260,7 +260,7 @@ impl Runtime for Wasmtime {
                 'j' => Val::I64(v as i64),
                 'f' => Val::F32(v as u32),
                 'd' => Val::F64(v),
-                _ => match self.get(v as H) {
+                _ => match self.get(v as Handle) {
                     Some(Extern::Func(f)) => Val::FuncRef(Some(*f)),
                     _ => Val::FuncRef(None),
                 },
@@ -286,11 +286,11 @@ impl Runtime for Wasmtime {
         Ok(())
     }
 
-    fn read(&mut self, mem: H, addr: u32, buf: &mut [u8]) -> bool {
+    fn read(&mut self, mem: Handle, addr: u32, buf: &mut [u8]) -> bool {
         self.memory(mem).is_some_and(|m| m.read(&self.store, addr as usize, buf).is_ok())
     }
 
-    fn write(&mut self, mem: H, addr: u32, data: &[u8]) -> bool {
+    fn write(&mut self, mem: Handle, addr: u32, data: &[u8]) -> bool {
         self.memory(mem).is_some_and(|m| m.write(&mut self.store, addr as usize, data).is_ok())
     }
 

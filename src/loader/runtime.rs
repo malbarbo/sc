@@ -8,7 +8,7 @@
 use std::fmt;
 
 /// A handle: a module instance, or something one exports. 0 is none.
-pub type H = u32;
+pub type Handle = u32;
 
 /// A value of an import of [`Runtime::instantiate`].
 #[derive(Clone, Copy, Debug)]
@@ -17,7 +17,7 @@ pub enum Import {
     /// the memory the module imports, and `env.wasm_stack`, which keeps
     /// the stack of its caller under a number ([`Runtime::stack`]).
     Default,
-    Handle(H),
+    Handle(Handle),
     /// A global the runtime makes, i32, with this value; the instantiation
     /// puts its handle here.
     I32 { value: i32, mutable: bool },
@@ -98,7 +98,7 @@ pub enum TrapKind {
 #[derive(Clone, Debug)]
 pub struct Frame {
     /// The instance whose code it is.
-    pub instance: Option<H>,
+    pub instance: Option<Handle>,
     /// From the name section.
     pub func: Option<String>,
     /// The offset of the code in the module's bytes.
@@ -152,21 +152,21 @@ pub trait Runtime {
     /// compiled ahead for this runtime, if it takes it) with `imports`, one
     /// for each import of the module, in its order. An [`Import::I32`]
     /// becomes the handle of the global made for it.
-    fn instantiate(&mut self, bytes: &[u8], compiled: Option<&[u8]>, imports: &mut [Import]) -> Result<H>;
+    fn instantiate(&mut self, bytes: &[u8], compiled: Option<&[u8]>, imports: &mut [Import]) -> Result<Handle>;
 
     /// What `inst` exports as `name`; 0 if nothing.
-    fn export(&mut self, inst: H, name: &str) -> H;
+    fn export(&mut self, inst: Handle, name: &str) -> Handle;
 
     /// Calls `func`, of signature `sig` ([`FuncType::sig`]): its arguments
     /// in `vals`, each in 8 bytes (an f32 in the low 4, a reference as its
     /// handle); the results come back in them. `vals` has room for both.
-    fn call(&mut self, func: H, sig: &str, vals: &mut [u64]) -> Result<()>;
+    fn call(&mut self, func: Handle, sig: &str, vals: &mut [u64]) -> Result<()>;
 
     /// Reads the memory `mem` from `addr` into `buf`: false if out of it.
-    fn read(&mut self, mem: H, addr: u32, buf: &mut [u8]) -> bool;
+    fn read(&mut self, mem: Handle, addr: u32, buf: &mut [u8]) -> bool;
 
     /// Writes `data` to the memory `mem` at `addr`: false if out of it.
-    fn write(&mut self, mem: H, addr: u32, data: &[u8]) -> bool;
+    fn write(&mut self, mem: Handle, addr: u32, data: &[u8]) -> bool;
 
     /// The stack that `env.wasm_stack` kept under `id`.
     fn stack(&self, id: u32) -> Vec<Frame>;
