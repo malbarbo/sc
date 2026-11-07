@@ -64,6 +64,8 @@ pub enum CompilerError {
     Lost(String),
     /// The session did not start: the diagnostics.
     Start(String),
+    /// The cell is over the engine's 4 GiB.
+    TooLong,
     /// The compiler did not start, or it refused the request.
     Io(io::Error),
 }
@@ -73,6 +75,7 @@ impl fmt::Display for CompilerError {
         match self {
             CompilerError::Lost(why) => write!(f, "the engine ended ({why})"),
             CompilerError::Start(d) => write!(f, "the session did not start: {d}"),
+            CompilerError::TooLong => write!(f, "the cell is too long"),
             CompilerError::Io(e) => write!(f, "{e}"),
         }
     }

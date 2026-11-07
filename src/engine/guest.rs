@@ -404,7 +404,7 @@ impl Compiler for Guest {
         let State::Open(s) = self.state else {
             return Err(lost("no session"));
         };
-        let len = u32::try_from(src.len()).map_err(|_| io::Error::other("the cell is too long"))?;
+        let len = u32::try_from(src.len()).map_err(|_| CompilerError::TooLong)?;
         let r = self.call(true, |g| {
             let p = g.put(src)?;
             let st = g.f.cell.call(&mut g.store, (s, p, len, mode.to_raw() as i32))?;
@@ -443,7 +443,7 @@ impl Compiler for Guest {
         let State::Open(s) = self.state else {
             return Ok(0);
         };
-        let len = u32::try_from(src.len()).map_err(|_| io::Error::other("the cell is too long"))?;
+        let len = u32::try_from(src.len()).map_err(|_| CompilerError::TooLong)?;
         let r = self.call(false, |g| {
             let p = g.put(src)?;
             let d = g.f.depth.call(&mut g.store, (s, p, len))?;

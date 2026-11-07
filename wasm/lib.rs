@@ -104,7 +104,7 @@ impl Compiler for Local {
         let Some(s) = self.session.as_mut() else {
             return Ok(Answer::bare(CellStatus::Error, "sc: no session\n".into()));
         };
-        let len = u32::try_from(src.len()).map_err(|_| io::Error::other("the cell is too long"))?;
+        let len = u32::try_from(src.len()).map_err(|_| CompilerError::TooLong)?;
         let raw = s.as_raw();
         let mut vals = [raw as u64, src.as_ptr() as u64, len as u64, mode.to_raw() as u64];
         match host::call(cell_export(), "iiii:i", &mut vals) {
