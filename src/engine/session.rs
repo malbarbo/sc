@@ -124,14 +124,6 @@ impl Session {
         Ok(unsafe { raw::sc_session_depth(self.raw.as_ptr(), src.as_ptr().cast(), len) } as u32)
     }
 
-    /// Undoes the last accepted cell. Its code is already generated, so the
-    /// session is lost and the host replays the log without it; an error if
-    /// no cell was accepted.
-    pub fn undo(&mut self) -> Reply<'_> {
-        let st = unsafe { raw::sc_session_undo(self.raw.as_ptr()) };
-        self.reply(st)
-    }
-
     /// The engine's session, for a caller of the raw functions (the
     /// REPL inside sc.wasm calls `sc_session_cell` through its host).
     pub fn as_raw(&self) -> *mut sys::sc_session {

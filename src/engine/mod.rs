@@ -50,15 +50,6 @@ impl CellStatus {
             _ => CellStatus::Lost,
         }
     }
-
-    pub fn to_raw(self) -> u32 {
-        match self {
-            CellStatus::Ok => sys::sc_status::SC_OK,
-            CellStatus::Error => sys::sc_status::SC_ERROR,
-            CellStatus::Lost => sys::sc_status::SC_LOST,
-            CellStatus::Incomplete => sys::sc_status::SC_INCOMPLETE,
-        }
-    }
 }
 
 /// What a cell does (`enum sc_cell_mode`).
@@ -80,16 +71,6 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub fn from_raw(m: u32) -> Option<Mode> {
-        match m {
-            sys::sc_cell_mode::SC_CELL_SO => Some(Mode::So),
-            sys::sc_cell_mode::SC_CELL_REPLAY => Some(Mode::Replay),
-            sys::sc_cell_mode::SC_CELL_WHOLE => Some(Mode::Whole),
-            sys::sc_cell_mode::SC_CELL_TYPE => Some(Mode::Type),
-            _ => None,
-        }
-    }
-
     pub fn to_raw(self) -> u32 {
         match self {
             Mode::So => sys::sc_cell_mode::SC_CELL_SO,

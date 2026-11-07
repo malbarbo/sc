@@ -44,17 +44,6 @@ impl ValType {
             ValType::FuncRef => 'r',
         }
     }
-
-    pub fn from_letter(c: char) -> Option<ValType> {
-        Some(match c {
-            'i' => ValType::I32,
-            'j' => ValType::I64,
-            'f' => ValType::F32,
-            'd' => ValType::F64,
-            'r' => ValType::FuncRef,
-            _ => return None,
-        })
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
