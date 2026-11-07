@@ -889,6 +889,7 @@ impl<R: Runtime> Loader<R> {
         }
         self.journal = Some(Vec::new());
         let mut taken = Vec::new();
+        let later = self.unresolved.later.len();
         let r = self.instantiate(name, &mut group, shadow, &mut taken);
         let journal = self.journal.take().unwrap_or_default();
         let insts = match r {
@@ -902,6 +903,8 @@ impl<R: Runtime> Loader<R> {
                     };
                 }
                 self.unresolved.slots.extend(taken);
+                // the GOT.mem of the group's instances, which nothing uses
+                self.unresolved.later.truncate(later);
                 return Err(e);
             }
         };
