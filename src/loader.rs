@@ -217,9 +217,10 @@ pub struct Loader<R: Runtime = Native> {
     undefined: Vec<String>,       // what the addresses from UNDEFINED stand for
     missing: Vec<String>,         // the functions not defined yet that a call may reach, from 1
     slots: HashMap<String, Reserved>, // table slots of functions not defined yet
-    asan: bool,                   // the memory has ASan's shadow
+    /// Some once the memory has ASan's shadow: the data of the modules
+    /// from then on.
+    asan: Option<Vec<Data>>,
     debug: Vec<Debug>,            // of the modules with DWARF
-    data: Vec<Data>,
     journal: Option<Vec<(String, Option<Sym>)>>, // what a group being defined replaced
     catchers: HashMap<(String, H), H>, // gen::catcher's try, by signature and tag
     scratch: Option<u32>,         // the table slot of the function a catcher calls
@@ -504,8 +505,8 @@ impl<R: Runtime> Loader<R> {
         };
         let mut l = Loader { rt, world, syms: HashMap::new(), types: Vec::new(), libs, loaded: HashSet::new(),
                              bump: Some(stack), table_size: 1, later: Vec::new(), undefined: Vec::new(),
-                             missing: Vec::new(), slots: HashMap::new(), asan: false, debug: Vec::new(),
-                             data: Vec::new(), journal: None, catchers: HashMap::new(), scratch: None };
+                             missing: Vec::new(), slots: HashMap::new(), asan: None, debug: Vec::new(),
+                             journal: None, catchers: HashMap::new(), scratch: None };
         l.define("__stack_low", Sym::Data(16), false);
         l.define("__stack_high", Sym::Data(stack), false);
         Ok(l)
@@ -858,14 +859,14 @@ impl<R: Runtime> Loader<R> {
     pub fn load_bytes(&mut self, name: &str, bytes: &[u8], shadow: bool) -> Result<()> {
         let mut group = Vec::new();
         self.collect(name, Cow::Borrowed(bytes), None, &mut HashSet::new(), &mut group)?;
-        if group.iter().any(|p| p.info.exports.iter().any(|(n, _)| n == "__asan_init")) && !self.asan {
+        if group.iter().any(|p| p.info.exports.iter().any(|(n, _)| n == "__asan_init")) && self.asan.is_none() {
             // the shadow, after the stack: the first group has the memory to itself
             match self.bump {
                 Some(b) if b <= SHADOW => self.bump = Some(SHADOW_END),
                 _ => fail!("ASan's runtime comes after the first modules, or the stack is over {SHADOW} bytes"),
             }
             self.reserve(SHADOW_END)?;
-            self.asan = true;
+            self.asan = Some(Vec::new());
         }
         self.journal = Some(Vec::new());
         let mut taken = Vec::new();
@@ -914,8 +915,8 @@ impl<R: Runtime> Loader<R> {
         for (k, p) in group.iter().enumerate() {
             let shadow = shadow && p.name == name;
             let mem_base = self.alloc(p.info.mem_size, 1 << p.info.mem_align)?;
-            if p.info.mem_size > 0 && self.asan {
-                self.data.push(Data { start: mem_base, end: mem_base + p.info.mem_size, image: Vec::new() });
+            if let Some(data) = self.asan.as_mut().filter(|_| p.info.mem_size > 0) {
+                data.push(Data { start: mem_base, end: mem_base + p.info.mem_size, image: Vec::new() });
             }
             let table_base = align(self.table_size, 1 << p.info.table_align);
             let grow = table_base + p.info.table_size - self.table_size;
@@ -1096,12 +1097,11 @@ impl<R: Runtime> Loader<R> {
     /// What the data of the module at `base` is now, before its
     /// constructors: words that change after it may point to the heap.
     fn image(&mut self, base: u32) -> Result<()> {
-        let Some(k) = self.data.iter().rposition(|d| d.start == base) else { return Ok(()) };
-        let (start, end) = (self.data[k].start, self.data[k].end);
-        let mut all = vec![0; (end - start) as usize];
-        self.rt.read(self.world.memory, start, &mut all);
+        let Some(d) = self.asan.iter_mut().flatten().rfind(|d| d.start == base) else { return Ok(()) };
+        let mut all = vec![0; (d.end - d.start) as usize];
+        self.rt.read(self.world.memory, d.start, &mut all);
         all.truncate(all.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1));
-        self.data[k].image = all;
+        d.image = all;
         Ok(())
     }
 
@@ -1128,12 +1128,11 @@ impl<R: Runtime> Loader<R> {
             return Ok(Vec::new());
         }
         let mut roots = Vec::new();
-        for k in 0..self.data.len() {
-            let (start, end) = (self.data[k].start, self.data[k].end);
+        for d in self.asan.iter().flatten() {
+            let (start, end) = (d.start, d.end);
             let from = start & !3;
             let mut mem = vec![0; (end - from) as usize + 3];
             self.rt.read(self.world.memory, from, &mut mem);
-            let d = &self.data[k];
             let mut run = None;
             for a in (from..end).step_by(4) {
                 let i = (a - from) as usize;
