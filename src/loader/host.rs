@@ -23,7 +23,7 @@
 //! `vals[0]` (in `*out` for an instantiation): [`TRAP`] and its code
 //! ([`kind`]), [`EXIT`] and the exit code, [`STOP`], [`ERROR`].
 
-use super::runtime::{Error, Frame, Handle, Import, Result, Runtime, Trap, TrapKind};
+use super::runtime::{Error, Frame, FuncType, Handle, Import, Result, Runtime, Trap, TrapKind};
 
 /// An import of `wasm_instantiate`: `kind` 0 the host's default, 1 the
 /// handle in `value`, 2 a constant i32 global of `value`, 3 a mutable one.
@@ -175,15 +175,15 @@ impl Runtime for Host {
         h
     }
 
-    fn call(&mut self, func: Handle, sig: &str, vals: &mut [u64]) -> Result<()> {
-        let (params, results) = sig.split_once(':').unwrap_or((sig, ""));
-        if vals.len() < params.len().max(results.len()) {
+    fn call(&mut self, func: Handle, ty: &FuncType, vals: &mut [u64]) -> Result<()> {
+        let sig = ty.sig();
+        if vals.len() < ty.params.len().max(ty.results.len()) {
             return Err(Error::Fail(format!("{sig}: {} values", vals.len())));
         }
         // the detail of a status needs a slot
         let mut one = [0];
         let vals = if vals.is_empty() { &mut one[..] } else { vals };
-        match call(func, sig, vals) {
+        match call(func, &sig, vals) {
             OK => Ok(()),
             st => Err(error(st, vals[0])),
         }

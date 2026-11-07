@@ -2,7 +2,7 @@
 //! stops at Ctrl-C ([`Wasmtime::on_ctrl_c`]).
 
 use super::config;
-use super::runtime::{Error, Frame, Handle, Import, Runtime, Trap, TrapKind};
+use super::runtime::{self as rt, Error, Frame, Handle, Import, Runtime, Trap, TrapKind};
 use std::collections::HashMap;
 use std::sync::Arc;
 use wasm_encoder as we;
@@ -250,23 +250,22 @@ impl Runtime for Wasmtime {
         }
     }
 
-    fn call(&mut self, func: Handle, sig: &str, vals: &mut [u64]) -> super::runtime::Result<()> {
+    fn call(&mut self, func: Handle, ty: &rt::FuncType, vals: &mut [u64]) -> rt::Result<()> {
         let Some(Extern::Func(f)) = self.get(func).cloned() else { return Err(Error::Fail(format!("no function {func}"))) };
-        let (params, results) = sig.split_once(':').unwrap_or((sig, ""));
         let mut args = Vec::new();
-        for (c, &v) in params.chars().zip(vals.iter()) {
-            args.push(match c {
-                'i' => Val::I32(v as i32),
-                'j' => Val::I64(v as i64),
-                'f' => Val::F32(v as u32),
-                'd' => Val::F64(v),
-                _ => match self.get(v as Handle) {
+        for (t, &v) in ty.params.iter().zip(vals.iter()) {
+            args.push(match t {
+                rt::ValType::I32 => Val::I32(v as i32),
+                rt::ValType::I64 => Val::I64(v as i64),
+                rt::ValType::F32 => Val::F32(v as u32),
+                rt::ValType::F64 => Val::F64(v),
+                rt::ValType::FuncRef => match self.get(v as Handle) {
                     Some(Extern::Func(f)) => Val::FuncRef(Some(*f)),
                     _ => Val::FuncRef(None),
                 },
             });
         }
-        let mut res = vec![Val::I32(0); results.len()];
+        let mut res = vec![Val::I32(0); ty.results.len()];
         // the epoch does not move until a Ctrl-C: armed at each call, one
         // stops the call it comes in
         self.store.set_epoch_deadline(1);

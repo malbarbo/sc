@@ -157,10 +157,10 @@ pub trait Runtime {
     /// What `inst` exports as `name`; 0 if nothing.
     fn export(&mut self, inst: Handle, name: &str) -> Handle;
 
-    /// Calls `func`, of signature `sig` ([`FuncType::sig`]): its arguments
-    /// in `vals`, each in 8 bytes (an f32 in the low 4, a reference as its
-    /// handle); the results come back in them. `vals` has room for both.
-    fn call(&mut self, func: Handle, sig: &str, vals: &mut [u64]) -> Result<()>;
+    /// Calls `func`, of type `ty`: its arguments in `vals`, each in 8
+    /// bytes (an f32 in the low 4, a reference as its handle); the results
+    /// come back in them. `vals` has room for both.
+    fn call(&mut self, func: Handle, ty: &FuncType, vals: &mut [u64]) -> Result<()>;
 
     /// Reads the memory `mem` from `addr` into `buf`: false if out of it.
     fn read(&mut self, mem: Handle, addr: u32, buf: &mut [u8]) -> bool;

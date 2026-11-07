@@ -584,7 +584,7 @@ impl<R: Runtime> Loader<R> {
     fn invoke(&mut self, f: Handle, ty: &FuncType, args: &[u64]) -> Result<Vec<u64>> {
         let mut vals = args.to_vec();
         vals.resize(ty.params.len().max(ty.results.len()), 0);
-        self.rt.call(f, &ty.sig(), &mut vals)?;
+        self.rt.call(f, ty, &mut vals)?;
         vals.truncate(ty.results.len());
         Ok(vals)
     }
