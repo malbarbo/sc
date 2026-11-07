@@ -26,11 +26,12 @@ mod shell;
 use bpaf::{Bpaf, Parser};
 use platform::{Native, Repl};
 use sc::repl::{check, lang_of, run, source, Lang, Outcome, Safety};
-use sc::engine::{CellStatus, Guest, Limits, Log};
+use sc::engine::{CellStatus, Guest, Limits, Log, COMPILER_STACK};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::thread;
 
 const NAME: &str = "sc";
 
@@ -131,8 +132,22 @@ fn show_help<T>(parser: bpaf::OptionParser<T>, args: &[&str]) -> ExitCode {
     ExitCode::from(err.exit_code() as u8)
 }
 
-/// The modes of the engine and of the tests, else the student's.
+/// [`modes`] on a thread with room for the compiler's stack, which the
+/// main thread does not have on Windows (1 MB).
 fn main() -> ExitCode {
+    let t = thread::Builder::new().name("sc".into()).stack_size(2 * COMPILER_STACK).spawn(modes);
+    match t.map(|t| t.join()) {
+        Ok(Ok(code)) => code,
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(e) => {
+            eprintln!("{NAME}: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The modes of the engine and of the tests, else the student's.
+fn modes() -> ExitCode {
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     let engine = match args.get(1).map(String::as_str) {
         Some("--replay") => replay(&args[2..]).map(|()| 0),

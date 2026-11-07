@@ -86,7 +86,7 @@ pub use log::*;
 #[cfg(feature = "engine")]
 mod guest;
 #[cfg(feature = "engine")]
-pub use guest::{interrupt, precompile, Guest, Limits};
+pub use guest::{interrupt, precompile, Guest, Limits, COMPILER_STACK};
 
 // the engine linked in: only inside sc.wasm. Natively its functions would
 // be undefined, which MSVC refuses even unused

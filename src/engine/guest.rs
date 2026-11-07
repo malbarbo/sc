@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
-use wasmtime::{Engine, Instance, Linker, Memory, Module, ResourceLimiter, Store, TypedFunc, UpdateDeadline, WasmBacktrace};
+use wasmtime::{Config, Engine, Instance, Linker, Memory, Module, ResourceLimiter, Store, TypedFunc, UpdateDeadline, WasmBacktrace};
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
@@ -41,6 +41,20 @@ static INTERRUPTS: AtomicU64 = AtomicU64::new(0);
 static TIMED: AtomicUsize = AtomicUsize::new(0);
 /// How often the watchdog moves the epoch.
 const TICK: Duration = Duration::from_millis(100);
+
+/// The native stack the compiler's calls may take. clang recurses deeply
+/// in a template's instantiation and in constexpr; wasmtime's 512 KiB
+/// overflows before clang's limits do. The thread that calls a [`Guest`]
+/// needs this much and more.
+pub const COMPILER_STACK: usize = 8 << 20;
+
+/// The loader's [`Config`](crate::loader::config) with [`COMPILER_STACK`],
+/// which a .cwasm from either one takes.
+fn config() -> Config {
+    let mut config = crate::loader::config::config();
+    config.async_stack_size(COMPILER_STACK).max_wasm_stack(COMPILER_STACK);
+    config
+}
 
 /// Why a call stopped.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -63,7 +77,7 @@ fn shared() -> io::Result<&'static Shared> {
         return Ok(s);
     }
     let fail = |e: wasmtime::Error| io::Error::other(format!("sc.wasm: {e}"));
-    let engine = Engine::new(&crate::loader::config::config()).map_err(fail)?;
+    let engine = Engine::new(&config()).map_err(fail)?;
     // SAFETY: build.rs, or precompile, compiled it with this wasmtime and
     // Config; one that does not fit fails
     let module = match std::env::var_os("SC_CWASM") {
@@ -91,7 +105,7 @@ fn shared() -> io::Result<&'static Shared> {
 /// `wasm` compiled to `cwasm`, for `SC_CWASM`.
 pub fn precompile(wasm: &Path, cwasm: &Path) -> io::Result<()> {
     let fail = |e: wasmtime::Error| io::Error::other(format!("{}: {e}", wasm.display()));
-    let engine = Engine::new(&crate::loader::config::config()).map_err(fail)?;
+    let engine = Engine::new(&config()).map_err(fail)?;
     std::fs::write(cwasm, engine.precompile_module(&std::fs::read(wasm)?).map_err(fail)?)
 }
 

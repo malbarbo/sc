@@ -91,6 +91,10 @@ KNOWN[f'ses-{C}CodeGenCXX_microsoft-abi-emit-dependent'] = TMP
 BIG = ('an object of hundreds of MB: the corpus\'s sc.wasm fails to write it under wasmtime ("IO failure on output'
        ' stream: Out of memory"); a session links it in memory')
 HOST = {f'ses-{k}': BIG for k in (G + 'compile_20080625-1', G + 'compile_pr103813', C + 'SemaCXX_large-array-init')}
+STACK = ('a recursion that overflows the 512 KiB of wasm stack the corpus gives sc.wasm; sc gives the compiler'
+         ' 8 MiB (COMPILER_STACK)')
+HOST.update({f'ses-{k}': STACK for k in (G + 'compile_limits-pointer', C + 'Sema_deep_recursion', C + 'Sema_many-logical-ops',
+                                         C + 'CodeGenCXX_castexpr-basepathsize-threshold', C + 'CodeGenCXX_cxx2b-deducing-this')})
 HOST.update({f'ses-{k}': v for k, v in JS.items()})
 KNOWN.update(HOST)
 # not run: names whose demangling grows exponentially, which wasm-ld does
