@@ -213,7 +213,7 @@ impl Guest {
     /// A new instance, without a session. Each call is limited to
     /// `timeout`, and the module's memory, with the copy, to twice
     /// `memory`; above `memory`, after an accepted cell, a [`super::Log`]
-    /// replays the log in another ([`Compiler::over`], docs/plan-repl.md §4).
+    /// replays the log in another ([`Compiler::over_memory`], docs/plan-repl.md §4).
     pub fn new(timeout: Option<Duration>, memory: Option<u64>) -> io::Result<Guest> {
         let s = shared()?;
         let fail = |e: wasmtime::Error| io::Error::other(format!("sc.wasm: {e:?}"));
