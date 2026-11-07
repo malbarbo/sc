@@ -212,24 +212,24 @@ pub extern "C" fn sc_cli() -> i32 {
 fn repl(platform: Inside, lang: Lang, safety: Safety) -> sc::repl::Result<i32> {
     let mut shell = Shell::new(Repl::new(platform, lang, safety, vec!["sc".into()], true)?);
     let mut status = 0;
-    let (mut input, mut pending) = (String::new(), String::new());
+    let (mut input, mut unfinished) = (String::new(), String::new());
     let mut stdin = io::stdin().lock();
     loop {
         let mut line = String::new();
         if stdin.read_line(&mut line)? == 0 {
-            if pending.trim().is_empty() {
+            if unfinished.trim().is_empty() {
                 break;
             }
-            input = std::mem::take(&mut pending);
+            input = std::mem::take(&mut unfinished);
         } else {
             let line = line.strip_suffix('\n').map_or(line.as_str(), |l| l.strip_suffix('\n').unwrap_or(l));
             input += line;
             if shell.enter(&input, input.len()) != Enter::Run {
-                pending = input.clone();
+                unfinished = input.clone();
                 input.push('\n');
                 continue;
             }
-            pending.clear();
+            unfinished.clear();
         }
         let input = std::mem::take(&mut input);
         match shell.run(&input)? {

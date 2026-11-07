@@ -38,7 +38,7 @@ impl ReplReader {
         let mut editor = Editor::with_config(config)?;
         editor.set_helper(Some(InputHelper {
             shell: Arc::clone(&shell),
-            pending: RefCell::new(String::new()),
+            unfinished: RefCell::new(String::new()),
             completions,
             color: color(std::io::stdout().is_terminal()),
             theme,
@@ -99,8 +99,8 @@ impl Iterator for ReplReader {
                 Some(input)
             }
             Err(ReadlineError::Interrupted) => {
-                // Ctrl-C throws the input away, so nothing stays pending
-                take_pending(&editor);
+                // Ctrl-C throws the input away, so nothing stays unfinished
+                take_unfinished(&editor);
                 self.editor = Some(editor);
                 Some(String::new())
             }
@@ -113,15 +113,15 @@ impl Iterator for ReplReader {
                 }
                 // an input the end of the file cut off still runs: the user
                 // wants to read what is wrong with it
-                let pending = take_pending(&editor);
-                (!pending.trim().is_empty()).then_some(pending)
+                let unfinished = take_unfinished(&editor);
+                (!unfinished.trim().is_empty()).then_some(unfinished)
             }
         }
     }
 }
 
-fn take_pending(editor: &Editor<InputHelper, FileHistory>) -> String {
-    editor.helper().map_or_else(String::new, |h| h.pending.take())
+fn take_unfinished(editor: &Editor<InputHelper, FileHistory>) -> String {
+    editor.helper().map_or_else(String::new, |h| h.unfinished.take())
 }
 
 fn history_path() -> Option<PathBuf> {
@@ -134,9 +134,9 @@ fn history_path() -> Option<PathBuf> {
 struct InputHelper {
     /// The shell, whose compiler says whether the input is whole.
     shell: Arc<Mutex<Shell>>,
-    /// The unfinished input. The editor throws it away when the file ends
+    /// The input so far. The editor throws it away when the file ends
     /// before the rest of it, and says nothing about it.
-    pending: RefCell<String>,
+    unfinished: RefCell<String>,
     completions: Vec<String>,
     color: bool,
     theme: Theme,
@@ -156,7 +156,7 @@ impl Validator for InputHelper {
     fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
         let input = ctx.input();
         let enter = self.shell.lock().unwrap().enter(input, input.len());
-        *self.pending.borrow_mut() = if enter == Enter::Run { String::new() } else { input.into() };
+        *self.unfinished.borrow_mut() = if enter == Enter::Run { String::new() } else { input.into() };
         Ok(if enter == Enter::Run { ValidationResult::Valid(None) } else { ValidationResult::Incomplete })
     }
 }
