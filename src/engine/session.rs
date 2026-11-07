@@ -1,6 +1,6 @@
 //! The safe API over the engine linked in: sc.wasm's own session (wasm/).
 use super::sys as raw;
-use super::{sys, CellStatus, Mode};
+use super::{sys, CellStatus, CompilerError, Mode};
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, CString};
 use std::fmt;
@@ -27,7 +27,7 @@ impl fmt::Display for Error {
         match self {
             Error::Nul => write!(f, "an argument has a NUL byte"),
             Error::OtherThread => write!(f, "the engine is used from another thread"),
-            Error::TooLong => write!(f, "the cell is too long"),
+            Error::TooLong => CompilerError::TooLong.fmt(f),
             Error::Start(d) => write!(f, "the session did not start: {d}"),
         }
     }
