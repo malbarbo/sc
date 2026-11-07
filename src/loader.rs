@@ -153,13 +153,11 @@ pub struct Leak {
 }
 
 /// The value a REPL cell shows ([`Loader::show`]): the arguments of the
-/// last `__sc_show_int` or `__sc_show_float`.
-pub struct Shown {
-    pub float: bool,
-    pub ty: u32,
-    pub kind: u32,
-    /// The value: the i64 or the f64's bits.
-    pub bits: u64,
+/// last `__sc_show_int` or `__sc_show_float`, the address of the type's
+/// name, the kind (`enum sc_show`) and the value.
+pub enum Shown {
+    Int { ty: u32, kind: u32, value: i64 },
+    Float { ty: u32, kind: u32, value: f64 },
 }
 
 #[derive(Clone)]
@@ -1057,7 +1055,12 @@ impl<R: Runtime> Loader<R> {
     /// What the last call to `__sc_show_*` was given since the last time.
     pub fn shown(&mut self) -> Option<Shown> {
         let r = self.world("take_shown", &[]).ok()?;
-        (r[0] != 0).then(|| Shown { float: r[0] == 2, ty: r[1] as u32, kind: r[2] as u32, bits: r[3] })
+        let (ty, kind) = (r[1] as u32, r[2] as u32);
+        match r[0] {
+            0 => None,
+            2 => Some(Shown::Float { ty, kind, value: f64::from_bits(r[3]) }),
+            _ => Some(Shown::Int { ty, kind, value: r[3] as i64 }),
+        }
     }
 
     /// The memory from `addr`, at most `max` bytes; none if `addr` is

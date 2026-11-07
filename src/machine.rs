@@ -7,7 +7,7 @@
 //! session in the same module and the host's primitives.
 use crate::engine::{Answer, Compiler, Repl, Status};
 use crate::loader::runtime::Runtime;
-use crate::loader::{self, source_name, Error, Frame, Lib, Loader, TrapKind, Val, STACK};
+use crate::loader::{self, source_name, Error, Frame, Lib, Loader, Shown, TrapKind, Val, STACK};
 use std::io;
 use std::path::Path;
 
@@ -347,10 +347,9 @@ impl<P: Platform> Machine<P> {
         let s = self.loader.shown()?;
         let null = if self.lang == Lang::C { "NULL" } else { "nullptr" };
         let mut read = |a: u32, n: usize| self.loader.read(a, n);
-        Some(if s.float {
-            show::float(&mut read, s.ty, s.kind, f64::from_bits(s.bits))
-        } else {
-            show::int(&mut read, s.ty, s.kind, s.bits as i64, null)
+        Some(match s {
+            Shown::Int { ty, kind, value } => show::int(&mut read, ty, kind, value, null),
+            Shown::Float { ty, kind, value } => show::float(&mut read, ty, kind, value),
         })
     }
 
