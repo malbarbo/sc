@@ -152,14 +152,20 @@ pub struct Guest {
     store: Store<Ctx>,
     mem: Memory,
     f: Funcs,
-    /// The session, once started: its address in the module.
-    session: u32,
-    /// The instance can no longer be called: a trap without the copy.
-    dead: bool,
+    state: State,
     /// The module's TMPDIR, removed with the instance: the session never
     /// ends as clang would remove the .pcm `#pragma clang module build`
     /// writes there (NOTES.md §70).
     _tmp: Option<TempDir>,
+}
+
+enum State {
+    /// No session yet.
+    Fresh,
+    /// The session's address in the module.
+    Open(u32),
+    /// The instance can no longer be called: a trap without the copy.
+    Dead,
 }
 
 /// A new directory in the host's temporary one, removed with it.
@@ -231,7 +237,7 @@ impl Guest {
         let inst = s.linker.instantiate(&mut store, &s.module).map_err(fail)?;
         let mem = inst.get_memory(&mut store, "memory").ok_or_else(|| io::Error::other("sc.wasm: no memory"))?;
         let f = funcs(&mut store, &inst).map_err(fail)?;
-        let mut g = Guest { timeout, memory, store, mem, f, session: 0, dead: false, _tmp: tmp };
+        let mut g = Guest { timeout, memory, store, mem, f, state: State::Fresh, _tmp: tmp };
         g.init(&inst, &cwd).map_err(fail)?;
         Ok(g)
     }
@@ -280,9 +286,8 @@ impl Guest {
         r.map_err(|e| (e, c.stop.take()))
     }
 
-    /// The part `part` of the last result.
-    fn part(&mut self, part: u32) -> wasmtime::Result<Vec<u8>> {
-        let s = self.session;
+    /// The part `part` of session `s`'s last result.
+    fn part(&mut self, s: u32, part: u32) -> wasmtime::Result<Vec<u8>> {
         let p = self.f.ptr.call(&mut self.store, (s, part as i32))?;
         let n = self.f.len.call(&mut self.store, (s, part as i32))?;
         let mut v = vec![0; if p == 0 { 0 } else { n as usize }];
@@ -290,8 +295,8 @@ impl Guest {
         Ok(v)
     }
 
-    fn answer(&mut self, st: i32) -> wasmtime::Result<Answer> {
-        let [diags, so, names] = [sys::sc_part::SC_DIAGS, sys::sc_part::SC_SO, sys::sc_part::SC_SYMS].map(|p| self.part(p));
+    fn answer(&mut self, s: u32, st: i32) -> wasmtime::Result<Answer> {
+        let [diags, so, names] = [sys::sc_part::SC_DIAGS, sys::sc_part::SC_SO, sys::sc_part::SC_SYMS].map(|p| self.part(s, p));
         Ok(Answer {
             status: Status::from_raw(st as u32),
             diags: String::from_utf8_lossy(&diags?).into_owned(),
@@ -352,12 +357,11 @@ impl Compiler for Guest {
     }
 
     fn new_session(&mut self, args: &[String]) -> Result<(), CompilerError> {
-        if self.dead {
+        if let State::Dead = self.state {
             return Err(lost("a session before"));
         }
         let r = self.call(false, |g| {
-            if g.session != 0 {
-                let s = std::mem::take(&mut g.session);
+            if let State::Open(s) = std::mem::replace(&mut g.state, State::Fresh) {
                 g.f.del.call(&mut g.store, s)?;
             }
             // the arguments stay with the session
@@ -372,11 +376,12 @@ impl Compiler for Guest {
             let mut s = [0; 4];
             g.mem.read(&g.store, out as usize, &mut s)?;
             g.f.free.call(&mut g.store, out)?;
-            g.session = u32::from_le_bytes(s);
-            g.answer(st)
+            let s = u32::from_le_bytes(s);
+            g.state = State::Open(s);
+            g.answer(s, st)
         });
         let a = r.map_err(|(e, _)| {
-            self.dead = true;
+            self.state = State::Dead;
             lost(e)
         })?;
         if a.status != Status::Ok {
@@ -386,15 +391,15 @@ impl Compiler for Guest {
     }
 
     fn cell(&mut self, src: &[u8], mode: Mode) -> Result<Answer, CompilerError> {
-        if self.dead || self.session == 0 {
+        let State::Open(s) = self.state else {
             return Err(lost("no session"));
-        }
+        };
         let len = u32::try_from(src.len()).map_err(|_| io::Error::other("the cell is too long"))?;
         let r = self.call(true, |g| {
             let p = g.put(src)?;
-            let st = g.f.cell.call(&mut g.store, (g.session, p, len, mode.to_raw() as i32))?;
+            let st = g.f.cell.call(&mut g.store, (s, p, len, mode.to_raw() as i32))?;
             g.f.free.call(&mut g.store, p)?;
-            g.answer(st)
+            g.answer(s, st)
         });
         let mut a = match r {
             Ok(a) => a,
@@ -405,11 +410,11 @@ impl Compiler for Guest {
                 self.store.set_epoch_deadline(1);
                 // the copy back, before any other call: what the cell left
                 // is gone with it, the source too
-                let st = self.f.recover.call(&mut self.store, self.session);
+                let st = self.f.recover.call(&mut self.store, s);
                 if st.is_ok_and(|st| st as u32 == sys::sc_status::SC_ERROR) {
                     return Ok(Answer::bare(Status::Error, why));
                 }
-                self.dead = true;
+                self.state = State::Dead;
                 return Err(lost(why.trim_end().trim_start_matches("sc: ")));
             }
         };
@@ -425,18 +430,18 @@ impl Compiler for Guest {
     }
 
     fn depth(&mut self, src: &[u8]) -> Result<u32, CompilerError> {
-        if self.dead || self.session == 0 {
+        let State::Open(s) = self.state else {
             return Ok(0);
-        }
+        };
         let len = u32::try_from(src.len()).map_err(|_| io::Error::other("the cell is too long"))?;
         let r = self.call(false, |g| {
             let p = g.put(src)?;
-            let d = g.f.depth.call(&mut g.store, (g.session, p, len))?;
+            let d = g.f.depth.call(&mut g.store, (s, p, len))?;
             g.f.free.call(&mut g.store, p)?;
             Ok(d)
         });
         r.map(|d| d as u32).map_err(|(e, _)| {
-            self.dead = true;
+            self.state = State::Dead;
             lost(e)
         })
     }
