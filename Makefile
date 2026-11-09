@@ -421,5 +421,10 @@ size: $(B)/sc.wasm
 	@for f in $(wildcard $(B)/sc.wasm $(B)/sc); do printf '%s: %s raw, %s gzip, %s zstd\n' $$f $$(stat -c %s $$f) \
 	  $$(gzip -9 -c $$f | wc -c) $$(zstd -19 -c $$f 2>/dev/null | wc -c); done
 
+# what takes long to fetch or build: LLVM, the sysroot, the corpus, and
+# cargo's build of wasmtime
+KEEP := src native wasm $(notdir $(W)) runtimes sysroot c-testsuite gcc-ts squashfuse cargo \
+  Toolchain-WASI-LLVM.cmake Toolchain-runtimes.cmake
+
 clean:
-	rm -rf $(B)/engine $(B)/cargo* $(B)/res/split* $(B)/res/session* $(B)/trim $(B)/link-* $(B)/sc*.wasm $(B)/sc*.cwasm $(B)/sc $(B)/res/sc*
+	find $(B) -mindepth 1 -maxdepth 1 $(KEEP:%=! -name %) -exec rm -rf {} +
