@@ -10,13 +10,19 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/RuntimeLibcallInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/EHPersonalities.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/PassRegistry.h"
@@ -32,6 +38,7 @@
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 using namespace clang;
 using namespace llvm;
@@ -61,9 +68,99 @@ static void initTargetOptions(const CompilerInstance &CI, llvm::TargetOptions &O
   Options.MCOptions.PreserveAsmComments = CG.PreserveAsmComments;
 }
 
+// A Stop of the host (env.check_interrupt) has to stop the student's code,
+// which never asks for it. Each loop, and each function with a call (it may
+// recurse), takes a tick at its head, and one tick in TickPeriod calls
+// __sc_interrupt, the loader's, which traps if the user asked to stop. It is
+// weak: a program run without the loader (the corpus's) has none.
+static constexpr int TickPeriod = 1 << 16;
+
+static bool hasCall(Function &F) {
+  for (Instruction &I : instructions(F))
+    if (isa<CallBase>(I) && !isa<IntrinsicInst>(I))
+      return true;
+  return false;
+}
+
+static void insertInterruptChecks(llvm::Module &M) {
+  LLVMContext &Ctx = M.getContext();
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Ctx);
+  GlobalVariable *Ticks = nullptr;
+  Function *Interrupt = nullptr;
+  for (Function &F : M) {
+    if (F.isDeclaration() || F.hasAvailableExternallyLinkage() || F.hasFnAttribute(Attribute::Naked))
+      continue;
+    DISubprogram *SP = F.getSubprogram();
+    DebugLoc Head = SP ? DebugLoc(DILocation::get(Ctx, SP->getScopeLine(), 0, SP)) : DebugLoc();
+    // where a tick goes, before any of them splits a block
+    SmallVector<std::pair<Instruction *, DebugLoc>> At;
+    if (hasCall(F))
+      At.push_back({&*F.getEntryBlock().getFirstNonPHIOrDbgOrAlloca(), Head});
+    SmallVector<std::pair<const BasicBlock *, const BasicBlock *>> Edges;
+    FindFunctionBackedges(F, Edges);
+    SmallPtrSet<Instruction *, 8> Seen;
+    for (auto [From, To] : Edges) {
+      auto *Src = const_cast<BasicBlock *>(From);
+      auto *Dst = const_cast<BasicBlock *>(To);
+      DebugLoc DL = Src->getTerminator()->getDebugLoc();
+      if (!DL)
+        DL = Head;
+      // a catchswitch has no room for a tick: the edge's source takes it
+      Instruction *I = Dst->getFirstInsertionPt() != Dst->end() ? &*Dst->getFirstInsertionPt()
+                       : Src->getFirstInsertionPt() != Src->end() ? Src->getTerminator()
+                                                                   : nullptr;
+      if (I && Seen.insert(I).second)
+        At.push_back({I, DL});
+    }
+    if (At.empty())
+      continue;
+    if (!Ticks) {
+      Ticks = new GlobalVariable(M, I32, false, GlobalValue::InternalLinkage, ConstantInt::get(I32, TickPeriod),
+                                 "__sc_ticks");
+      GlobalValue::SanitizerMetadata Meta;
+      Meta.NoAddress = true; // ASan's redzone and registration are for the student's globals
+      Ticks->setSanitizerMetadata(Meta);
+      Interrupt = Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(Ctx), false), GlobalValue::ExternalWeakLinkage,
+                                   "__sc_interrupt", M);
+    }
+    SmallVector<CallInst *> Calls;
+    for (auto [I, DL] : At) {
+      IRBuilder<> B(I);
+      B.SetCurrentDebugLocation(DL);
+      Value *N = B.CreateSub(B.CreateLoad(I32, Ticks), B.getInt32(1));
+      B.CreateStore(N, Ticks);
+      Instruction *Then = SplitBlockAndInsertIfThen(B.CreateICmpSLT(N, B.getInt32(0)), I->getIterator(), false);
+      B.SetInsertPoint(Then);
+      B.CreateStore(B.getInt32(TickPeriod), Ticks);
+      B.SetInsertPoint(SplitBlockAndInsertIfThen(B.CreateIsNotNull(Interrupt), Then->getIterator(), false));
+      Calls.push_back(B.CreateCall(Interrupt->getFunctionType(), Interrupt));
+    }
+    // WinEHPrepare, which wasm's EH runs, makes a call in a catch or a
+    // cleanup without the bundle of its pad unreachable
+    if (!F.hasPersonalityFn() || !isScopedEHPersonality(classifyEHPersonality(F.getPersonalityFn())))
+      continue;
+    DenseMap<BasicBlock *, ColorVector> Colors = colorEHFunclets(F);
+    for (CallInst *C : Calls) {
+      ColorVector &Cs = Colors[C->getParent()];
+      if (Cs.size() != 1) { // unreachable, or in more than one funclet: no call
+        C->eraseFromParent();
+        continue;
+      }
+      BasicBlock::iterator Pad = Cs.front()->getFirstNonPHIIt();
+      if (Pad == Cs.front()->end() || !Pad->isEHPad())
+        continue;
+      CallBase *New = CallBase::addOperandBundle(C, LLVMContext::OB_funclet, OperandBundleDef("funclet", &*Pad),
+                                                 C->getIterator());
+      New->copyMetadata(*C);
+      C->eraseFromParent();
+    }
+  }
+}
+
 // The end of the O0 pipeline: PassBuilder's buildCoroWrapper, which lowers
 // the llvm.coro.* intrinsics of a C++20 coroutine (the backend cannot select
-// them), then ASan's pass, which BackendUtil's addSanitizers adds last
+// them), then the interrupt checks, which would split a coroutine before
+// CoroSplit, then ASan's pass, which BackendUtil's addSanitizers adds last
 // (docs/plan-checks.md §5.2). The analysis managers hold only what these
 // passes ask for: ASan's stack safety analysis is off (-asan-use-stack-safety=0).
 static void runModulePasses(llvm::Module &M, TargetMachine &TM, const TargetLibraryInfoImpl &TLII,
@@ -96,6 +193,9 @@ static void runModulePasses(llvm::Module &M, TargetMachine &TM, const TargetLibr
   CoroPM.addPass(GlobalDCEPass());
   ModulePassManager MPM;
   MPM.addPass(CoroConditionalWrapper(std::move(CoroPM)));
+  MPM.run(M, MAM);
+  insertInterruptChecks(M);
+  MPM = ModulePassManager();
   if (LO.Sanitize.has(SanitizerKind::Address)) {
     AddressSanitizerOptions Opts;
     Opts.Recover = CG.SanitizeRecover.has(SanitizerKind::Address);

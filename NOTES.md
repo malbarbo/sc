@@ -5535,3 +5535,32 @@ place of the runtime's, `gen::reader`. Before a read of fd 0 it calls
 `fflush(NULL)` through the table slot of `fflush`, then the runtime's
 `fd_read`. This holds natively and inside sc.wasm, on every safety level,
 and the output costs nothing more.
+
+## 74. A Stop of the host in the student's code
+
+In simplecode, Stop on `while (1);` did nothing, and after a second the
+page ended the worker and the REPL lost its cells. The host's Stop is
+`env.check_interrupt`, which wasm code has to call, and the code sc
+compiled never did. Natively the epoch of wasmtime stops it, so only a
+host that runs sc.wasm saw this.
+
+The backend now inserts a tick at the head of each loop and at the entry
+of each function with a call, after the coroutine passes and before ASan.
+The back edges come from `FindFunctionBackedges`, so a `goto` and an
+irreducible loop take a tick too. A tick decrements `__sc_ticks`, a
+global of the object, and one tick in 2^16 calls `__sc_interrupt`. Wasm
+EH runs WinEHPrepare, which turns a call in a catch without the bundle of
+its pad into `unreachable`, so a tick inside a funclet gets the bundle,
+as ASan's calls do. `__sc_interrupt` is weak, and the tick tests its
+address, because the corpus links most programs without the loader, and
+wasm-ld makes a call to an undefined weak function trap.
+
+The world defines `__sc_interrupt`. It calls `env.check_interrupt`, and
+on 1 it sets a global and traps. `Loader::invoke` reads the global after
+a trap and makes the trap an interrupt, so the REPL says "interrupted"
+and keeps its cells, as after a Ctrl-C. sc.wasm imports nothing new.
+Natively `env.check_interrupt` answers 0. The output of the corpus is the
+same. Only the hashes of the objects, the offsets of the backtraces and
+the local of the wasm that 15 errors of clang's inline asm tests name
+change. `make test-stop-node-rs` stops a cell in C and one in a C++
+catch on Node.
