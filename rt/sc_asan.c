@@ -533,10 +533,12 @@ static uintptr_t redzone(size_t n) {
        : n <= (1 << 14) - 256 ? 256 : n <= (1 << 15) - 512 ? 512 : n <= (1 << 16) - 1024 ? 1024 : 2048;
 }
 
-static void *alloc(size_t n, size_t align) {
+// a block of n bytes with room for room, which a realloc may grow into:
+// past n, the room is the right redzone
+static void *alloc_room(size_t n, size_t room, size_t align) {
   align = align < 16 ? 16 : align;
-  uintptr_t left = align < sizeof(Block) ? sizeof(Block) : align, total = left + up8(n) + redzone(n);
-  if (n > 0xC0000000u) return 0;
+  uintptr_t left = align < sizeof(Block) ? sizeof(Block) : align, total = left + up8(room) + redzone(room);
+  if (room > 0xC0000000u) return 0;
   uintptr_t real = (uintptr_t)__real_aligned_alloc(align, total);
   if (!real) return 0;
   uintptr_t user = real + left;
@@ -550,6 +552,8 @@ static void *alloc(size_t n, size_t align) {
   live = b;
   return (void *)user;
 }
+
+static void *alloc(size_t n, size_t align) { return alloc_room(n, n, align); }
 
 // the block whose memory from libc, redzones included, holds a, with the
 // start of the part the program gets in user. libc's free must not see a
@@ -642,7 +646,21 @@ void *__wrap_realloc(void *p, size_t n) {
     release(b);
     return 0;
   }
-  void *q = alloc(n, 16);
+  // in place, if the room of the block holds n and its redzone: only the
+  // granules between the two sizes change
+  uintptr_t user = (uintptr_t)p;
+  if (b->left + up8(n) + redzone(n) <= b->total) {
+    if (n > b->size) unpoison(user + (b->size & ~(size_t)7), n - (b->size & ~(size_t)7));
+    else {
+      fill(up8(user + n), up8(user + b->size) - up8(user + n), HEAP_RIGHT);
+      if (n % 8) *shadow(user + n - n % 8) = n % 8;
+    }
+    b->size = n;
+    return p;
+  }
+  // a block that grows takes half as much again as room, so that a realloc
+  // of one more element each time copies O(n) bytes in all and not O(n^2)
+  void *q = n > b->size && n <= 0x80000000u ? alloc_room(n, n + n / 2, 16) : alloc(n, 16);
   if (!q) return 0;
   memcpy(q, p, b->size < n ? b->size : n);
   release(b);
