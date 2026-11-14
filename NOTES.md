@@ -5564,3 +5564,59 @@ same. Only the hashes of the objects, the offsets of the backtraces and
 the local of the wasm that 15 errors of clang's inline asm tests name
 change. `make test-stop-node-rs` stops a cell in C and one in a C++
 catch on Node.
+
+## 75. The cost of --safety=on in the calls of the runtime
+
+A vector of 200000 ints filled with `push_back` took 78 s at
+--safety=on. `__sanitizer_annotate_contiguous_container` rewrote the
+shadow of the whole storage on each call, so each `push_back` cost the
+capacity. Only the granules between the old and the new end change, and
+for a deque the granules between the two begins and between the two
+ends, so `rt/sc_asan.c` now rewrites only those.
+
+We then timed one program for each call of the runtime that a student
+repeats in a loop, at --safety=on and off, on `build/sc` with a warm
+cache, where an empty program takes 0.4 s. Two more were quadratic:
+
+| program | before | after |
+|---|---|---|
+| `push_back` of 200000 ints | 78 s | 4 s |
+| `push_back` of 2000000 ints | | 7.4 s |
+| `fgets` of 100000 lines into a buffer of 1 MiB | 35 s | 4.7 s (0.45 s off) |
+| `realloc` by one element, 200000 times | 18 s | 0.37 s |
+
+`fgets` checks the room of the whole buffer on each call, because the
+size the student passes is the bug the check is there for: `fgets(b,
+100, f)` with `char b[50]` reports a stack-buffer-overflow even when the
+line is short. That check stays. `first_bad` now tests 8 granules with
+one load of their shadow when the address is aligned to 64, which
+leaves it about 10 times off with a buffer this large.
+
+`realloc` always took a new block and copied. A block that grows now
+gets half its size again as room, poisoned as its right redzone, and a
+later `realloc` that fits the room changes only the shadow between the
+two sizes. A block costs up to half as much memory again. The detection
+changes in one case. After a `realloc` in place, the old pointer equals
+the new one, so a use of it is no longer a use after free. A block from
+`malloc` has no room, so its first `realloc` still moves it, and a stale
+pointer after that `realloc` still reports a heap-use-after-free. An access past the new size still reports
+a heap-buffer-overflow, after a `realloc` that grows and after one that
+shrinks.
+
+The rest of the calls cost a constant factor: `malloc` and `free`,
+`sprintf`, `string +=`, `map` (about twice off) and `deque`. A program
+with many allocations or many exceptions pays about 1.5 s once, to fill
+the 20000 entries of `STACKS`.
+
+## 76. The files of the student's program
+
+`sc FILE` ran the program with no preopened directory, so every `fopen`
+failed with ENOENT, even of a file next to the source. The program now
+gets the directory where `sc` runs as `.`, read and write. wasi-libc
+registers the preopen `.` as the empty prefix, which matches every
+relative path, so `fopen("in.txt", "r")` opens the file there and an
+absolute path still fails. A program that calls `chdir` makes wasi-libc
+resolve relative paths from `/`, and then they fail too. Write access
+lets a program with a bug overwrite a file of the student's, as a native
+compiler would, and the exercises on files need it. `test/node/sc-rs.mjs`
+still gives the program `/`.
