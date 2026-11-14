@@ -18,7 +18,8 @@ const args = process.argv.slice(2);
 const file = args.findIndex((a, i) => !a.startsWith('-') && !['-x', '--safety'].includes(args[i - 1]));
 const argv = file < 0 ? ['sc'] : args.slice(file);
 
-const api = wasmApi(() => new WASI({ version: 'preview1', args: argv, env: process.env, preopens: { '/': '/' } }));
+// the program sees the current directory as ".", as sc gives it
+const api = wasmApi(() => new WASI({ version: 'preview1', args: argv, env: process.env, preopens: { '.': '.' } }));
 // sc.wasm reads the file: it sees the whole file system, from the directory
 const wasi = new WASI({ version: 'preview1', args: ['sc', ...args], env: {}, preopens: { '/': '/' } });
 const inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(WASM)),
