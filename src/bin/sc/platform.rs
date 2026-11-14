@@ -5,7 +5,7 @@ use sc::engine::{Guest, Limits};
 use sc::loader::native::Wasmtime;
 use std::io::{self, IsTerminal};
 use std::time::Duration;
-use wasmtime_wasi::WasiCtxBuilder;
+use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 /// How long a cell may take to compile, and how much memory the compiler
 /// may keep: above it, a new one replays the cells (docs/plan-repl.md §4).
@@ -31,6 +31,8 @@ impl sc::repl::Platform for Native {
     fn runtime(&self, argv: &[String], interactive: bool) -> sc::loader::Result<Wasmtime> {
         let mut wasi = WasiCtxBuilder::new();
         wasi.inherit_stdio().inherit_env().args(argv);
+        // a relative path in the program names a file in the directory where sc runs
+        wasi.preopened_dir(".", ".", FsPerms::ReadWrite).map_err(|e| sc::loader::Error::Fail(e.to_string()))?;
         let rt = Wasmtime::new(wasi.build_p1()).map_err(|e| sc::loader::Error::Fail(e.to_string()))?;
         if interactive {
             rt.on_ctrl_c(sc::engine::interrupt);
