@@ -526,14 +526,14 @@ fn world_funcs() -> Vec<(&'static str, FuncType)> {
         ("set_data", f(&[I32, I32], &[])), ("set_leaks", f(&[I32, I32], &[])), ("leak_count", f(&[], &[I32])),
         ("__sc_rt_stack", f(&[], &[I32])), ("__sc_rt_blame", f(&[I32, I32], &[])), ("__sc_rt_data", f(&[I32], &[I64])),
         ("__sc_rt_leak", f(&[I32, I32, I32], &[])), ("__sc_show_int", f(&[I32, I32, I64], &[])),
-        ("__sc_show_float", f(&[I32, I32, F64], &[])),
+        ("__sc_show_float", f(&[I32, I32, F64], &[])), ("__sc_interrupt", f(&[], &[])), ("take_stopped", f(&[], &[I32])),
     ]
 }
 
 impl<R: Runtime> Loader<R> {
     pub fn new(mut rt: R, libs: Libs, stack: u32) -> Result<Loader<R>> {
         let bytes = gen::world(stack.div_ceil(PAGE) as u64, (UNDEFINED / PAGE) as u64, stack);
-        let inst = rt.instantiate(&bytes, None, &mut [Import::Default])?;
+        let inst = rt.instantiate(&bytes, None, &mut [Import::Default, Import::Default])?;
         let mut funcs = HashMap::new();
         for (n, t) in world_funcs() {
             funcs.insert(n, (rt.export(inst, n), t));
@@ -551,6 +551,7 @@ impl<R: Runtime> Loader<R> {
                              journal: None, catchers: HashMap::new(), scratch: None, reader: None };
         l.define("__stack_low", Sym::Data(16), false);
         l.define("__stack_high", Sym::Data(stack), false);
+        l.define_world("__sc_interrupt");
         Ok(l)
     }
 
@@ -585,9 +586,23 @@ impl<R: Runtime> Loader<R> {
     fn invoke(&mut self, f: Handle, ty: &FuncType, args: &[u64]) -> Result<Vec<u64>> {
         let mut vals = args.to_vec();
         vals.resize(ty.params.len().max(ty.results.len()), 0);
-        self.rt.call(f, ty, &mut vals)?;
+        if let Err(e) = self.rt.call(f, ty, &mut vals) {
+            return Err(self.stopped(e));
+        }
         vals.truncate(ty.results.len());
         Ok(vals)
+    }
+
+    /// `e`, or, for the trap of `__sc_interrupt`, the trap of an interrupt.
+    fn stopped(&mut self, e: Error) -> Error {
+        let Error::Trap(mut t) = e else { return e };
+        let (f, ty) = self.world.funcs["take_stopped"].clone();
+        let mut v = [0];
+        if self.rt.call(f, &ty, &mut v).is_ok() && v[0] != 0 {
+            t.kind = TrapKind::Interrupt;
+            t.message = "wasm trap: interrupt".into();
+        }
+        Error::Trap(t)
     }
 
     /// Calls the world's function `name`.

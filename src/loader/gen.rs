@@ -130,11 +130,14 @@ fn mem(offset: u64, align: u32) -> MemArg {
 /// yet was called: see [`stubs`]), with functions that change them, and the
 /// functions the loader gives the modules: libsc_rt's (`__sc_rt_*`, which
 /// keep what it says) and the REPL's (`__sc_show_*`, the value it shows).
-/// `__sc_rt_stack` is `env.wasm_stack`, of the runtime.
+/// `__sc_rt_stack` is `env.wasm_stack`, of the runtime. `__sc_interrupt`,
+/// which the ticks of the compiled code call, traps if `env.check_interrupt`
+/// says the user asked to stop, and `take_stopped` says whether it did.
 pub fn world(pages: u64, max: u64, stack: u32) -> Vec<u8> {
     let mut m = Module::default();
     let stack_fn = m.import_func("env", "wasm_stack", &ft(&[], &[I32]));
     m.exports.export("__sc_rt_stack", ExportKind::Func, stack_fn);
+    let check = m.import_func("env", "check_interrupt", &ft(&[], &[I32]));
     m.memories.memory(we::MemoryType { minimum: pages, maximum: Some(max), memory64: false, shared: false, page_size_log2: None });
     m.exports.export("memory", ExportKind::Memory, 0);
     m.tables.table(we::TableType { minimum: 1, ..FUNCREF });
@@ -147,6 +150,13 @@ pub fn world(pages: u64, max: u64, stack: u32) -> Vec<u8> {
     let show_v = m.global(I64, 0);
     let [data_at, data_n, leak_at, leak_cap, leak_n] = [(); 5].map(|_| m.global(I32, 0));
 
+    let stopped = m.global(I32, 0);
+    m.export_func("__sc_interrupt", &ft(&[], &[]), &[], |s| {
+        s.call(check).if_(BlockType::Empty).i32_const(1).global_set(stopped).unreachable().end();
+    });
+    m.export_func("take_stopped", &ft(&[], &[I32]), &[], |s| {
+        s.global_get(stopped).i32_const(0).global_set(stopped);
+    });
     m.export_func("grow", &ft(&[I32], &[I32]), &[], |s| { s.local_get(0).memory_grow(0); });
     m.export_func("size", &ft(&[], &[I32]), &[], |s| { s.memory_size(0); });
     m.export_func("table_grow", &ft(&[I32], &[I32]), &[], |s| { s.ref_null(HeapType::FUNC).local_get(0).table_grow(0); });

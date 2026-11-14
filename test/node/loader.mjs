@@ -229,6 +229,11 @@ export class Loader {
     this.wasi = { ...wasi.wasiImport, proc_exit };
     this.define('__stack_low', { kind: 'data', v: 16 }, false);
     this.define('__stack_high', { kind: 'data', v: stack }, false);
+    // the ticks of the compiled code call it, and nothing here stops them:
+    // (module (func (export "f")))
+    const nop = new WebAssembly.Instance(new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0,
+      0, 3, 2, 1, 0, 7, 5, 1, 1, 102, 0, 0, 10, 4, 1, 2, 0, 11]))).exports.f;
+    this.define('__sc_interrupt', { kind: 'func', v: nop }, false);
   }
 
   /// the symbol defined, or null when an older definition stays

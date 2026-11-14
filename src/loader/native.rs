@@ -231,6 +231,8 @@ impl Runtime for Wasmtime {
                 Import::Default => match (m.as_str(), n.as_str(), t) {
                     ("wasi_snapshot_preview1", _, _) => self.wasi[&(mem.unwrap(), n.clone())].into(),
                     ("env", "wasm_stack", _) => self.stack_func().into(),
+                    // a Ctrl-C moves the epoch
+                    ("env", "check_interrupt", _) => Func::wrap(&mut self.store, || 0i32).into(),
                     _ => return Err(Error::Fail(format!("no default for {m}.{n}"))),
                 },
             });
