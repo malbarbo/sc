@@ -773,6 +773,33 @@ uint32_t __sc_rt_leaks(uintptr_t sp) {
   return k;
 }
 
+// A FILE that fopen failed to open is null, and libc calls through the
+// function pointers of the FILE, so the trap would name none of this
+static FILE *file(FILE *f, const char *fn) {
+  if (!f) {
+    char msg[64];
+    format(msg, sizeof msg, "%s called with a null FILE pointer", fn);
+    __sc_rt_report(msg);
+  }
+  return f;
+}
+
+int __real_fgetc(FILE *);
+int __real_getc(FILE *);
+int __real_fputc(int, FILE *);
+int __real_putc(int, FILE *);
+size_t __real_fwrite(const void *, size_t, size_t, FILE *);
+int __real_fclose(FILE *);
+int __real_feof(FILE *);
+
+int __wrap_fgetc(FILE *f) { return __real_fgetc(file(f, "fgetc")); }
+int __wrap_getc(FILE *f) { return __real_getc(file(f, "getc")); }
+int __wrap_fputc(int c, FILE *f) { return __real_fputc(c, file(f, "fputc")); }
+int __wrap_putc(int c, FILE *f) { return __real_putc(c, file(f, "putc")); }
+size_t __wrap_fwrite(const void *p, size_t size, size_t n, FILE *f) { return __real_fwrite(p, size, n, file(f, "fwrite")); }
+int __wrap_fclose(FILE *f) { return __real_fclose(file(f, "fclose")); }
+int __wrap_feof(FILE *f) { return __real_feof(file(f, "feof")); }
+
 // libc's getdelim reallocates the line with its own realloc: it reads into a
 // buffer of its own, which goes to the program's
 ssize_t __real_getdelim(char **, size_t *, int, FILE *);
@@ -780,7 +807,7 @@ ssize_t __real_getdelim(char **, size_t *, int, FILE *);
 ssize_t __wrap_getdelim(char **line, size_t *n, int delim, FILE *f) {
   char *buf = 0;
   size_t cap = 0;
-  ssize_t r = __real_getdelim(&buf, &cap, delim, f);
+  ssize_t r = __real_getdelim(&buf, &cap, delim, file(f, "getline"));
   if (r >= 0) {
     if (*line && *n >= (size_t)r + 1) {
       check((uintptr_t)*line, r + 1, 1, "getline");
@@ -926,12 +953,12 @@ int __wrap_snprintf(char *d, size_t cap, const char *fmt, ...) {
 // the room the program says it has, not only what this input fills
 char *__wrap_fgets(char *s, int n, FILE *f) {
   if (n > 0) check_room((uintptr_t)s, n, "fgets");
-  return __real_fgets(s, n, f);
+  return __real_fgets(s, n, file(f, "fgets"));
 }
 
 size_t __wrap_fread(void *p, size_t size, size_t n, FILE *f) {
   if (!size || n <= SIZE_MAX / size) check_room((uintptr_t)p, size * n, "fread");
-  return __real_fread(p, size, n, f);
+  return __real_fread(p, size, n, file(f, "fread"));
 }
 
 ssize_t __wrap_read(int fd, void *p, size_t n) {
@@ -1002,7 +1029,7 @@ static int checked_vfscanf(const char *fn, FILE *s, const char *str, const char 
   va_copy(after, ap);
   scan_args(fn, fmt, before, -1);
   va_end(before);
-  int r = str ? __real_vsscanf(str, fmt, ap) : __real_vfscanf(s, fmt, ap);
+  int r = str ? __real_vsscanf(str, fmt, ap) : __real_vfscanf(file(s, fn), fmt, ap);
   if (r > 0) scan_args(fn, fmt, after, r);
   va_end(after);
   return r;
@@ -1029,7 +1056,7 @@ int __wrap_vfprintf(FILE *f, const char *fmt, va_list ap) {
   va_copy(aq, ap);
   print_args("fprintf", fmt, aq);
   va_end(aq);
-  return __real_vfprintf(f, fmt, ap);
+  return __real_vfprintf(file(f, "fprintf"), fmt, ap);
 }
 
 int __wrap_vprintf(const char *fmt, va_list ap) {
@@ -1047,7 +1074,7 @@ int __wrap_vprintf(const char *fmt, va_list ap) {
     va_copy(aq, ap);                                                                                                   \
     print_args(name, fmt, aq);                                                                                         \
     va_end(aq);                                                                                                        \
-    int r = __real_vfprintf(f, fmt, ap);                                                                               \
+    int r = __real_vfprintf(file(f, name), fmt, ap);                                                                   \
     va_end(ap);                                                                                                        \
     return r;                                                                                                          \
   }
@@ -1073,7 +1100,7 @@ void *__real_memchr(const void *, int, size_t);
 size_t __wrap_strlen(const char *s) { return read_str(s, SIZE_MAX, "strlen"); }
 size_t __wrap_strnlen(const char *s, size_t n) { return read_str(s, n, "strnlen"); }
 int __wrap_puts(const char *s) { return read_str(s, SIZE_MAX, "puts"), __real_puts(s); }
-int __wrap_fputs(const char *s, FILE *f) { return read_str(s, SIZE_MAX, "fputs"), __real_fputs(s, f); }
+int __wrap_fputs(const char *s, FILE *f) { return read_str(s, SIZE_MAX, "fputs"), __real_fputs(s, file(f, "fputs")); }
 
 // the bytes of a and b that a comparison of at most n reads
 static inline __attribute__((always_inline)) void compared(const char *a, const char *b, size_t n, const char *fn) {

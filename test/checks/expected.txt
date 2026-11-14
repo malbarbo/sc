@@ -393,6 +393,16 @@ error: stack overflow (infinite recursion?)
     at even (mutual.c:5:39)
     (the 2 frames above, N times)
     at main (mutual.c:7:25)
+== null-file.c off exit=134
+error: call through a null function pointer
+    in __uflow
+    at main (null-file.c:6:12)
+== null-file.c on exit=134
+error: fgets called with a null FILE pointer
+    at main (null-file.c:6:12)
+== null-file.c strict exit=134
+error: fgets called with a null FILE pointer
+    at main (null-file.c:6:12)
 == null-fn.c off exit=134
 error: call through a null function pointer
     at apply (null-fn.c:4:12)
