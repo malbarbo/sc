@@ -471,24 +471,37 @@ void __asan_unpoison_memory_region(const volatile void *p, size_t n) {
 
 // --- libc++'s containers: the room past a vector's size, or around a
 // deque's elements, is not addressable (container-overflow). beg and end are
-// the storage's; past end, nothing is addressable (the allocator's redzone)
-static void container(uintptr_t beg, uintptr_t end, uintptr_t lo, uintptr_t hi) {
-  for (uintptr_t g = beg & ~(uintptr_t)7; g < end; g += 8) {
+// the storage's; past end, nothing is addressable (the allocator's redzone).
+// Only the granules of [from, to) change: a push_back rewrites one granule,
+// not the whole storage
+static void container(uintptr_t beg, uintptr_t end, uintptr_t lo, uintptr_t hi, uintptr_t from, uintptr_t to) {
+  if (from < beg) from = beg;
+  if (to > end) to = end;
+  for (uintptr_t g = from & ~(uintptr_t)7; g < to; g += 8) {
     uintptr_t s = g < beg ? beg : g, e = g + 8 < end ? g + 8 : end;
     uintptr_t used = lo < e && hi > s ? (hi < e ? hi : e) - g : g < beg ? beg - g : 0;
     *shadow(g) = used >= 8 ? 0 : used ? (uint8_t)used : CONTAINER;
   }
 }
 
+static uintptr_t min(uintptr_t a, uintptr_t b) { return a < b ? a : b; }
+static uintptr_t max(uintptr_t a, uintptr_t b) { return a < b ? b : a; }
+
 void __sanitizer_annotate_contiguous_container(const void *beg, const void *end, const void *old_mid,
                                                const void *new_mid) {
-  container((uintptr_t)beg, (uintptr_t)end, (uintptr_t)beg, (uintptr_t)new_mid);
+  uintptr_t b = (uintptr_t)beg, e = (uintptr_t)end, o = (uintptr_t)old_mid, n = (uintptr_t)new_mid;
+  container(b, e, b, n, min(o, n), max(o, n));
 }
 
+// a byte that changes is in one of the ranges and not in the other, so it
+// lies between the two begins or between the two ends
 void __sanitizer_annotate_double_ended_contiguous_container(const void *beg, const void *end,
                                                              const void *old_beg, const void *old_end,
                                                              const void *new_beg, const void *new_end) {
-  container((uintptr_t)beg, (uintptr_t)end, (uintptr_t)new_beg, (uintptr_t)new_end);
+  uintptr_t b = (uintptr_t)beg, e = (uintptr_t)end, ob = (uintptr_t)old_beg, oe = (uintptr_t)old_end,
+            nb = (uintptr_t)new_beg, ne = (uintptr_t)new_end;
+  container(b, e, nb, ne, min(ob, nb), max(ob, nb));
+  container(b, e, nb, ne, min(oe, ne), max(oe, ne));
 }
 
 int __sanitizer_verify_contiguous_container(const void *beg, const void *mid, const void *end) { return 1; }
