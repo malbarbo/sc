@@ -65,6 +65,12 @@ static void unpoison(uintptr_t a, size_t n) {
 static uintptr_t first_bad(uintptr_t a, size_t n) {
   if (a + n < a) return a;
   for (uintptr_t p = a; p < a + n;) {
+    // 8 granules at once: fgets checks all the room of its buffer on each call
+    uint64_t w;
+    if (!(p & 63) && a + n - p >= 64 && (memcpy(&w, shadow(p), 8), !w)) {
+      p += 64;
+      continue;
+    }
     int8_t v = (int8_t)*shadow(p);
     if (v == 0) p = (p | 7) + 1;
     else if (v > 0 && (int)(p & 7) < v) p++;
