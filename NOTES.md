@@ -5565,6 +5565,28 @@ the local of the wasm that 15 errors of clang's inline asm tests name
 change. `make test-stop-node-rs` stops a cell in C and one in a C++
 catch on Node.
 
+The ticks cost time in every program, natively too, where
+`env.check_interrupt` always answers 0. We timed four programs on
+`build/sc` with the `sc.wasm` of the commit and with one built without
+`insertInterruptChecks`, swapped by `SC_CWASM`, the best of 3 runs with a
+warm cache. An empty program takes 0.08 s, and the costs leave it out.
+
+| program | off, without → with | cost | on, without → with | cost |
+|---|---|---|---|---|
+| an empty loop of 3·10⁹ turns on a `volatile` | 7.32 → 8.38 s | 14% | 12.22 → 15.56 s | 27% |
+| a sum of 10⁹ ints of an array | 2.77 → 3.13 s | 13% | 7.77 → 8.41 s | 8% |
+| `fib(39)` | 1.19 → 1.32 s | 11% | 1.42 → 1.54 s | 9% |
+| `std::sort` of 2·10⁷ ints | 5.89 → 6.13 s | 4% | 6.41 → 7.02 s | 10% |
+
+The more work a loop does in its body, the less the tick costs. ASan
+leaves the load and the stores of `__sc_ticks` alone. The object of the
+empty loop at on is the same with these accesses marked `nosanitize`, and
+so is its time. The tick has the same code at both levels, yet in the
+empty loop it costs about 0.35 ns a turn at off and 1.1 ns at on. We did
+not look for the reason in the code of wasmtime. If the cost matters, the
+native `sc` could compile without ticks, since the epoch of wasmtime
+already stops its programs, at the price of a second way to compile.
+
 ## 75. The cost of --safety=on in the calls of the runtime
 
 A vector of 200000 ints filled with `push_back` took 78 s at
