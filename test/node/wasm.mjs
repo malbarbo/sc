@@ -8,7 +8,7 @@
 // own export through wasm_call comes back with what stopped it, as any
 // other. A module's import of the default (0) is WASI on the memory it
 // imports (on the `memory` it exports if it imports none, bound after the
-// instantiation), `env.check_interrupt` (0 here) or `env.wasm_stack`. WASI's
+// instantiation), `env.check_interrupt` (0 here, unless SC_STOP_AT) or `env.wasm_stack`. WASI's
 // proc_exit and a trap the host makes stop the code with a trap of a module
 // of its own, which wasm code cannot catch (a JS exception would run the
 // C++ cleanups); the call says EXIT.
@@ -17,6 +17,10 @@
 // module with { env: api.env }, then api.bind(instance).
 
 const [OK, TRAP, EXIT, ERROR] = [0, 1, 3, 5];
+// SC_STOP_AT=k: the user stops at the k-th check, once (test/stop.py)
+const stopAt = Number(process.env.SC_STOP_AT ?? 0);
+let checks = 0;
+const checkInterrupt = () => (++checks === stopAt ? 1 : 0);
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -144,7 +148,7 @@ export function wasmApi(wasi) {
         if (kind === 0) {
           if (d.module === 'wasi_snapshot_preview1') x = memory ? wasiOn(memory)[d.name] : lazy(d.name);
           else if (d.module === 'env' && d.name === 'wasm_stack') x = wasm_stack;
-          else if (d.module === 'env' && d.name === 'check_interrupt') x = () => 0;
+          else if (d.module === 'env' && d.name === 'check_interrupt') x = checkInterrupt;
         } else if (kind === 1) x = get(value);
         else {
           x = new WebAssembly.Global({ value: 'i32', mutable: kind === 3 }, value);

@@ -52,7 +52,7 @@ ENGINE_FLAGS := --target=wasm32-wasip1 --sysroot $(W)/share/wasi-sysroot -D_WASI
   -fvisibility-inlines-hidden -ffunction-sections -fdata-sections -Os -DNDEBUG -std=c++17 \
   -fno-exceptions -fno-rtti -Wall -Wno-unused-parameter
 
-.PHONY: all fetch llvm sysroot engine trim loader baseline test test-small test-warn learn learn-session checkinv size test-proto test-split test-session test-session-warn test-split-node test-split-node-rs test-student-node-rs test-student test-checks test-dist repl sc-deps test-loader test-ctrl-c check rs-wasm dist dist-windows llvm-key clean
+.PHONY: all fetch llvm sysroot engine trim loader baseline test test-small test-warn learn learn-session checkinv size test-proto test-split test-session test-session-warn test-split-node test-split-node-rs test-student-node-rs test-stop-node-rs test-student test-checks test-dist repl sc-deps test-loader test-ctrl-c check rs-wasm dist dist-windows llvm-key clean
 all: $(B)/sc.wasm
 
 # --- sources
@@ -283,6 +283,11 @@ test-split-node-rs: $(B)/sc $(B)/sc.wasm $(SCLOAD) $(B)/res/base/summary.json
 # an instance (NOTES.md §66)
 test-student-node-rs: $(B)/sc.wasm
 	test/student.py test/node/sc-rs
+
+# a Stop of the host in sc's REPL inside sc.wasm (test/node/wasm.mjs's
+# SC_STOP_AT)
+test-stop-node-rs: $(B)/sc.wasm
+	test/stop.py
 
 # --- the REPL's loader, runs the shared objects (native, wasmtime): scload,
 # for the batteries, without the engine; and sc, the REPL, whose compiler is

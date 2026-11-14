@@ -31,6 +31,7 @@ make test-session-warn # ses-, seq- and crash- with -Weverything
 make test-split-node # test-split with the JS loader (test/node/loader.mjs) in place of scload
 make test-split-node-rs # test-split with sc.wasm's loader on Node's primitives (test/node/wasm.mjs)
 make test-student-node-rs # test-student with sc inside sc.wasm (the REPL) on Node's primitives
+make test-stop-node-rs # a Stop of the host in that REPL: a loop in a cell, after changing the ticks or the world
 make repl        # build/cargo/release/sc, the REPL (sc, sc FILE, sc help), unstripped:
                  # sc.wasm's session on wasmtime is its compiler (NOTES.md §68)
 cargo build --release # the same sc (build.rs runs make sc-deps)
