@@ -5642,3 +5642,40 @@ resolve relative paths from `/`, and then they fail too. Write access
 lets a program with a bug overwrite a file of the student's, as a native
 compiler would, and the exercises on files need it. `test/node/sc-rs.mjs`
 still gives the program `/`.
+
+## 77. The time of a compile in the REPL
+
+The REPL compiles a cell on Enter to learn whether it is whole
+(`Repl::enter`), and keeps the result for the run, so the run after it
+takes 0 to 80 ms. Enter moves the wait and does not add to it. Measured
+on Node, with `repl_ready` and `repl_run` of `sc.wasm`, a C cell takes
+at most 0.2 s and a C++ cell 20 to 100 ms, but the first instance of a
+template of the library costs much more.
+
+The snapshot of §65 made most of that cost. During a cell its copy sits
+above the heap, and each `sbrk` moved all of it up by the 64 KiB that
+malloc asked for. After `<format>` and `<iostream>` the copy is about
+400 MB. `sbrk` now moves it up by a quarter of its size at least and
+gives the next calls the memory it left free. The times in ms, on Node,
+in one session, before and after:
+
+| Cell                                          | Before | After |
+| --------------------------------------------- | -----: | ----: |
+| `#include <iostream>`                         |   3470 |  3380 |
+| `std::vector<int> v = {3, 1, 2};`             |    878 |   374 |
+| `v.push_back(4);`                             |    562 |   336 |
+| `m["a"] = 1;` (`std::map<std::string, int>`)  |   1997 |   442 |
+| `std::format("{} {}", 1, 2.5)`                |  20177 |  4075 |
+| `std::regex r("a+b");`                        |   6545 |  2949 |
+| `constexpr long f25 = fib(25);`               |    814 |   861 |
+
+The session of 19 cells with `std::format`, `std::regex` and the ranges
+went from 37.3 s to 16.5 s, and its memory from 415 MB to 435 MB. On
+the native `sc` the `std::format` cell went from 20.3 s to 4.5 s, and
+`sc FILE` with the same call costs 4.2 s more than without it, so the
+REPL now costs what a whole file does. The clang of the pin, built
+natively, compiles that call in 1.1 s.
+
+A compile still cannot be stopped. The ticks of §74 go only in the
+student's code, and the page enables Stop only while a cell runs, so
+4 s of `std::format` on Enter is a wait without a way out.
