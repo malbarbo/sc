@@ -187,7 +187,7 @@ impl Safety {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Enter {
     Run,
-    /// Opens a line this many brackets in.
+    /// Opens a line indented by this many spaces.
     Open(usize),
 }
 
@@ -293,7 +293,7 @@ impl<P: Platform> Repl<P> {
         if self.compiled.as_ref().is_some_and(|(p, _)| p == input) {
             return Enter::Run;
         }
-        let mut depth = |s: &str| self.log.depth(s.as_bytes()).unwrap_or(0) as usize;
+        let mut depth = |s: &str| self.log.depth(s.as_bytes()).unwrap_or(0) as usize * INDENT;
         let at_end = input[cursor..].trim().is_empty();
         if !at_end && input.contains('\n') {
             return Enter::Open(depth(&input[..cursor]));

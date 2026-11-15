@@ -10,7 +10,7 @@ use sc::engine::{sys, Answer, CellStatus, Compiler, CompilerError, Mode, Session
 use sc::loader::host::{self, Host};
 use sc::loader::{libdirs, Error, Loader, TrapKind, STACK};
 use sc::shell::{self, Shell};
-use sc::repl::{Enter, Lang, Outcome, Platform, Repl, Safety, INDENT, ROOT};
+use sc::repl::{Enter, Lang, Outcome, Platform, Repl, Safety, ROOT};
 use std::ffi::{c_char, c_int, c_ulonglong, CString};
 use std::io::{self, BufRead};
 use std::path::PathBuf;
@@ -334,7 +334,7 @@ pub unsafe extern "C" fn repl_ready(r: *mut Shell<Inside>, p: *const u8, len: us
     }
     match (*r).enter(&input, at) {
         Enter::Run => -1,
-        Enter::Open(depth) => (depth * INDENT) as i32,
+        Enter::Open(n) => n as i32,
     }
 }
 

@@ -175,7 +175,7 @@ impl ConditionalEventHandler for EnterHandler {
         };
         match enter {
             Enter::Run => None,
-            Enter::Open(depth) => Some(Cmd::Insert(1, format!("\n{:1$}", "", depth * INDENT))),
+            Enter::Open(n) => Some(Cmd::Insert(1, format!("\n{:1$}", "", n))),
         }
     }
 }
