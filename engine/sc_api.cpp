@@ -123,7 +123,9 @@ static int cell(sc_session *s, const char *src, unsigned len, int mode) {
 // cell are gone when it returns, and the pack's image, which is only read.
 //
 // The copy is above the heap, at the top of the memory: sbrk here gives
-// malloc the memory below it, and moves it up when the heap grows. The heap
+// malloc the memory below it, and moves it up when the heap grows. A move
+// takes a quarter of the copy at least, because each one copies all of it,
+// and the sbrk calls after it take what it left free. The heap
 // so sees what it sees without the copy (and with the host's snapshot): the
 // same addresses, and clang the same order where it iterates over pointers.
 // What the heap grew in the cell is zeroed, as it was.
@@ -140,9 +142,12 @@ extern "C" const unsigned char *sc_pack_image(unsigned *size);
 namespace {
 size_t memory() { return __builtin_wasm_memory_size(0) * 65536; }
 
-// the heap's end, what memory.size is without the copy; the copy is from
-// here to the memory's end
+// where the copy starts, at the heap's end or above it
 size_t Brk;
+
+// the heap's end, what sbrk gave malloc; from here to Brk the memory is
+// zero, and sbrk gives it without a move
+size_t End;
 
 // sbrk's move of the copy up by Grow, from From (the Brk before): Moved of
 // its bytes, from its top, are there. Each piece of at most Grow goes where
@@ -173,6 +178,7 @@ struct Snapshot {
     std::pair<size_t, size_t> Holes[] = {{(size_t)__stack_low, (size_t)__stack_high},
                                          {(size_t)Img, (size_t)Img + N},
                                          hole(Brk),
+                                         hole(End),
                                          hole(*this),
                                          hole(Mv)};
     llvm::sort(Holes);
@@ -189,7 +195,7 @@ struct Snapshot {
   }
 
   bool take() {
-    Size = Brk;
+    Size = Brk = End;
     size_t N = 0;
     pieces([&](size_t A, size_t B) { N += B - A; });
     if (!room(N))
@@ -260,27 +266,32 @@ double now() {
 // copy, which moves up, its place zeroed as new memory is
 extern "C" void *sbrk(intptr_t N) {
   if (!Brk)
-    Brk = memory();
+    Brk = End = memory();
+  size_t Old = End;
   if (N == 0)
-    return (void *)Brk;
+    return (void *)Old;
   if (N < 0 || N % 65536)
     abort();
-  size_t Old = Brk, M = memory(), Copy = M - Brk;
-  if (__builtin_wasm_memory_grow(0, N / 65536) == SIZE_MAX) {
-    errno = ENOMEM;
-    return (void *)-1;
+  if (End + N > Brk) {
+    size_t G = std::max<size_t>(End + N - Brk, Snap.Used / 4 / 65536 * 65536), M = memory();
+    if (Brk + G + Snap.Used > M &&
+        __builtin_wasm_memory_grow(0, (Brk + G + Snap.Used - M + 65535) / 65536) == SIZE_MAX) {
+      errno = ENOMEM;
+      return (void *)-1;
+    }
+    Mv.From = Brk;
+    Mv.Moved = 0;
+    fence();
+    Mv.Grow = G;
+    fence();
+    move();
+    memset((char *)Brk, 0, std::min<size_t>(G, M - Brk));
+    fence();
+    Brk += G; // the move is done
+    fence();
+    Mv.Grow = 0;
   }
-  Mv.From = Old;
-  Mv.Moved = 0;
-  fence();
-  Mv.Grow = N;
-  fence();
-  move();
-  memset((char *)Old, 0, std::min<size_t>(N, Copy));
-  fence();
-  Brk += N; // the move is done
-  fence();
-  Mv.Grow = 0;
+  End += N;
   return (void *)Old;
 }
 #endif
@@ -289,7 +300,7 @@ int sc_session_cell(sc_session *s, const char *src, unsigned len, int mode) {
 #ifdef __wasm__
   if (Snapping && mode != SC_CELL_REPLAY && s->S && !s->Lost) {
     if (!Brk)
-      Brk = memory();
+      Brk = End = memory();
     double T0 = now();
     bool Took = Snap.take();
     double T1 = now();
