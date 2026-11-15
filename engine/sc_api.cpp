@@ -4,6 +4,7 @@
 #include "sc.h"
 #include "sc_session.h"
 #include "lld/Common/Driver.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/STLExtras.h"
 #include <cerrno>
@@ -50,7 +51,17 @@ struct sc_session {
   }
 };
 
+// A fatal error of LLVM in a cell traps, as any other crash of the cell.
+// Without a handler LLVM calls exit, and a host may report that exit as an
+// error of its own and not as a crash of the compiler.
+static void fatal(void *, const char *Reason, bool) {
+  fprintf(stderr, "LLVM ERROR: %s\n", Reason);
+  __builtin_trap();
+}
+
 int sc_session_new(int argc, const char *const *argv, sc_session **out) {
+  static bool Handler = (llvm::install_fatal_error_handler(fatal), true);
+  (void)Handler;
   auto *s = new sc_session;
   *out = s;
   llvm::ArrayRef<const char *> Args(argv, argc);
