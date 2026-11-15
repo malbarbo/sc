@@ -191,6 +191,18 @@ pub enum Enter {
     Open(usize),
 }
 
+/// The indentation of the code below the caret, in `after`, the input from
+/// the caret on: that of the first line after the caret's own that is
+/// neither blank nor a comment. A line opened shallower would close a block
+/// that this code still needs open.
+fn below(after: &str) -> usize {
+    let code = |l: &&str| {
+        let t = l.trim_start();
+        !t.is_empty() && !t.starts_with("//") && !t.starts_with("/*")
+    };
+    after.lines().skip(1).find(code).map_or(0, |l| l.len() - l.trim_start().len())
+}
+
 /// What became of a cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -285,7 +297,8 @@ impl<P: Platform> Repl<P> {
     /// declaration without its `;`, a function's header without its body).
     /// A blank line runs any input with no bracket open, for the compiler to
     /// say what is wrong with it. With the caret back in an input of several
-    /// lines, Enter opens a line there.
+    /// lines, Enter opens a line there, no shallower than the code below
+    /// it.
     pub fn enter(&mut self, input: &str, cursor: usize) -> Enter {
         if split(input).is_some() || input.trim().is_empty() {
             return Enter::Run;
@@ -296,7 +309,7 @@ impl<P: Platform> Repl<P> {
         let mut depth = |s: &str| self.log.depth(s.as_bytes()).unwrap_or(0) as usize * INDENT;
         let at_end = input[cursor..].trim().is_empty();
         if !at_end && input.contains('\n') {
-            return Enter::Open(depth(&input[..cursor]));
+            return Enter::Open(depth(&input[..cursor]).max(below(&input[cursor..])));
         }
         let d = depth(input);
         if d > 0 {
@@ -580,4 +593,18 @@ fn frames<R: Runtime>(fs: &[Frame], loader: &Loader<R>, library: bool) -> Vec<St
         out.splice(HEAD..out.len() - TAIL, [format!("... {more} more")]);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_below() {
+        assert_eq!(below(""), 0);
+        assert_eq!(below("x = 1;"), 0);
+        assert_eq!(below("\n    x = 1;\n}"), 4);
+        assert_eq!(below(" + 1;\n\n        // a comment\n          b);\n"), 10);
+        assert_eq!(below("\n    /* a comment */\n}"), 0);
+    }
 }
