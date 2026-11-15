@@ -5641,7 +5641,7 @@ absolute path still fails. A program that calls `chdir` makes wasi-libc
 resolve relative paths from `/`, and then they fail too. Write access
 lets a program with a bug overwrite a file of the student's, as a native
 compiler would, and the exercises on files need it. `test/node/sc-rs.mjs`
-still gives the program `/`.
+gives the program the same `.`.
 
 ## 77. The time of a compile in the REPL
 
