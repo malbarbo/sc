@@ -191,6 +191,50 @@ pub enum Enter {
     Open(usize),
 }
 
+/// The indentation of a line opened after `before`, whose brackets put it
+/// `depth` spaces in. The head of an `if`, `for`, `while`, `else` or `do`
+/// without braces puts it one level deeper than that head.
+fn after(before: &str, depth: usize) -> usize {
+    let last = before.rsplit('\n').next().unwrap_or("");
+    if head(last) {
+        depth.max(last.len() - last.trim_start().len()) + INDENT
+    } else {
+        depth
+    }
+}
+
+/// Returns `true` if `line` ends in the head of an `if`, `for`, `while` or
+/// `else` or in a `do`, without the `{` of a block, `false` otherwise.
+fn head(line: &str) -> bool {
+    let t = line.split("//").next().unwrap_or("").trim().trim_start_matches('}').trim_start();
+    if t == "else" || t == "do" {
+        return true;
+    }
+    let t = t.strip_prefix("else").filter(|r| r.starts_with(char::is_whitespace)).map_or(t, str::trim_start);
+    let Some(rest) = ["if", "for", "while"].into_iter().find_map(|k| t.strip_prefix(k)) else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    if !rest.starts_with('(') {
+        return false;
+    }
+    // the parenthesis after the keyword closes at the end of the line
+    let mut d = 0;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '(' => d += 1,
+            ')' => {
+                d -= 1;
+                if d == 0 {
+                    return i == rest.len() - 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// The indentation of the code below the caret, in `after`, the input from
 /// the caret on: that of the first line after the caret's own that is
 /// neither blank nor a comment. A line opened shallower would close a block
@@ -293,7 +337,8 @@ impl<P: Platform> Repl<P> {
     /// What Enter does with `input`, the caret at `cursor`, as the compiler
     /// sees it. With the caret at the end (or in an input of one line), it
     /// runs the input unless the input stops short: a bracket or a comment
-    /// left open, or an error where it ends ([`crate::engine::Mode::Whole`]: a
+    /// left open, the head of an `if` or a loop without braces, or an error
+    /// where it ends ([`crate::engine::Mode::Whole`]: a
     /// declaration without its `;`, a function's header without its body).
     /// A blank line runs any input with no bracket open, for the compiler to
     /// say what is wrong with it. With the caret back in an input of several
@@ -306,14 +351,14 @@ impl<P: Platform> Repl<P> {
         if self.compiled.as_ref().is_some_and(|(p, _)| p == input) {
             return Enter::Run;
         }
-        let mut depth = |s: &str| self.log.depth(s.as_bytes()).unwrap_or(0) as usize * INDENT;
+        let mut above = |s: &str| after(s, self.log.depth(s.as_bytes()).unwrap_or(0) as usize * INDENT);
         let at_end = input[cursor..].trim().is_empty();
         if !at_end && input.contains('\n') {
-            return Enter::Open(depth(&input[..cursor]).max(below(&input[cursor..])));
+            return Enter::Open(above(&input[..cursor]).max(below(&input[cursor..])));
         }
-        let d = depth(input);
+        let d = above(input);
         if d > 0 {
-            return Enter::Open(if at_end { d } else { depth(&input[..cursor]) });
+            return Enter::Open(if at_end { d } else { above(&input[..cursor]) });
         }
         if input.rsplit('\n').next().is_some_and(|l| l.trim().is_empty()) {
             return Enter::Run;
@@ -606,5 +651,21 @@ mod tests {
         assert_eq!(below("\n    x = 1;\n}"), 4);
         assert_eq!(below(" + 1;\n\n        // a comment\n          b);\n"), 10);
         assert_eq!(below("\n    /* a comment */\n}"), 0);
+    }
+
+    #[test]
+    fn heads() {
+        for l in ["if (x > 0)", "    while (f(x) && y)", "for (int i = 0; i < n; i++)", "else", "} else", "else if (x)",
+                  "} else if (x) // a comment", "do", "for (auto c : s)"] {
+            assert!(head(l), "{l:?}");
+        }
+        for l in ["if (x > 0) {", "if (x) y++;", "while (x);", "if (a) f(b)", "elsewhere", "} else {", "do {", "iffy(x)",
+                  "format(x)", "x = 1", ""] {
+            assert!(!head(l), "{l:?}");
+        }
+        assert_eq!(after("if (x)", 0), 4);
+        assert_eq!(after("if (a)\n    if (b)", 0), 8);
+        assert_eq!(after("int f(void) {\n    for (;;)", 4), 8);
+        assert_eq!(after("int f(void) {\n    x++;", 4), 4);
     }
 }
